@@ -175,7 +175,10 @@ export const {
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
-    const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string> }>()
+    const hydratingSessions = new Map<
+      string,
+      { messages: Set<string>; parts: Set<string>; permissions: Set<string>; questions: Set<string> }
+    >()
     const optimisticMessages = new Set<string>()
     const insertPermission = (request: RoutedPermissionRequest) => {
       const requests = store.permission[request.sessionID]
@@ -193,6 +196,12 @@ export const {
     }
     const touchPart = (sessionID: string, partID: string) => {
       hydratingSessions.get(sessionID)?.parts.add(partID)
+    }
+    const touchPermission = (sessionID: string, requestID: string) => {
+      hydratingSessions.get(sessionID)?.permissions.add(requestID)
+    }
+    const touchQuestion = (sessionID: string, requestID: string) => {
+      hydratingSessions.get(sessionID)?.questions.add(requestID)
     }
 
     function sessionListQuery(): { scope?: "project"; path?: string } {
@@ -215,14 +224,21 @@ export const {
       if (fullSyncedSessions.has(sessionID)) return
       const syncing = syncingSessions.get(sessionID)
       if (syncing) return syncing
-      const tracker = { messages: new Set<string>(), parts: new Set<string>() }
+      const tracker = {
+        messages: new Set<string>(),
+        parts: new Set<string>(),
+        permissions: new Set<string>(),
+        questions: new Set<string>(),
+      }
       hydratingSessions.set(sessionID, tracker)
       const task = (async () => {
-        const [session, messages, todo, diff] = await Promise.all([
+        const [session, messages, todo, diff, permissions, questions] = await Promise.all([
           sdk.client.session.get({ sessionID }, { throwOnError: true }),
           sdk.client.session.messages({ sessionID, limit: 100 }),
           sdk.client.session.todo({ sessionID }),
           sdk.client.session.diff({ sessionID }),
+          sdk.client.v2.session.permission.list({ sessionID }, { throwOnError: true }),
+          sdk.client.v2.session.question.list({ sessionID }, { throwOnError: true }),
         ])
         setStore(
           produce((draft) => {
@@ -274,6 +290,24 @@ export const {
             for (const message of removed) delete draft.part[message.id]
             draft.message[sessionID] = visible
             draft.session_diff[sessionID] = diff.data ?? []
+            draft.permission[sessionID] = permissions.data.data
+              .map(legacyPermission)
+              .filter((request) => !tracker.permissions.has(request.id))
+              .concat(
+                (draft.permission[sessionID] ?? []).filter(
+                  (request) => request.api !== "v2" || tracker.permissions.has(request.id),
+                ),
+              )
+              .toSorted((a, b) => a.id.localeCompare(b.id))
+            draft.question[sessionID] = questions.data.data
+              .map(legacyQuestion)
+              .filter((request) => !tracker.questions.has(request.id))
+              .concat(
+                (draft.question[sessionID] ?? []).filter(
+                  (request) => request.api !== "v2" || tracker.questions.has(request.id),
+                ),
+              )
+              .toSorted((a, b) => a.id.localeCompare(b.id))
           }),
         )
         fullSyncedSessions.add(sessionID)
@@ -316,6 +350,7 @@ export const {
           void bootstrap()
           break
         case "permission.replied": {
+          touchPermission(event.properties.sessionID, event.properties.requestID)
           const requests = store.permission[event.properties.sessionID]
           if (!requests) break
           const match = search(requests, event.properties.requestID, (r) => r.id)
@@ -332,6 +367,7 @@ export const {
 
         case "permission.asked": {
           const request = event.properties
+          touchPermission(request.sessionID, request.id)
           const session = store.session.find((item) => item.id === request.sessionID)
           const approvalMode = session?.approvalMode ?? "normal"
           if (permission.effective(approvalMode) === "auto") {
@@ -359,6 +395,7 @@ export const {
 
         case "permission.v2.asked": {
           const request = legacyPermission(event.properties)
+          touchPermission(request.sessionID, request.id)
           const approvalMode = store.session.find((item) => item.id === request.sessionID)?.approvalMode ?? "normal"
           if (permission.effective(approvalMode) === "auto") {
             void sdk.client.v2.session.permission
@@ -371,6 +408,7 @@ export const {
         }
 
         case "permission.v2.replied": {
+          touchPermission(event.properties.sessionID, event.properties.requestID)
           const requests = store.permission[event.properties.sessionID]
           if (!requests) break
           const match = search(requests, event.properties.requestID, (item) => item.id)
@@ -385,6 +423,7 @@ export const {
 
         case "question.replied":
         case "question.rejected": {
+          touchQuestion(event.properties.sessionID, event.properties.requestID)
           const requests = store.question[event.properties.sessionID]
           if (!requests) break
           const match = search(requests, event.properties.requestID, (r) => r.id)
@@ -401,6 +440,7 @@ export const {
 
         case "question.asked": {
           const request = event.properties
+          touchQuestion(request.sessionID, request.id)
           const requests = store.question[request.sessionID]
           if (!requests) {
             setStore("question", request.sessionID, [request])
@@ -423,6 +463,7 @@ export const {
 
         case "question.v2.asked": {
           const request = legacyQuestion(event.properties)
+          touchQuestion(request.sessionID, request.id)
           const requests = store.question[request.sessionID]
           if (!requests) {
             setStore("question", request.sessionID, [request])
@@ -441,6 +482,7 @@ export const {
 
         case "question.v2.replied":
         case "question.v2.rejected": {
+          touchQuestion(event.properties.sessionID, event.properties.requestID)
           const requests = store.question[event.properties.sessionID]
           if (!requests) break
           const match = search(requests, event.properties.requestID, (item) => item.id)
