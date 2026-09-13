@@ -86,6 +86,75 @@ describe("Rexd handshake", () => {
     await client.close()
   })
 
+  test("does not wait for transport write completion after receiving a response", async () => {
+    const transport = new StalledWriteTransport()
+    const client = new RexdRpcClient(transport)
+    const request = client.request("fs.stat", { path: "/work" })
+    transport.data(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { exists: true } }) + "\n")
+
+    await expect(request).resolves.toEqual({ exists: true })
+    await client.close()
+  })
+
+  test("times out while the transport write remains pending", async () => {
+    const transport = new StalledWriteTransport()
+    const client = new RexdRpcClient(transport)
+
+    await expect(client.request("fs.stat", { path: "/work" }, { timeoutMs: 10 })).rejects.toMatchObject(
+      Object.assign(new Error("Rexd request timed out while writing: fs.stat"), {
+        phase: "transport",
+        outcome: "failed",
+      }),
+    )
+    expect(transport.closed).toBe(true)
+  })
+
+  test("times out while waiting for a response and invalidates the transport", async () => {
+    const transport = new FakeTransport()
+    const client = new RexdRpcClient(transport)
+
+    await expect(client.request("fs.stat", { path: "/work" }, { timeoutMs: 10 })).rejects.toMatchObject(
+      Object.assign(new Error("Rexd request timed out while waiting for response: fs.stat"), {
+        phase: "transport",
+        outcome: "failed",
+      }),
+    )
+    expect(transport.closed).toBe(true)
+  })
+
+  test("preserves unknown outcome when a side-effecting write times out", async () => {
+    const transport = new StalledWriteTransport()
+    const client = new RexdRpcClient(transport)
+
+    await expect(
+      client.request("fs.write", { path: "/work/file" }, { timeoutMs: 10, sideEffect: true }),
+    ).rejects.toMatchObject({ phase: "transport", outcome: "unknown" })
+    expect(transport.closed).toBe(true)
+  })
+
+  test("rejects a failed write and invalidates the transport", async () => {
+    const transport = new RejectedWriteTransport()
+    const client = new RexdRpcClient(transport)
+
+    await expect(client.request("fs.stat", { path: "/work" })).rejects.toMatchObject({
+      phase: "transport",
+      outcome: "failed",
+      diagnostic: "Error",
+    })
+    expect(transport.closed).toBe(true)
+  })
+
+  test("cancels while the transport write remains pending", async () => {
+    const transport = new StalledWriteTransport()
+    const client = new RexdRpcClient(transport)
+    const controller = new AbortController()
+    const request = client.request("fs.stat", { path: "/work" }, { signal: controller.signal })
+    controller.abort()
+
+    await expect(request).rejects.toMatchObject({ phase: "cancelled", outcome: "failed" })
+    await client.close()
+  })
+
   test("notifies runtime operations when the transport closes", async () => {
     const transport = new FakeTransport()
     const client = new RexdRpcClient(transport)
@@ -123,6 +192,20 @@ class FakeTransport implements Transport {
   }
   fail(error: RexdError) {
     this.closeListeners.forEach((listener) => listener(error))
+  }
+}
+
+class StalledWriteTransport extends FakeTransport {
+  override write(payload: string) {
+    this.writes.push(payload)
+    return new Promise<void>(() => undefined)
+  }
+}
+
+class RejectedWriteTransport extends FakeTransport {
+  override write(payload: string) {
+    this.writes.push(payload)
+    return Promise.reject(new Error("write failed"))
   }
 }
 
