@@ -53,8 +53,8 @@ const snapshot: SkillPackageSnapshot.Snapshot = {
 const builtInEntry: SkillRegistry.Entry = {
   ...entry,
   source: Skill.SourceDetail.make({ kind: "built-in", label: "Built-in" }),
-  sourceKey: "embedded:opencode/customize-opencode",
-  location: AbsolutePath.make("/builtin/customize-opencode.md"),
+  sourceKey: "embedded:opencode/customize-opencode-transit",
+  location: AbsolutePath.make("/builtin/customize-opencode-transit.md"),
 }
 
 describe("Rexd Skill package access", () => {

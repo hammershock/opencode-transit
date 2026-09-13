@@ -50,7 +50,7 @@ describe("legacy Skill compatibility adapter", () => {
             )
 
             const skill = yield* Skill.Service
-            const list = (yield* skill.all()).filter((item) => item.name !== "customize-opencode")
+            const list = (yield* skill.all()).filter((item) => item.name !== "customize-opencode-transit")
             expect(list).toHaveLength(1)
             expect(list[0]).toMatchObject({ name: "review", description: "Canonical review" })
             expect(list[0]!.location).toBe(path.join(directory, ".opencode", "skill", "review", "SKILL.md"))
