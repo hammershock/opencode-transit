@@ -41,6 +41,7 @@ export interface SourceOptions {
   readonly kind?: "opencode-global" | "opencode-project" | "imported"
   readonly label?: string
   readonly identity?: string
+  readonly identityName?: string
 }
 
 export interface Registration {
@@ -162,7 +163,7 @@ const layer = Layer.effect(
 
 function loadEmbedded(registration: Registration, source: Skill.EmbeddedSource): SourceResult {
   const identity = registration.options?.identity ?? `${source.skill.name}:${source.skill.location}`
-  const id = makeID("built-in", identity, source.skill.name)
+  const id = makeID("built-in", identity, registration.options?.identityName ?? source.skill.name)
   const metadata = Skill.Metadata.make({
     id,
     name: source.skill.name,
@@ -434,7 +435,7 @@ function compareDiagnostic(a: Skill.Diagnostic, b: Skill.Diagnostic) {
 }
 
 export function key(registration: Registration) {
-  return `${Skill.Source.key(registration.source)}:${registration.options?.kind ?? ""}:${registration.options?.label ?? ""}:${registration.options?.identity ?? ""}`
+  return `${Skill.Source.key(registration.source)}:${registration.options?.kind ?? ""}:${registration.options?.label ?? ""}:${registration.options?.identity ?? ""}:${registration.options?.identityName ?? ""}`
 }
 
 export const node = makeGlobalNode({

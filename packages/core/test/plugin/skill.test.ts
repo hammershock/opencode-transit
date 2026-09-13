@@ -15,11 +15,12 @@ describe("SkillPlugin.Plugin", () => {
       yield* SkillPlugin.Plugin.effect(host({ skill: { ...skill, reload: skill.reload } }))
 
       const skills = yield* skill.list()
-      const registered = skills[0]
+      const registered = (yield* skill.catalog()).snapshot.skills[0]
 
       expect(skills).toHaveLength(1)
       expect(registered).toEqual(
         expect.objectContaining({
+          id: "skl_887d991222ceee0845a4816256a2729bd4c1321a388ebff06a4aea4e2fba931b",
           name: "customize-opencode-transit",
           description: expect.stringContaining("opencode-transit"),
         }),

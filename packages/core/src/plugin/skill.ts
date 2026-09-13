@@ -26,7 +26,9 @@ export const Plugin = define({
             content: CustomizeOpencodeContent,
           }),
         }),
-        { identity: "opencode/customize-opencode-transit" },
+        // Target scopes are keyed by SkillID, so the user-facing rename must retain
+        // the identity inputs used by the original customize-opencode registration.
+        { identity: "opencode/customize-opencode", identityName: "customize-opencode" },
       )
     })
   }),

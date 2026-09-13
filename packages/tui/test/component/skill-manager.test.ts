@@ -13,6 +13,7 @@ import {
 const firstID = `skl_${"1".repeat(64)}`
 const secondID = `skl_${"2".repeat(64)}`
 const dormantID = `skl_${"3".repeat(64)}`
+const customizerID = "skl_887d991222ceee0845a4816256a2729bd4c1321a388ebff06a4aea4e2fba931b"
 
 function model(): SkillManagerModel {
   return {
@@ -116,6 +117,33 @@ describe("Skill Manager presentation", () => {
       title: "Undetected Skill · 33333333",
       skill: { source: "others", targets: "none", state: "undetected" },
     })
+  })
+
+  test("keeps target access attached when a built-in display name changes", () => {
+    const current = model()
+    const rows = buildSkillManagerRows({
+      ...current,
+      settings: { ...current.settings, targets: { [customizerID]: "*" } },
+      catalog: {
+        ...current.catalog,
+        skills: [
+          {
+            id: customizerID,
+            name: "customize-opencode-transit",
+            sourceLabel: "Built-in",
+            digest: "customizer",
+          },
+        ],
+      },
+    })
+
+    expect(rows.filter((row) => row.key === `skill:${customizerID}`)).toEqual([
+      expect.objectContaining({
+        title: "customize-opencode-transit",
+        skill: { source: "opencode", targets: "all", state: "active" },
+      }),
+    ])
+    expect(rows.some((row) => row.title.startsWith("Undetected Skill"))).toBe(false)
   })
 
   test("bounds diagnostics without hiding their total", () => {
