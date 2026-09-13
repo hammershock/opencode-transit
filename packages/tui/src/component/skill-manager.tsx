@@ -54,7 +54,7 @@ type ManagerRow = {
   readonly skill?: {
     readonly source: string
     readonly targets: string
-    readonly state: "active" | "inactive" | "undetected"
+    readonly state: "active" | "inactive"
   }
 }
 
@@ -110,17 +110,6 @@ export function buildSkillManagerRows(model: SkillManagerModel, home?: string): 
       )
       .map((skill) => skill.name),
   )
-  const skills = new Map(model.catalog.skills.map((skill) => [skill.id, skill]))
-  const dormant = Object.keys(model.settings.targets)
-    .filter((skillID) => !skills.has(skillID))
-    .map(
-      (skillID): SkillMetadata => ({
-        id: skillID,
-        name: `Undetected Skill · ${skillID.slice(4, 12)}`,
-        sourceLabel: "Other",
-        digest: "",
-      }),
-    )
   const diagnostics = [
     ...model.settings.diagnostics.map((diagnostic) => ({ type: "settings" as const, diagnostic })),
     ...model.catalog.diagnostics.map((diagnostic) => ({ type: "catalog" as const, diagnostic })),
@@ -180,11 +169,10 @@ export function buildSkillManagerRows(model: SkillManagerModel, home?: string): 
       inspectTitle: true,
       inspectionTitle: root.resolved ?? root.value,
     })),
-    ...[...skills.values(), ...dormant]
+    ...model.catalog.skills
       .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
       .map((skill) => {
         const scope = targetScope(model.settings, skill.id)
-        const undetected = !skills.has(skill.id)
         return {
           key: `skill:${skill.id}`,
           title: skill.name,
@@ -193,11 +181,7 @@ export function buildSkillManagerRows(model: SkillManagerModel, home?: string): 
           skill: {
             source: skillSourceLabel(skill.sourceLabel),
             targets: skillTargetsLabel(scope, model.targets),
-            state: undetected
-              ? ("undetected" as const)
-              : scope === "*" || scope.length > 0
-                ? ("active" as const)
-                : ("inactive" as const),
+            state: scope === "*" || scope.length > 0 ? ("active" as const) : ("inactive" as const),
           },
         }
       }),
@@ -534,12 +518,7 @@ export function useSkillManager() {
           ? () => (
               <span
                 style={{
-                  fg:
-                    skill.state === "active"
-                      ? theme.success
-                      : skill.state === "undetected"
-                        ? theme.warning
-                        : theme.textMuted,
+                  fg: skill.state === "active" ? theme.success : theme.textMuted,
                 }}
               >
                 {skillStateLabel(skill.state)}
@@ -573,7 +552,8 @@ export function useSkillManager() {
     }
     if (!key.startsWith("skill:")) return
     const skillID = key.slice(6)
-    const skill = current.catalog.skills.find((item) => item.id === skillID) ?? unavailableSkill(skillID)
+    const skill = current.catalog.skills.find((item) => item.id === skillID)
+    if (!skill) return
     showTargetAccess(skill)
   }
 
@@ -686,15 +666,6 @@ function targetOption(targetID: string, name: string, scope: SkillTargetScope, t
   }
 }
 
-function unavailableSkill(skillID: string): SkillMetadata {
-  return {
-    id: skillID,
-    name: `Undetected Skill · ${skillID.slice(4, 12)}`,
-    sourceLabel: "Other",
-    digest: "",
-  }
-}
-
 function TargetAccessFooter(props: { onConfirm: () => void }) {
   const { theme } = useTheme()
   return (
@@ -704,9 +675,8 @@ function TargetAccessFooter(props: { onConfirm: () => void }) {
   )
 }
 
-function skillStateLabel(state: "active" | "inactive" | "undetected") {
+function skillStateLabel(state: "active" | "inactive") {
   if (state === "active") return "● active"
-  if (state === "undetected") return "! undetected"
   return "○ inactive"
 }
 

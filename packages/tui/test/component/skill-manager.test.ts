@@ -90,7 +90,7 @@ describe("Skill Manager presentation", () => {
     expect(toggleSkillTargetScope(["configured-target"], "configured-target")).toEqual([])
   })
 
-  test("keeps duplicate source identity and dormant overrides visible", () => {
+  test("keeps duplicate source identity and hides dormant target overrides", () => {
     const rows = buildSkillManagerRows(model(), "/Users/test")
     expect(rows.filter((row) => row.category === "Actions").map((row) => row.title)).toEqual([
       "Add path…",
@@ -112,10 +112,8 @@ describe("Skill Manager presentation", () => {
       }),
       expect.objectContaining({ skill: { source: "others", targets: "local", state: "active" } }),
     ])
-    expect(rows.find((row) => row.key === `skill:${dormantID}`)).toMatchObject({
-      title: "Undetected Skill · 33333333",
-      skill: { source: "others", targets: "none", state: "undetected" },
-    })
+    expect(rows.find((row) => row.key === `skill:${dormantID}`)).toBeUndefined()
+    expect(rows.filter((row) => row.category === "Skills")).toHaveLength(2)
   })
 
   test("bounds diagnostics without hiding their total", () => {
