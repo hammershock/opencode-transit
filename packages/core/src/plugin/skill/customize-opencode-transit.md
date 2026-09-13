@@ -1,11 +1,10 @@
 <!--
   Built-in skill. Name and description are registered in code at
-  packages/core/src/plugin/skill.ts
-  and CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION). The body below becomes the
-  skill's content.
+  packages/core/src/plugin/skill.ts. The body below becomes the skill's
+  content.
 -->
 
-# Customizing opencode
+# Customizing opencode-transit
 
 opencode validates its own config strictly and refuses to start when a field
 is wrong. The shapes below cover the common surface area, but they are a
@@ -29,25 +28,24 @@ mistakes as they type.
 
 ## Applying changes
 
-Config is loaded once when opencode starts and is not hot-reloaded. After
-saving changes to `opencode.json`, an agent file, a skill, a plugin, or any
-other config-time file, **tell the user to quit and restart opencode** for
-the changes to take effect. The running session will keep using the
-already-loaded config until then.
+Config is loaded when opencode starts and is not generally hot-reloaded. After
+saving config, agent, command, or plugin files, tell the user to restart
+opencode. In opencode-transit, Skill changes instead take effect after exiting
+and re-entering the Session; an application restart is unnecessary.
 
 ## Where files live
 
 | Scope                         | Path                                                                                                                      |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Project config                | `./opencode.json`, `./opencode.jsonc`, or `.opencode/opencode.json` (opencode walks up from the cwd to the worktree root) |
-| Global config                 | `~/.config/opencode/opencode.json` or `~/.config/opencode/opencode.jsonc` (NOT `~/.opencode/`)                            |
+| Project config                | `./opencode.json`, `./opencode.jsonc`, `.opencode/opencode.json`, or `.opencode/opencode.jsonc` (opencode walks up from the cwd to the worktree root) |
+| Global config                 | `~/.config/opencode/opencode.json` or `~/.config/opencode/opencode.jsonc` (NOT `~/.opencode/`)                                                |
 | Project agents                | `.opencode/agent/<name>.md` or `.opencode/agents/<name>.md`                                                               |
 | Global agents                 | `~/.config/opencode/agent(s)/<name>.md`                                                                                   |
 | Project commands              | `.opencode/command/<name>.md` or `.opencode/commands/<name>.md`                                                           |
 | Global commands               | `~/.config/opencode/command(s)/<name>.md`                                                                                 |
 | Project skills                | `.opencode/skill(s)/<name>/SKILL.md`                                                                                      |
 | Global skills                 | `~/.config/opencode/skill(s)/<name>/SKILL.md`                                                                             |
-| External skills (auto-loaded) | `~/.claude/skills/<name>/SKILL.md`, `~/.agents/skills/<name>/SKILL.md`                                                    |
+| Imported skills               | Any directory explicitly added through `/skills` or `skills.paths`                                                       |
 
 Configs from each scope are deep-merged. Project overrides global. Unknown
 top-level keys in `opencode.json` are rejected with `ConfigInvalidError`.
@@ -160,9 +158,9 @@ Shape notes worth being explicit about:
 
 ## Skills
 
-opencode's skill loader scans for `**/SKILL.md` inside skill directories. The
-file is named `SKILL.md` exactly, and lives in its own folder named after the
-skill:
+opencode's Skill loader scans for `**/SKILL.md` inside configured Skill
+directories. The file is named `SKILL.md` exactly and lives in its own folder
+named after the Skill:
 
 ```
 .opencode/skills/my-skill/SKILL.md
@@ -181,13 +179,26 @@ description: One sentence covering what this skill does AND when to trigger it. 
 (skill body in markdown: instructions, examples, references)
 ```
 
-- `name` is required, lowercase hyphen-separated, up to 64 chars, and matches the folder name.
-- `description` is effectively required: skills without one are filtered out and never surfaced to the model. Cover both _what_ the skill does and _when_ to use it. Write in third person ("Use when...", not "I help with..."). Front-load concrete trigger keywords and filenames; gate with "Use ONLY when..." if the skill should stay quiet on adjacent topics.
+- `name` is required, lowercase hyphen-separated, up to 64 characters, and
+  matches the folder name.
+- `description` is required, non-blank, and up to 1024 characters. Cover both
+  _what_ the Skill does and _when_ to use it. Write in third person ("Use
+  when...", not "I help with...").
 - Optional: `license`, `compatibility`, `metadata` (string-string map).
 
-Register skills from non-default locations via `skills.paths` (scanned
-recursively for `**/SKILL.md`) and `skills.urls` (each URL serves a list of
-skills).
+opencode-transit discovers built-in, OpenCode global, and applicable project
+Skills by default. Codex, Claude, `.agents`, and other directories require an
+explicit `/skills` import or `skills.paths` entry. Use `/skills` to manage
+discovery and availability without deleting Skill files. Duplicate names
+require selecting the intended source from autocomplete.
+
+### Invoking Skills
+
+Use an autocomplete-selected `$skill-name` mention. Skill instructions remain
+separate from the user's request. The legacy `/<skill-name> request` form has
+the same behavior: `request` remains intact, and `$ARGUMENTS` or `$1` inside
+`SKILL.md` is not substituted. The model `skill` tool loads one exact name from
+the current `<available_skills>` list; it does not list or search Skills.
 
 ## References
 
@@ -434,9 +445,6 @@ When a user's config is broken and opencode won't start, these env vars help:
   inject inline JSON as a final local-scope merge.
 - `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`: skip default plugins.
 - `OPENCODE_PURE=1`: skip external plugins entirely.
-- `OPENCODE_DISABLE_EXTERNAL_SKILLS=1`,
-  `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1`: skip the external skill scans under
-  `~/.claude/` and `~/.agents/`.
 
 ## When proposing edits
 
@@ -446,8 +454,11 @@ When a user's config is broken and opencode won't start, these env vars help:
 - Preserve `$schema` and any existing fields the user did not ask to change.
 - For agent, command, skill, and plugin definitions, prefer creating new files
   in the correct location over inlining everything in `opencode.json`.
+- Prefer `/skills` for Skill discovery and availability settings instead of
+  editing generated identifiers by hand.
 - If the user's existing config is malformed, point them at the env-var escape
   hatches above so they can edit from inside opencode without breaking their
   session.
-- After saving any config change, remind the user to quit and restart opencode
-  — running sessions keep using the already-loaded config.
+- After saving a normal config change, remind the user to restart opencode.
+  After a Skill or Skill discovery change in opencode-transit, tell them to
+  exit and re-enter affected Sessions instead.
