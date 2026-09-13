@@ -19,6 +19,7 @@ export type RexdHandshake = {
 
 type Pending = {
   method: string
+  phase: "write" | "response"
   resolve(value: unknown): void
   reject(error: RexdError): void
   timer: ReturnType<typeof setTimeout>
@@ -53,22 +54,27 @@ export class RexdRpcClient {
     if (options.signal?.aborted) throw cancelled(options.signal)
     const id = ++this.#requestID
     const result = new Promise<unknown>((resolve, reject) => {
-      const abort = () => this.#settle(id, cancelled(options.signal!, options.sideEffect ? "unknown" : "failed"))
-      const timer = setTimeout(
-        () =>
-          this.#settle(
-            id,
-            new RexdError(
-              "transport",
-              `Rexd request timed out: ${method}`,
-              true,
-              options.sideEffect ? "unknown" : "failed",
-            ),
-          ),
-        options.timeoutMs ?? 30_000,
-      )
+      const abort = () => {
+        const pending = this.#pending.get(id)
+        const error = cancelled(options.signal!, options.sideEffect ? "unknown" : "failed")
+        this.#settle(id, error)
+        if (pending?.phase === "write") void this.close(error)
+      }
+      const timer = setTimeout(() => {
+        const pending = this.#pending.get(id)
+        if (!pending) return
+        const error = new RexdError(
+          "transport",
+          `Rexd request timed out while ${pending.phase === "write" ? "writing" : "waiting for response"}: ${method}`,
+          true,
+          options.sideEffect ? "unknown" : "failed",
+        )
+        this.#settle(id, error)
+        void this.close(error)
+      }, options.timeoutMs ?? 30_000)
       this.#pending.set(id, {
         method,
+        phase: "write",
         resolve,
         reject,
         timer,
@@ -76,17 +82,26 @@ export class RexdRpcClient {
       })
       options.signal?.addEventListener("abort", abort, { once: true })
     })
-    await this.transport.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`).catch(() => {
-      this.#settle(
-        id,
-        new RexdError(
-          "transport",
-          `Could not send Rexd request: ${method}`,
-          true,
-          options.sideEffect ? "unknown" : "failed",
-        ),
+    const failed = (cause?: unknown) => {
+      if (!this.#pending.has(id)) return
+      const error = new RexdError(
+        "transport",
+        `Could not send Rexd request: ${method}`,
+        true,
+        options.sideEffect ? "unknown" : "failed",
+        cause instanceof Error ? cause.name : undefined,
       )
-    })
+      this.#settle(id, error)
+      void this.close(error)
+    }
+    try {
+      void this.transport.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`).then(() => {
+        const pending = this.#pending.get(id)
+        if (pending) pending.phase = "response"
+      }, failed)
+    } catch (cause) {
+      failed(cause)
+    }
     return result
   }
 

@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test"
 import type { RexdLease } from "../../src/rexd/connection"
 import { make } from "../../src/rexd/connection-pool"
 import { RexdError } from "../../src/rexd/error"
-import type { RexdTarget } from "../../src/rexd/ssh"
+import { RexdRpcClient } from "../../src/rexd/rpc"
+import type { RexdTarget, Transport } from "../../src/rexd/ssh"
 
 const target: RexdTarget = {
   id: "target-1",
@@ -86,7 +87,46 @@ describe("Rexd connection pool", () => {
     await handle.release()
     await pool.close()
   })
+
+  test("replaces a lease whose RPC request times out", async () => {
+    let connects = 0
+    const pool = make({
+      validate: async () => undefined,
+      connect: async () => {
+        connects++
+        const client = new RexdRpcClient(new StalledTransport())
+        return {
+          ...lease(undefined, (listener) => client.onClose(listener), String(connects)),
+          client,
+          close: () => client.close(),
+        }
+      },
+    })
+
+    const first = await pool.acquire(target, { clientVersion: "test" })
+    await expect(first.lease.client.request("fs.stat", {}, { timeoutMs: 10 })).rejects.toMatchObject({
+      phase: "transport",
+    })
+    const replacement = await pool.acquire(target, { clientVersion: "test" })
+    expect(replacement.lease).not.toBe(first.lease)
+    expect(connects).toBe(2)
+    await Promise.all([first.release(), replacement.release()])
+    await pool.close()
+  })
 })
+
+class StalledTransport implements Transport {
+  write() {
+    return new Promise<void>(() => undefined)
+  }
+  onData() {
+    return () => undefined
+  }
+  onClose() {
+    return () => undefined
+  }
+  async close() {}
+}
 
 function lease(
   close: (() => void) | undefined = undefined,

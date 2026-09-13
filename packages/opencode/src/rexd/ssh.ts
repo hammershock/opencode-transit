@@ -156,6 +156,9 @@ export class SshTransport implements Transport {
       this.#stderr.push(chunk)
       if (this.#stderr.join("").length > 16 * 1024) this.#stderr.splice(0, 1)
     })
+    child.stdin.once("error", (error) =>
+      this.#finish(new RexdError("transport", "Could not write to remote transport", true, "unknown", error.name)),
+    )
     child.once("error", (error) =>
       this.#finish(new RexdError("ssh", "SSH transport failed", true, "unknown", error.name)),
     )
