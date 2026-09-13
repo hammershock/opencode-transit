@@ -3,7 +3,8 @@ import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-j
 import { useRenderer } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { selectedForeground, tint, useTheme } from "../../context/theme"
-import type { LocationRef, QuestionAnswer, QuestionRequest } from "@opencode-ai/sdk/v2"
+import type { LocationRef, QuestionAnswer } from "@opencode-ai/sdk/v2"
+import type { RoutedQuestionRequest } from "../../context/sync"
 import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useTuiConfig } from "../../config"
@@ -12,7 +13,7 @@ import { useToast } from "../../ui/toast"
 
 const QUESTION_MODE = "question"
 
-export function QuestionPrompt(props: { request: QuestionRequest; location?: LocationRef }) {
+export function QuestionPrompt(props: { request: RoutedQuestionRequest; location?: LocationRef }) {
   const sdk = useSDK()
   const toast = useToast()
   const { theme } = useTheme()
@@ -67,6 +68,15 @@ export function QuestionPrompt(props: { request: QuestionRequest; location?: Loc
   }
 
   function reply(answers: QuestionAnswer[]) {
+    if (props.request.api === "v2")
+      return sdk.client.v2.session.question.reply(
+        {
+          sessionID: props.request.sessionID,
+          requestID: props.request.id,
+          questionV2Reply: { answers },
+        },
+        { throwOnError: true },
+      )
     const request = route()
     return sdk.client.question.reply(
       {
@@ -83,6 +93,12 @@ export function QuestionPrompt(props: { request: QuestionRequest; location?: Loc
   }
 
   function reject() {
+    if (props.request.api === "v2") {
+      void sdk.client.v2.session.question
+        .reject({ sessionID: props.request.sessionID, requestID: props.request.id }, { throwOnError: true })
+        .catch(toast.error)
+      return
+    }
     const request = route()
     void sdk.client.question
       .reject(

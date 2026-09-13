@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import { createOpencodeClient, type LocationRef } from "@opencode-ai/sdk/v2"
-import { locationQuery } from "../../src/util/location-query"
+import { locationKey, locationQuery } from "../../src/util/location-query"
 
 describe("Location query", () => {
+  test("keeps equal paths on different targets in separate cache entries", () => {
+    const first = locationKey({ directory: "/work", target: { type: "rexd", targetID: "target-1" } })
+    const second = locationKey({ directory: "/work", target: { type: "rexd", targetID: "target-2" } })
+
+    expect(first).not.toBe(second)
+  })
+
   test.each([
     [
       "local",

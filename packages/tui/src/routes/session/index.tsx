@@ -1778,7 +1778,7 @@ export function Session() {
                 <Show when={permissions().length > 0}>
                   <PermissionPrompt
                     request={permissions()[0]}
-                    directory={sync.session.get(permissions()[0].sessionID)?.directory}
+                    location={sync.session.get(permissions()[0].sessionID)}
                   />
                 </Show>
                 <Show when={permissions().length === 0 && questions().length > 0}>
