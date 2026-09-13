@@ -3,16 +3,18 @@ import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-j
 import { useRenderer } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { selectedForeground, tint, useTheme } from "../../context/theme"
-import type { QuestionAnswer, QuestionRequest } from "@opencode-ai/sdk/v2"
+import type { LocationRef, QuestionAnswer, QuestionRequest } from "@opencode-ai/sdk/v2"
 import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useTuiConfig } from "../../config"
 import { useBindings, useOpencodeModeStack } from "../../keymap"
+import { useToast } from "../../ui/toast"
 
 const QUESTION_MODE = "question"
 
-export function QuestionPrompt(props: { request: QuestionRequest; directory?: string }) {
+export function QuestionPrompt(props: { request: QuestionRequest; location?: LocationRef }) {
   const sdk = useSDK()
+  const toast = useToast()
   const { theme } = useTheme()
   const renderer = useRenderer()
   const tuiConfig = useTuiConfig()
@@ -45,20 +47,52 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
     return store.answers[store.tab]?.includes(value) ?? false
   })
 
+  function route() {
+    if (props.location?.target?.type === "rexd") {
+      return {
+        query: {},
+        options: {
+          throwOnError: true as const,
+          headers: { "x-opencode-target": props.location.target.targetID },
+        },
+      }
+    }
+    return {
+      query: {
+        directory: props.location?.directory,
+        workspace: props.location?.workspaceID,
+      },
+      options: { throwOnError: true as const },
+    }
+  }
+
+  function reply(answers: QuestionAnswer[]) {
+    const request = route()
+    return sdk.client.question.reply(
+      {
+        ...request.query,
+        requestID: props.request.id,
+        answers,
+      },
+      request.options,
+    )
+  }
+
   function submit() {
-    const answers = questions().map((_, i) => store.answers[i] ?? [])
-    void sdk.client.question.reply({
-      requestID: props.request.id,
-      directory: props.directory,
-      answers,
-    })
+    void reply(questions().map((_, i) => store.answers[i] ?? [])).catch(toast.error)
   }
 
   function reject() {
-    void sdk.client.question.reject({
-      requestID: props.request.id,
-      directory: props.directory,
-    })
+    const request = route()
+    void sdk.client.question
+      .reject(
+        {
+          ...request.query,
+          requestID: props.request.id,
+        },
+        request.options,
+      )
+      .catch(toast.error)
   }
 
   function pick(answer: string, custom: boolean = false) {
@@ -71,11 +105,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
       setStore("custom", inputs)
     }
     if (single()) {
-      void sdk.client.question.reply({
-        requestID: props.request.id,
-        directory: props.directory,
-        answers: [[answer]],
-      })
+      void reply([[answer]]).catch(toast.error)
       return
     }
     setStore("tab", store.tab + 1)
