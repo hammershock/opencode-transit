@@ -240,6 +240,23 @@ export const {
           sdk.client.v2.session.permission.list({ sessionID }, { throwOnError: true }),
           sdk.client.v2.session.question.list({ sessionID }, { throwOnError: true }),
         ])
+        const pendingPermissions =
+          permission.effective(session.data!.approvalMode ?? "normal") === "auto"
+            ? (
+                await Promise.all(
+                  permissions.data.data.map(async (request) => {
+                    try {
+                      await sdk.client.v2.session.permission.reply(
+                        { sessionID, requestID: request.id, reply: "once" },
+                        { throwOnError: true },
+                      )
+                    } catch {
+                      return request
+                    }
+                  }),
+                )
+              ).filter((request) => request !== undefined)
+            : permissions.data.data
         setStore(
           produce((draft) => {
             const match = search(draft.session, sessionID, (s) => s.id)
@@ -290,7 +307,7 @@ export const {
             for (const message of removed) delete draft.part[message.id]
             draft.message[sessionID] = visible
             draft.session_diff[sessionID] = diff.data ?? []
-            draft.permission[sessionID] = permissions.data.data
+            draft.permission[sessionID] = pendingPermissions
               .map(legacyPermission)
               .filter((request) => !tracker.permissions.has(request.id))
               .concat(

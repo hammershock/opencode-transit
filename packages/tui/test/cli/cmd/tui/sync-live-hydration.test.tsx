@@ -187,6 +187,39 @@ test("resolved V2 interactions are not resurrected by stale hydration", async ()
   }
 })
 
+test("session hydration auto-approves pending V2 permissions", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const permission = {
+    id: "per_auto_pending",
+    sessionID,
+    action: "external_directory",
+    resources: ["/tmp/outside/*"],
+  }
+  const replies: Request[] = []
+  const { app, sync } = await mount((url, request) => {
+    if (url.pathname === `/session/${sessionID}`) return json({ ...session, approvalMode: "auto" })
+    if (url.pathname === `/session/${sessionID}/message`) return json([])
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    if (url.pathname === `/api/session/${sessionID}/permission`) return json({ data: [permission] })
+    if (url.pathname === `/api/session/${sessionID}/permission/${permission.id}/reply`) {
+      replies.push(request)
+      return new Response(null, { status: 204 })
+    }
+    return undefined
+  }, tmp.path)
+
+  try {
+    await sync.session.sync(sessionID)
+
+    expect(replies).toHaveLength(1)
+    expect(await replies[0]!.clone().json()).toEqual({ reply: "once" })
+    expect(sync.data.permission[sessionID]).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("a projection committed by another process refreshes an already loaded session", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")
