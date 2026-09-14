@@ -258,6 +258,10 @@ const layer = Layer.effect(
     })
 
     const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info) {
+      const economics =
+        (yield* config.get()).experimental?.subagent_economics === true
+          ? "The current <available_subagents> system block contains device-local pricing and routing evidence; consider it when choosing an agent."
+          : undefined
       const items = (yield* agents.list()).filter((item) => item.mode !== "primary")
       const filtered = items.filter(
         (item) => Permission.evaluate("task", item.name, agent.permission).action !== "deny",
@@ -269,7 +273,9 @@ const layer = Layer.effect(
             `- ${item.name}: ${item.description ?? "This subagent should only be called manually by the user."}`,
         )
         .join("\n")
-      return ["Available agent types and the tools they have access to:", description].join("\n")
+      return ["Available agent types and the tools they have access to:", description, economics]
+        .filter((part) => part !== undefined)
+        .join("\n")
     })
 
     const describeCodeMode = Effect.fn("ToolRegistry.describeCodeMode")(function* (input: {
