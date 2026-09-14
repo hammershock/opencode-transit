@@ -111,6 +111,7 @@
     "@solid-primitives/scheduled": "1.5.2",
     "@standard-schema/spec": "1.0.0",
     "@types/ws": "8.18.1",
+    "@xterm/headless": "6.0.0",
     "@zip.js/zip.js": "2.7.62",
     "ai": "catalog:",
     "ai-gateway-provider": "3.2.0",

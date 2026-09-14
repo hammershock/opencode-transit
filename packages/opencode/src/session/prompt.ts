@@ -63,6 +63,7 @@ import { LLMEvent } from "@opencode-ai/llm"
 import { UserShellRuntime } from "./user-shell-runtime"
 import { UserShellLocal } from "./user-shell-local"
 import { UserShellLocation } from "./user-shell-location"
+import { UserShellTerminal } from "./user-shell-terminal"
 import { LocationEnvironment } from "@opencode-ai/core/location-environment"
 import { Location } from "@opencode-ai/core/location"
 import { LocationServiceMap } from "@opencode-ai/core/location-services"
@@ -587,6 +588,7 @@ const layer = Layer.effect(
                 status: "running",
                 time: { start: started },
                 input: { command: input.command },
+                metadata: { output: "" },
               },
             }
             yield* sessions.updatePart(part)
@@ -602,14 +604,23 @@ const layer = Layer.effect(
             directory: locationRef.directory,
           }
           const executionCwd = yield* userShell.current({ sessionID: input.sessionID, location, enabled: continuity })
-          let output = ""
+          const terminal = yield* Effect.promise(() => UserShellTerminal.create())
           let aborted = false
 
           const finish = Effect.uninterruptible(
             Effect.gen(function* () {
               if (aborted) {
-                output += "\n\n" + ["<metadata>", "User aborted the command", "</metadata>"].join("\n")
+                yield* Effect.promise(() =>
+                  terminal.write("\n\n" + ["<metadata>", "User aborted the command", "</metadata>"].join("\n")),
+                )
               }
+              const rendered = terminal.snapshot()
+              terminal.dispose()
+              const output = yield* truncate.output(rendered, {
+                maxLines: Truncate.MAX_LINES,
+                maxBytes: Truncate.MAX_BYTES,
+                direction: "tail",
+              })
               const completed = Date.now()
               if (!msg.time.completed) {
                 msg.time.completed = completed
@@ -621,8 +632,8 @@ const layer = Layer.effect(
                   time: { ...part.state.time, end: completed },
                   input: part.state.input,
                   title: "",
-                  metadata: { output },
-                  output,
+                  metadata: { output: output.content },
+                  output: output.content,
                 }
                 yield* sessions.updatePart(part)
               }
@@ -641,10 +652,15 @@ const layer = Layer.effect(
               ).pipe(Effect.provide(locations.get(locationRef)))
               const append = (chunk: string) =>
                 Effect.gen(function* () {
-                  output += chunk
+                  const output = yield* Effect.promise(() => terminal.write(chunk))
                   if (part.state.status === "running") {
-                    part.state.metadata = { output }
-                    yield* sessions.updatePart(part)
+                    yield* sessions.updatePartDelta({
+                      sessionID: part.sessionID,
+                      messageID: part.messageID,
+                      partID: part.id,
+                      field: "metadata.output",
+                      delta: output,
+                    })
                   }
                 })
               const selected =

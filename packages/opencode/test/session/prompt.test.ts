@@ -1729,6 +1729,25 @@ unixNoLLMServer(
 )
 
 unixNoLLMServer(
+  "shell bounds the rendered output persisted for the model",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, chat } = yield* boot()
+      const result = yield* prompt.shell({
+        sessionID: chat.id,
+        agent: "build",
+        command: "head -c 60000 /dev/zero | tr '\\0' x",
+      })
+      const tool = completedTool(result.parts)
+      if (!tool) return
+
+      expect(Buffer.byteLength(tool.state.output)).toBeLessThan(52 * 1024)
+      expect(tool.state.output).toContain("truncated")
+    }),
+  { config: cfg },
+)
+
+unixNoLLMServer(
   "shell completes a fast command on the preferred shell",
   () =>
     Effect.gen(function* () {
@@ -1850,11 +1869,19 @@ unixNoLLMServer(
 )
 
 unixNoLLMServer(
-  "shell updates running metadata before process exit",
+  "shell streams rendered output without persisting intermediate output",
   () =>
     withSh(() =>
       Effect.gen(function* () {
         const { prompt, chat } = yield* boot()
+        const events = yield* EventV2Bridge.Service
+        const output: string[] = []
+        const off = yield* events.listen((event) => {
+          if (event.type !== MessageV2.Event.PartDelta.type) return Effect.void
+          const data = event.data as typeof MessageV2.Event.PartDelta.data.Type
+          if (data.sessionID === chat.id && data.field === "metadata.output") output.push(data.delta)
+          return Effect.void
+        })
 
         const fiber = yield* prompt
           .shell({ sessionID: chat.id, agent: "build", command: "printf first && sleep 0.2 && printf second" })
@@ -1862,15 +1889,18 @@ unixNoLLMServer(
 
         yield* pollWithTimeout(
           Effect.gen(function* () {
-            const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
-            const taskMsg = msgs.find((item) => item.info.role === "assistant")
-            const tool = taskMsg ? toolPart(taskMsg.parts) : undefined
-            if (tool?.state.status === "running" && tool.state.metadata?.output.includes("first")) return true
+            if (output.some((item) => item.includes("first"))) return true
           }),
           "timed out waiting for running shell metadata",
         )
 
+        const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+        const taskMsg = msgs.find((item) => item.info.role === "assistant")
+        const tool = taskMsg ? toolPart(taskMsg.parts) : undefined
+        expect(tool?.state.status === "running" ? tool.state.metadata?.output : undefined).toBe("")
+
         const exit = yield* Fiber.await(fiber)
+        yield* off
         expect(Exit.isSuccess(exit)).toBe(true)
       }),
     ),
