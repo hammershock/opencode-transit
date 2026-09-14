@@ -5,6 +5,8 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { ProjectV2 } from "../project"
+import { ProjectTable } from "../project/sql"
+import { AbsolutePath } from "../schema"
 import { PermissionTable } from "./sql"
 import { PermissionSaved } from "@opencode-ai/schema/permission-saved"
 
@@ -21,6 +23,7 @@ export type ListInput = typeof ListInput.Type
 
 export const AddInput = Schema.Struct({
   projectID: ProjectV2.ID,
+  projectDirectory: AbsolutePath,
   action: Schema.String,
   resources: Schema.Array(Schema.String),
 }).annotate({ identifier: "PermissionSaved.AddInput" })
@@ -54,17 +57,31 @@ const layer = Layer.effect(
     const add = Effect.fn("PermissionSaved.add")(function* (input: AddInput) {
       if (!input.resources.length) return
       yield* db
-        .insert(PermissionTable)
-        .values(
-          input.resources.map((resource) => ({
-            id: ID.create(),
-            project_id: input.projectID,
-            action: input.action,
-            resource,
-          })),
+        .transaction(
+          (db) =>
+            Effect.gen(function* () {
+              // Rexd discovers the project on the target after Session creation,
+              // so the controller may not have materialized its parent row yet.
+              yield* db
+                .insert(ProjectTable)
+                .values({ id: input.projectID, worktree: input.projectDirectory, sandboxes: [] })
+                .onConflictDoNothing()
+                .run()
+              yield* db
+                .insert(PermissionTable)
+                .values(
+                  input.resources.map((resource) => ({
+                    id: ID.create(),
+                    project_id: input.projectID,
+                    action: input.action,
+                    resource,
+                  })),
+                )
+                .onConflictDoNothing()
+                .run()
+            }),
+          { behavior: "immediate" },
         )
-        .onConflictDoNothing()
-        .run()
         .pipe(Effect.orDie)
     })
 
