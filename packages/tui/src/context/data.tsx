@@ -23,6 +23,7 @@ import { useSDK } from "./sdk"
 import { useEvent } from "./event"
 import { createSignal, onCleanup, onMount } from "solid-js"
 import { commitCanonicalRevert } from "../util/session-message"
+import { locationKey, locationQuery } from "../util/location-query"
 
 type LocationData = {
   agent?: AgentV2Info[]
@@ -44,14 +45,6 @@ type Data = {
     permission: Record<string, PermissionSavedInfo[]>
   }
   location: Record<string, LocationData>
-}
-
-function locationKey(location: LocationRef) {
-  return JSON.stringify([location.directory, location.workspaceID])
-}
-
-function locationQuery(ref?: LocationRef) {
-  return ref ? { directory: ref.directory, workspace: ref.workspaceID } : undefined
 }
 
 export const { use: useData, provider: DataProvider } = createSimpleContext({
@@ -419,6 +412,55 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               time: { created: event.data.timestamp },
             })
           })
+          break
+        case "permission.v2.asked":
+          setStore(
+            "session",
+            "permission",
+            produce((draft) => {
+              const requests = (draft[event.data.sessionID] ??= [])
+              const index = requests.findIndex((request) => request.id === event.data.id)
+              if (index === -1) requests.push(event.data)
+              if (index !== -1) requests[index] = event.data
+            }),
+          )
+          break
+        case "permission.v2.replied":
+          setStore(
+            "session",
+            "permission",
+            produce((draft) => {
+              const requests = draft[event.data.sessionID]
+              if (!requests) return
+              const index = requests.findIndex((request) => request.id === event.data.requestID)
+              if (index !== -1) requests.splice(index, 1)
+            }),
+          )
+          break
+        case "question.v2.asked":
+          setStore(
+            "session",
+            "question",
+            produce((draft) => {
+              const requests = (draft[event.data.sessionID] ??= [])
+              const index = requests.findIndex((request) => request.id === event.data.id)
+              if (index === -1) requests.push(event.data)
+              if (index !== -1) requests[index] = event.data
+            }),
+          )
+          break
+        case "question.v2.replied":
+        case "question.v2.rejected":
+          setStore(
+            "session",
+            "question",
+            produce((draft) => {
+              const requests = draft[event.data.sessionID]
+              if (!requests) return
+              const index = requests.findIndex((request) => request.id === event.data.requestID)
+              if (index !== -1) requests.splice(index, 1)
+            }),
+          )
           break
         case "reference.updated":
           void result.location.reference.refresh()

@@ -108,6 +108,118 @@ test("stale session hydration does not overwrite live message parts", async () =
   }
 })
 
+test("session hydration restores pending V2 interactions", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const permission = {
+    id: "per_pending",
+    sessionID,
+    action: "external_directory",
+    resources: ["/tmp/outside/*"],
+  }
+  const question = {
+    id: "que_pending",
+    sessionID,
+    questions: [{ question: "Continue?", header: "Continue", options: [{ label: "Yes", description: "Continue" }] }],
+  }
+  const { app, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json(session)
+    if (url.pathname === `/session/${sessionID}/message`) return json([])
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    if (url.pathname === `/api/session/${sessionID}/permission`) return json({ data: [permission] })
+    if (url.pathname === `/api/session/${sessionID}/question`) return json({ data: [question] })
+    return undefined
+  }, tmp.path)
+
+  try {
+    await sync.session.sync(sessionID)
+
+    expect(sync.data.permission[sessionID]).toEqual([
+      expect.objectContaining({ id: permission.id, permission: permission.action, api: "v2" }),
+    ])
+    expect(sync.data.question[sessionID]).toEqual([expect.objectContaining({ id: question.id, api: "v2" })])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("resolved V2 interactions are not resurrected by stale hydration", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const permission = {
+    id: "per_resolved",
+    sessionID,
+    action: "external_directory",
+    resources: ["/tmp/outside/*"],
+  }
+  let resolvePermissions!: (response: Response) => void
+  const permissions = new Promise<Response>((resolve) => {
+    resolvePermissions = resolve
+  })
+  let requested = false
+  const { app, emit, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json(session)
+    if (url.pathname === `/session/${sessionID}/message`) return json([])
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    if (url.pathname === `/api/session/${sessionID}/permission`) {
+      requested = true
+      return permissions
+    }
+    return undefined
+  }, tmp.path)
+
+  try {
+    const hydrate = sync.session.sync(sessionID)
+    await wait(() => requested)
+    emit(
+      global({
+        id: "evt_permission_replied",
+        type: "permission.v2.replied",
+        properties: { sessionID, requestID: permission.id, reply: "once" },
+      }),
+    )
+    resolvePermissions(json({ data: [permission] }))
+    await hydrate
+
+    expect(sync.data.permission[sessionID]).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("session hydration auto-approves pending V2 permissions", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const permission = {
+    id: "per_auto_pending",
+    sessionID,
+    action: "external_directory",
+    resources: ["/tmp/outside/*"],
+  }
+  const replies: Request[] = []
+  const { app, sync } = await mount((url, request) => {
+    if (url.pathname === `/session/${sessionID}`) return json({ ...session, approvalMode: "auto" })
+    if (url.pathname === `/session/${sessionID}/message`) return json([])
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    if (url.pathname === `/api/session/${sessionID}/permission`) return json({ data: [permission] })
+    if (url.pathname === `/api/session/${sessionID}/permission/${permission.id}/reply`) {
+      replies.push(request)
+      return new Response(null, { status: 204 })
+    }
+    return undefined
+  }, tmp.path)
+
+  try {
+    await sync.session.sync(sessionID)
+
+    expect(replies).toHaveLength(1)
+    expect(await replies[0]!.clone().json()).toEqual({ reply: "once" })
+    expect(sync.data.permission[sessionID]).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("a projection committed by another process refreshes an already loaded session", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")

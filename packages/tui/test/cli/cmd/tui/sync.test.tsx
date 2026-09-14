@@ -107,4 +107,70 @@ describe("tui sync", () => {
       mounted.app.renderer.destroy()
     }
   })
+
+  test("auto permission replies preserve legacy targets and use canonical Session routes", async () => {
+    await using tmp = await tmpdir()
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const replies: Request[] = []
+    const session = {
+      id: "ses_remote_auto",
+      slug: "remote-auto",
+      projectID: "proj_test",
+      directory: "/remote/project",
+      title: "Remote auto",
+      version: "test",
+      time: { created: 1, updated: 1 },
+      approvalMode: "auto",
+      target: { type: "rexd", targetID: "target-test" },
+    }
+    const mounted = await mount((url, request) => {
+      if (url.pathname === "/session") return json([session])
+      if (url.pathname.includes("/permission/")) {
+        replies.push(request)
+        return json(true)
+      }
+    }, tmp.path)
+
+    try {
+      mounted.emit({
+        directory: session.directory,
+        project: session.projectID,
+        payload: {
+          id: "evt_legacy_permission",
+          type: "permission.asked",
+          properties: {
+            id: "permission-legacy",
+            sessionID: session.id,
+            permission: "external_directory",
+            patterns: ["/outside/*"],
+            always: ["/outside/*"],
+            metadata: {},
+          },
+        },
+      })
+      await wait(() => replies.length === 1)
+      expect(new URL(replies[0]!.url).pathname).toBe("/permission/permission-legacy/reply")
+      expect(replies[0]!.headers.get("x-opencode-target")).toBe(session.target.targetID)
+
+      mounted.emit({
+        directory: session.directory,
+        project: session.projectID,
+        payload: {
+          id: "evt_v2_permission",
+          type: "permission.v2.asked",
+          properties: {
+            id: "permission-v2",
+            sessionID: session.id,
+            action: "external_directory",
+            resources: ["/outside/*"],
+          },
+        },
+      })
+      await wait(() => replies.length === 2)
+      expect(new URL(replies[1]!.url).pathname).toBe(`/api/session/${session.id}/permission/permission-v2/reply`)
+      expect(replies[1]!.headers.has("x-opencode-target")).toBe(false)
+    } finally {
+      mounted.app.renderer.destroy()
+    }
+  })
 })

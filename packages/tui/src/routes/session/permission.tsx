@@ -4,11 +4,10 @@ import { createMemo, For, Match, Show, Switch } from "solid-js"
 import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { useTheme, selectedForeground } from "../../context/theme"
-import type { PermissionRequest } from "@opencode-ai/sdk/v2"
+import type { LocationRef, PermissionRequest } from "@opencode-ai/sdk/v2"
 import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
-import { useSync } from "../../context/sync"
-import { useProject } from "../../context/project"
+import { useSync, type RoutedPermissionRequest } from "../../context/sync"
 import { filetype } from "../../util/filetype"
 import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
@@ -16,6 +15,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../config"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
+import { useToast } from "../../ui/toast"
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -108,9 +108,9 @@ function TextBody(props: { title: string; description?: string; icon?: string })
   )
 }
 
-export function PermissionPrompt(props: { request: PermissionRequest; directory?: string }) {
+export function PermissionPrompt(props: { request: RoutedPermissionRequest; location?: LocationRef }) {
   const sdk = useSDK()
-  const project = useProject()
+  const toast = useToast()
   const sync = useSync()
   const [store, setStore] = createStore({
     stage: "permission" as PermissionStage,
@@ -132,6 +132,31 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   })
 
   const { theme } = useTheme()
+
+  function reply(reply: "once" | "always" | "reject", message?: string) {
+    if (props.request.api === "v2") {
+      return sdk.client.v2.session.permission.reply(
+        { sessionID: props.request.sessionID, requestID: props.request.id, reply, message },
+        { throwOnError: true },
+      )
+    }
+    if (props.location?.target?.type === "rexd") {
+      return sdk.client.permission.reply(
+        { reply, requestID: props.request.id, message },
+        { throwOnError: true, headers: { "x-opencode-target": props.location.target.targetID } },
+      )
+    }
+    return sdk.client.permission.reply(
+      {
+        reply,
+        requestID: props.request.id,
+        directory: props.location?.directory,
+        workspace: props.location?.workspaceID,
+        message,
+      },
+      { throwOnError: true },
+    )
+  }
 
   return (
     <Switch>
@@ -165,25 +190,14 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           onSelect={(option) => {
             setStore("stage", "permission")
             if (option === "cancel") return
-            void sdk.client.permission.reply({
-              reply: "always",
-              requestID: props.request.id,
-              directory: props.directory,
-              workspace: project.workspace.current(),
-            })
+            void reply("always").catch(toast.error)
           }}
         />
       </Match>
       <Match when={store.stage === "reject"}>
         <RejectPrompt
           onConfirm={(message) => {
-            void sdk.client.permission.reply({
-              reply: "reject",
-              requestID: props.request.id,
-              directory: props.directory,
-              message: message || undefined,
-              workspace: project.workspace.current(),
-            })
+            void reply("reject", message || undefined).catch(toast.error)
           }}
           onCancel={() => {
             setStore("stage", "permission")
@@ -415,20 +429,10 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                     setStore("stage", "reject")
                     return
                   }
-                  void sdk.client.permission.reply({
-                    reply: "reject",
-                    requestID: props.request.id,
-                    directory: props.directory,
-                    workspace: project.workspace.current(),
-                  })
+                  void reply("reject").catch(toast.error)
                   return
                 }
-                void sdk.client.permission.reply({
-                  reply: "once",
-                  requestID: props.request.id,
-                  directory: props.directory,
-                  workspace: project.workspace.current(),
-                })
+                void reply("once").catch(toast.error)
               }}
             />
           )

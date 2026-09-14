@@ -41,7 +41,7 @@ function Ready(props: ParentProps<{ onReady: () => void }>) {
   return <>{props.children}</>
 }
 
-async function mountQuestion(input: { root: string; fail?: boolean; local?: boolean }) {
+async function mountQuestion(input: { root: string; fail?: boolean; local?: boolean; v2?: boolean }) {
   await mkdir(path.join(input.root, "state"), { recursive: true })
   await Bun.write(path.join(input.root, "state", "kv.json"), "{}")
   const calls: Request[] = []
@@ -74,7 +74,7 @@ async function mountQuestion(input: { root: string; fail?: boolean; local?: bool
                     <RemoteStatusProvider>
                       <SDKProvider url="http://test" fetch={fetch} events={eventSource()}>
                         <QuestionPrompt
-                          request={request}
+                          request={{ ...request, ...(input.v2 ? { api: "v2" as const } : {}) }}
                           location={
                             input.local
                               ? {
@@ -157,6 +157,31 @@ test("question response failures are visible", async () => {
     question.app.mockInput.pressEnter()
     await question.app.waitFor(() => question.calls.length === 1)
     await question.app.waitFor(() => question.app.captureCharFrame().includes("Question request not found"))
+  } finally {
+    question.app.renderer.destroy()
+  }
+})
+
+test("canonical question replies use the Session-scoped API", async () => {
+  await using tmp = await tmpdir()
+  const question = await mountQuestion({ root: tmp.path, v2: true })
+  try {
+    question.app.mockInput.pressEnter()
+    await question.app.waitFor(() => question.calls.length === 1)
+    expect(new URL(question.calls[0]!.url).pathname).toBe("/api/session/session-test/question/question-test/reply")
+    expect(question.calls[0]!.headers.has("x-opencode-target")).toBe(false)
+  } finally {
+    question.app.renderer.destroy()
+  }
+})
+
+test("canonical question rejection uses the Session-scoped API", async () => {
+  await using tmp = await tmpdir()
+  const question = await mountQuestion({ root: tmp.path, v2: true })
+  try {
+    question.app.mockInput.pressEscape()
+    await question.app.waitFor(() => question.calls.length === 1)
+    expect(new URL(question.calls[0]!.url).pathname).toBe("/api/session/session-test/question/question-test/reject")
   } finally {
     question.app.renderer.destroy()
   }

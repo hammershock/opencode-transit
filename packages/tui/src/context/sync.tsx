@@ -8,7 +8,9 @@ import type {
   Todo,
   Command,
   PermissionRequest,
+  PermissionV2Request,
   QuestionRequest,
+  QuestionV2Request,
   LspStatus,
   McpStatus,
   McpResource,
@@ -37,6 +39,29 @@ import { sessionLocationNotice, sessionLocationNoticeKey } from "../util/session
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
   switchableOrgCount: 0,
+}
+
+export type RoutedPermissionRequest = PermissionRequest & { api?: "v2" }
+export type RoutedQuestionRequest = QuestionRequest & { api?: "v2" }
+
+function legacyPermission(request: PermissionV2Request): RoutedPermissionRequest {
+  return {
+    id: request.id,
+    sessionID: request.sessionID,
+    permission: request.action,
+    patterns: request.resources,
+    always: request.save ?? [],
+    metadata: request.metadata ?? {},
+    tool:
+      request.source?.type === "tool"
+        ? { messageID: request.source.messageID, callID: request.source.callID }
+        : undefined,
+    api: "v2",
+  }
+}
+
+function legacyQuestion(request: QuestionV2Request): RoutedQuestionRequest {
+  return { ...request, api: "v2" }
 }
 
 function search<T>(items: T[], target: string, key: (item: T) => string) {
@@ -81,10 +106,10 @@ export const {
       agent: Agent[]
       command: Command[]
       permission: {
-        [sessionID: string]: PermissionRequest[]
+        [sessionID: string]: RoutedPermissionRequest[]
       }
       question: {
-        [sessionID: string]: QuestionRequest[]
+        [sessionID: string]: RoutedQuestionRequest[]
       }
       config: Config
       session: Session[]
@@ -150,13 +175,33 @@ export const {
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
-    const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string> }>()
+    const hydratingSessions = new Map<
+      string,
+      { messages: Set<string>; parts: Set<string>; permissions: Set<string>; questions: Set<string> }
+    >()
     const optimisticMessages = new Set<string>()
+    const insertPermission = (request: RoutedPermissionRequest) => {
+      const requests = store.permission[request.sessionID]
+      if (!requests) return setStore("permission", request.sessionID, [request])
+      const match = search(requests, request.id, (item) => item.id)
+      if (match.found) return setStore("permission", request.sessionID, match.index, reconcile(request))
+      setStore(
+        "permission",
+        request.sessionID,
+        produce((draft) => draft.splice(match.index, 0, request)),
+      )
+    }
     const touchMessage = (sessionID: string, messageID: string) => {
       hydratingSessions.get(sessionID)?.messages.add(messageID)
     }
     const touchPart = (sessionID: string, partID: string) => {
       hydratingSessions.get(sessionID)?.parts.add(partID)
+    }
+    const touchPermission = (sessionID: string, requestID: string) => {
+      hydratingSessions.get(sessionID)?.permissions.add(requestID)
+    }
+    const touchQuestion = (sessionID: string, requestID: string) => {
+      hydratingSessions.get(sessionID)?.questions.add(requestID)
     }
 
     function sessionListQuery(): { scope?: "project"; path?: string } {
@@ -179,15 +224,39 @@ export const {
       if (fullSyncedSessions.has(sessionID)) return
       const syncing = syncingSessions.get(sessionID)
       if (syncing) return syncing
-      const tracker = { messages: new Set<string>(), parts: new Set<string>() }
+      const tracker = {
+        messages: new Set<string>(),
+        parts: new Set<string>(),
+        permissions: new Set<string>(),
+        questions: new Set<string>(),
+      }
       hydratingSessions.set(sessionID, tracker)
       const task = (async () => {
-        const [session, messages, todo, diff] = await Promise.all([
+        const [session, messages, todo, diff, permissions, questions] = await Promise.all([
           sdk.client.session.get({ sessionID }, { throwOnError: true }),
           sdk.client.session.messages({ sessionID, limit: 100 }),
           sdk.client.session.todo({ sessionID }),
           sdk.client.session.diff({ sessionID }),
+          sdk.client.v2.session.permission.list({ sessionID }, { throwOnError: true }),
+          sdk.client.v2.session.question.list({ sessionID }, { throwOnError: true }),
         ])
+        const pendingPermissions =
+          permission.effective(session.data!.approvalMode ?? "normal") === "auto"
+            ? (
+                await Promise.all(
+                  permissions.data.data.map(async (request) => {
+                    try {
+                      await sdk.client.v2.session.permission.reply(
+                        { sessionID, requestID: request.id, reply: "once" },
+                        { throwOnError: true },
+                      )
+                    } catch {
+                      return request
+                    }
+                  }),
+                )
+              ).filter((request) => request !== undefined)
+            : permissions.data.data
         setStore(
           produce((draft) => {
             const match = search(draft.session, sessionID, (s) => s.id)
@@ -238,6 +307,24 @@ export const {
             for (const message of removed) delete draft.part[message.id]
             draft.message[sessionID] = visible
             draft.session_diff[sessionID] = diff.data ?? []
+            draft.permission[sessionID] = pendingPermissions
+              .map(legacyPermission)
+              .filter((request) => !tracker.permissions.has(request.id))
+              .concat(
+                (draft.permission[sessionID] ?? []).filter(
+                  (request) => request.api !== "v2" || tracker.permissions.has(request.id),
+                ),
+              )
+              .toSorted((a, b) => a.id.localeCompare(b.id))
+            draft.question[sessionID] = questions.data.data
+              .map(legacyQuestion)
+              .filter((request) => !tracker.questions.has(request.id))
+              .concat(
+                (draft.question[sessionID] ?? []).filter(
+                  (request) => request.api !== "v2" || tracker.questions.has(request.id),
+                ),
+              )
+              .toSorted((a, b) => a.id.localeCompare(b.id))
           }),
         )
         fullSyncedSessions.add(sessionID)
@@ -280,6 +367,7 @@ export const {
           void bootstrap()
           break
         case "permission.replied": {
+          touchPermission(event.properties.sessionID, event.properties.requestID)
           const requests = store.permission[event.properties.sessionID]
           if (!requests) break
           const match = search(requests, event.properties.requestID, (r) => r.id)
@@ -296,38 +384,63 @@ export const {
 
         case "permission.asked": {
           const request = event.properties
+          touchPermission(request.sessionID, request.id)
+          const session = store.session.find((item) => item.id === request.sessionID)
+          const approvalMode = session?.approvalMode ?? "normal"
+          if (permission.effective(approvalMode) === "auto") {
+            const response =
+              session?.target?.type === "rexd"
+                ? sdk.client.permission.reply(
+                    { requestID: request.id, reply: "once" },
+                    { throwOnError: true, headers: { "x-opencode-target": session.target.targetID } },
+                  )
+                : sdk.client.permission.reply(
+                    {
+                      requestID: request.id,
+                      reply: "once",
+                      directory: session?.directory ?? directory,
+                      workspace: session?.workspaceID ?? workspace,
+                    },
+                    { throwOnError: true },
+                  )
+            void response.catch(() => insertPermission(request))
+            break
+          }
+          insertPermission(request)
+          break
+        }
+
+        case "permission.v2.asked": {
+          const request = legacyPermission(event.properties)
+          touchPermission(request.sessionID, request.id)
           const approvalMode = store.session.find((item) => item.id === request.sessionID)?.approvalMode ?? "normal"
           if (permission.effective(approvalMode) === "auto") {
-            void sdk.client.permission.reply({
-              requestID: request.id,
-              reply: "once",
-              directory,
-              workspace,
-            })
+            void sdk.client.v2.session.permission
+              .reply({ sessionID: request.sessionID, requestID: request.id, reply: "once" }, { throwOnError: true })
+              .catch(() => insertPermission(request))
             break
           }
-          const requests = store.permission[request.sessionID]
-          if (!requests) {
-            setStore("permission", request.sessionID, [request])
-            break
-          }
-          const match = search(requests, request.id, (r) => r.id)
-          if (match.found) {
-            setStore("permission", request.sessionID, match.index, reconcile(request))
-            break
-          }
+          insertPermission(request)
+          break
+        }
+
+        case "permission.v2.replied": {
+          touchPermission(event.properties.sessionID, event.properties.requestID)
+          const requests = store.permission[event.properties.sessionID]
+          if (!requests) break
+          const match = search(requests, event.properties.requestID, (item) => item.id)
+          if (!match.found) break
           setStore(
             "permission",
-            request.sessionID,
-            produce((draft) => {
-              draft.splice(match.index, 0, request)
-            }),
+            event.properties.sessionID,
+            produce((draft) => draft.splice(match.index, 1)),
           )
           break
         }
 
         case "question.replied":
         case "question.rejected": {
+          touchQuestion(event.properties.sessionID, event.properties.requestID)
           const requests = store.question[event.properties.sessionID]
           if (!requests) break
           const match = search(requests, event.properties.requestID, (r) => r.id)
@@ -344,6 +457,7 @@ export const {
 
         case "question.asked": {
           const request = event.properties
+          touchQuestion(request.sessionID, request.id)
           const requests = store.question[request.sessionID]
           if (!requests) {
             setStore("question", request.sessionID, [request])
@@ -360,6 +474,40 @@ export const {
             produce((draft) => {
               draft.splice(match.index, 0, request)
             }),
+          )
+          break
+        }
+
+        case "question.v2.asked": {
+          const request = legacyQuestion(event.properties)
+          touchQuestion(request.sessionID, request.id)
+          const requests = store.question[request.sessionID]
+          if (!requests) {
+            setStore("question", request.sessionID, [request])
+            break
+          }
+          const match = search(requests, request.id, (item) => item.id)
+          if (match.found) setStore("question", request.sessionID, match.index, reconcile(request))
+          if (!match.found)
+            setStore(
+              "question",
+              request.sessionID,
+              produce((draft) => draft.splice(match.index, 0, request)),
+            )
+          break
+        }
+
+        case "question.v2.replied":
+        case "question.v2.rejected": {
+          touchQuestion(event.properties.sessionID, event.properties.requestID)
+          const requests = store.question[event.properties.sessionID]
+          if (!requests) break
+          const match = search(requests, event.properties.requestID, (item) => item.id)
+          if (!match.found) break
+          setStore(
+            "question",
+            event.properties.sessionID,
+            produce((draft) => draft.splice(match.index, 1)),
           )
           break
         }

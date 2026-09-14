@@ -15,7 +15,7 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 
@@ -23,19 +23,28 @@ const current = Layer.succeed(
   Location.Service,
   Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
 )
-const it = testEffect(
-  AppNodeBuilder.build(
-    LayerNode.group([
-      Database.node,
-      EventV2.node,
-      SessionStore.node,
-      PermissionSaved.node,
-      AgentV2.node,
-      PermissionV2.node,
-    ]),
-    [[Location.node, current]],
-  ),
+const remoteProjectID = Project.ID.make("remote-project")
+const remoteDirectory = AbsolutePath.make("/remote/project")
+const remote = Layer.succeed(
+  Location.Service,
+  Location.Service.of({
+    ...location({
+      target: { type: "rexd", targetID: Location.TargetID.make("00000000-0000-4000-8000-000000000001") },
+      directory: remoteDirectory,
+    }),
+    project: { id: remoteProjectID, directory: remoteDirectory },
+  }),
 )
+const nodes = LayerNode.group([
+  Database.node,
+  EventV2.node,
+  SessionStore.node,
+  PermissionSaved.node,
+  AgentV2.node,
+  PermissionV2.node,
+])
+const it = testEffect(AppNodeBuilder.build(nodes, [[Location.node, current]]))
+const remoteIt = testEffect(AppNodeBuilder.build(nodes, [[Location.node, remote]]))
 
 function setup(rules: PermissionV2.Ruleset = []) {
   return Effect.gen(function* () {
@@ -85,7 +94,7 @@ function assertion(input: Partial<PermissionV2.AssertInput> = {}) {
   } satisfies PermissionV2.AssertInput
 }
 
-function waitForRequest() {
+function waitForRequest(input: Partial<PermissionV2.AssertInput> = {}) {
   return Effect.gen(function* () {
     const service = yield* PermissionV2.Service
     const events = yield* EventV2.Service
@@ -96,7 +105,7 @@ function waitForRequest() {
         : Effect.void,
     )
     yield* Effect.addFinalizer(() => unsubscribe)
-    const fiber = yield* service.assert(assertion()).pipe(Effect.forkScoped)
+    const fiber = yield* service.assert(assertion(input)).pipe(Effect.forkScoped)
     const request = yield* Deferred.await(asked)
     return { service, fiber, request }
   })
@@ -233,7 +242,12 @@ describe("PermissionV2", () => {
     Effect.gen(function* () {
       yield* setup()
       const saved = yield* PermissionSaved.Service
-      yield* saved.add({ projectID: Project.ID.global, action: "bash", resources: ["pwd"] })
+      yield* saved.add({
+        projectID: Project.ID.global,
+        projectDirectory: AbsolutePath.make("/project"),
+        action: "bash",
+        resources: ["pwd"],
+      })
 
       const service = yield* PermissionV2.Service
       expect(yield* service.ask(assertion({ action: "bash", resources: ["pwd"] }))).toEqual({
@@ -310,6 +324,54 @@ describe("PermissionV2", () => {
       yield* service.assert(assertion({ id: PermissionV2.ID.create("per_next"), resources: ["src/next.ts"] }))
       yield* saved.remove(id)
       expect(yield* saved.list()).toEqual([])
+    }),
+  )
+
+  remoteIt.effect("materializes a remote project before saving an always permission", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { service, fiber, request } = yield* waitForRequest({ save: ["src/*"] })
+      const { db } = yield* Database.Service
+      expect(yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, remoteProjectID)).get()).toBeUndefined()
+
+      yield* service.reply({ requestID: request.id, reply: "always" })
+      yield* Fiber.join(fiber)
+
+      expect(yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, remoteProjectID)).get()).toMatchObject({
+        id: remoteProjectID,
+        worktree: remoteDirectory,
+      })
+      expect(
+        yield* db.select().from(PermissionTable).where(eq(PermissionTable.project_id, remoteProjectID)).all(),
+      ).toMatchObject([{ action: "read", resource: "src/*" }])
+    }),
+  )
+
+  it.effect("keeps an always request pending when persistence fails", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { service, fiber, request } = yield* waitForRequest({ save: ["src/*"] })
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const replied = yield* Deferred.make<void>()
+      const unsubscribe = yield* events.listen((event) =>
+        event.type === PermissionV2.Event.Replied.type ? Deferred.succeed(replied, undefined) : Effect.void,
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      yield* db
+        .run(
+          sql.raw(
+            "CREATE TRIGGER permission_insert_failure BEFORE INSERT ON permission BEGIN SELECT RAISE(ABORT, 'fail'); END",
+          ),
+        )
+        .pipe(Effect.orDie)
+
+      const exit = yield* service.reply({ requestID: request.id, reply: "always" }).pipe(Effect.exit)
+
+      expect(exit._tag).toBe("Failure")
+      expect(yield* Deferred.isDone(replied)).toBe(false)
+      expect(yield* service.list()).toEqual([request])
+      yield* Fiber.interrupt(fiber)
     }),
   )
 })
