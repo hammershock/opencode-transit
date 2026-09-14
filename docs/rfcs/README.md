@@ -17,6 +17,7 @@ RFC（Request for Comments）用于记录本 fork 中影响多个模块或核心
 | [0011](0011-location-aware-model-context.md) | Location-aware Model Context | Accepted |
 | [0012](0012-skill-catalog-and-invocation.md) | Skill Catalog and Sync       | Accepted |
 | [0013](0013-opencode-transit-identity.md)    | OpenCode Transit Identity    | Accepted |
+| [0014](0014-subagent-economics.md)           | Economics-aware Subagent Routing | Accepted |
 
 ## 状态
 

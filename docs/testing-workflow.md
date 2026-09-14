@@ -143,7 +143,7 @@ At minimum run Mac to a configured Linux Rexd target and exercise `mywindows` as
 - adapters only receive credentials already managed by the active OpenCode provider connection;
 - browser, provider CLI and external application login state are not discovered;
 - adapter timeout, schema drift or authentication failure does not block model use;
-- usage data never enters Session history, Agent context, export or sync payload.
+- usage data never enters Session history, durable Agent context, export or sync payload; RFC-0014's explicitly enabled controller-local, one-shot subagent routing guidance is the only Agent-context exception and must disappear after the next parent continuation.
 
 ### G. Multi-device Session sync
 

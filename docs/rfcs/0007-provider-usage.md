@@ -5,7 +5,7 @@ status: accepted
 authors:
   - hammershock
 created: 2026-09-06
-updated: 2026-09-06
+updated: 2026-09-15
 implemented-by:
   - https://github.com/hammershock/opencode-transit/pull/86
 depends-on:
@@ -41,6 +41,8 @@ superseded-by: []
 - 读取或复用浏览器、provider CLI、其他应用或操作系统中的外部登录态；
 - 为查询 usage 单独登录、发现账户或导入 OpenCode 尚未保存的 credential；
 - 在 v1 向第三方插件开放不稳定的 provider usage API。
+
+RFC-0014 在用户显式开启实验功能时定义一个窄化例外：经过本 RFC schema 归一化的一个非敏感 meter 可以作为 controller-local、一次性的 subagent 路由提示进入下一 provider continuation。该提示仍不得写入 Session history、durable model context、同步、导出或 Task result，且不能放宽本 RFC 的 credential、adapter、缓存与失败隔离边界。
 
 ## 领域模型
 
