@@ -34,6 +34,7 @@ export async function runRexdProcess(
   let processID: string | undefined
   let resolveExit = (_value: typeof Exited.Type) => undefined as void
   let rejectExit = (_cause: Error) => undefined as void
+  let outputChain = Promise.resolve()
   const exited = new Promise<typeof Exited.Type>((resolve, reject) => {
     resolveExit = resolve
     rejectExit = reject
@@ -50,7 +51,10 @@ export async function runRexdProcess(
     const chunk = Buffer.from(decoded.success.data, decoded.success.encoding ?? "utf8")
     const stream = method === "exec.stdout" ? "stdout" : "stderr"
     append(stream, chunk)
-    append("output", chunk)
+    const visible = append("output", chunk)
+    if (visible.length > 0 && options.onOutput) {
+      outputChain = outputChain.then(() => options.onOutput?.({ stream, data: visible }))
+    }
   }
   const pending: Array<[string, unknown]> = []
   const remove = lease.client.onNotification((method, params) => {
@@ -92,8 +96,10 @@ export async function runRexdProcess(
           { timeoutMs: 5_000, sideEffect: true },
         )
         .catch(() => undefined)
+      await outputChain
       throw cause
     })
+    await outputChain
     return {
       command: description,
       exitCode: terminal.exit_code ?? -1,
@@ -112,8 +118,10 @@ export async function runRexdProcess(
 
   function append(stream: keyof typeof chunks, chunk: Uint8Array) {
     const remaining = options.maxOutputBytes - bytes[stream]
-    if (remaining > 0) chunks[stream].push(chunk.slice(0, remaining))
+    const retained = remaining > 0 ? chunk.slice(0, remaining) : chunk.slice(0, 0)
+    if (retained.length > 0) chunks[stream].push(retained)
     bytes[stream] += chunk.length
     truncated[stream] ||= chunk.length > remaining
+    return retained
   }
 }

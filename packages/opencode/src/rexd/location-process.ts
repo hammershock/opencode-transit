@@ -28,6 +28,7 @@ export function rexdProcessNode(session: ReturnType<typeof import("./location-se
                   timeout: options.timeout,
                   maxOutputBytes: options.maxOutputBytes,
                   signal: options.signal,
+                  onOutput: options.onOutput,
                 }),
               catch: (cause) => new AppProcess.AppProcessError({ command, cause }),
             })
