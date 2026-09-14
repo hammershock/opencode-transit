@@ -3,6 +3,7 @@
 - The primary checkout is for integration, RFCs, and repository administration. Implement features and fixes in dedicated worktrees unless the change is an explicitly approved trivial repository-maintenance edit.
 - Do not begin implementation for a feature governed by an RFC until the RFC is accepted and the task meets the Ready criteria in the fork workflow.
 - Functional work is not complete with unit tests alone. Follow [`docs/testing-workflow.md`](docs/testing-workflow.md) and complete relevant real-device acceptance on both the Mac and `mywindows` using the `opencode-transit` entrypoint.
+- Use `opencode-transit-dual-build` for canonical Mac and `mywindows`/WSL2 candidate builds. With no arguments it fetches and builds the latest `origin/dev`; for an open pull request use `opencode-transit-dual-build --pr <number-or-url>` so both devices build the PR's exact head commit. Do not use a mutable local `HEAD` as PR acceptance evidence.
 - To regenerate the legacy JavaScript SDK, run `./packages/sdk/js/script/build.ts`.
 - After changing the public Protocol or Server `HttpApi`, run `bun run generate` from `packages/client`. Do not edit `src/generated` or `src/generated-effect` directly.
 - Keep runtime dependencies directed from Schema to Core and Protocol, then from Core and Protocol to Server. Client runtime code may depend on Schema and Protocol but never Core or Server; `sdk-next` composes Client, Core, and Server.
