@@ -15,6 +15,7 @@ export interface RunOptions {
   readonly maxOutputBytes: number
   readonly signal?: AbortSignal
   readonly sessionID?: SessionSchema.ID
+  readonly onOutput?: (chunk: { readonly stream: "stdout" | "stderr"; readonly data: Uint8Array }) => Promise<void>
 }
 
 export interface Interface {

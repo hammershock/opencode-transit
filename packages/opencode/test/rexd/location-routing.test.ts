@@ -16,6 +16,7 @@ import { runRexdProcess } from "../../src/rexd/location-process"
 import { probeTarget, targetHealthWithDeadline } from "../../src/rexd/target-registry"
 import {
   makeProvider as makeUserShellProvider,
+  executionOutput,
   readExecutionControl,
   targetShell,
   wrapExecution,
@@ -81,6 +82,35 @@ describe("Rexd Location routing contract", () => {
       method: "exec.start",
       params: { argv: ["prettier", "--write", "file.ts"], shell: false, cwd: "/workspace" },
     })
+  })
+
+  test("streams bounded process output before remote exit", async () => {
+    let emit: Notify = () => undefined
+    const { lease } = processLease((method, _params, notify) => {
+      if (method !== "exec.start") return undefined
+      emit = notify
+      return { process_id: "streaming" }
+    })
+    const chunks: string[] = []
+    const running = runRexdProcess(lease, {
+      command: "delayed-output",
+      shell: true,
+      cwd: "/workspace",
+      timeout: "10 seconds",
+      maxOutputBytes: 7,
+      onOutput: async (chunk) => {
+        chunks.push(`${chunk.stream}:${Buffer.from(chunk.data).toString()}`)
+      },
+    })
+    await Promise.resolve()
+    emit("exec.stdout", { process_id: "streaming", data: "first" })
+    emit("exec.stderr", { process_id: "streaming", data: "-error" })
+    await Bun.sleep(0)
+    expect(chunks).toEqual(["stdout:first", "stderr:-e"])
+    emit("exec.exit", { process_id: "streaming", exit_code: 0 })
+    const result = await running
+    expect(result.output?.toString()).toBe("first-e")
+    expect(result.outputTruncated).toBe(true)
   })
 
   test("disconnect fails instead of executing on the controller", async () => {
@@ -441,6 +471,21 @@ describe("Rexd Location routing contract", () => {
       output: "visible\0opencode-cwd-fixed\0/controller\0",
     })
     expect(readExecutionControl(`visible\0opencode-cwd-${nonce}\0broken`, nonce)).toEqual({ output: "visible" })
+  })
+
+  test("streams remote output while hiding arbitrarily split cwd control frames", async () => {
+    const nonce = "0123456789abcdef"
+    const chunks: string[] = []
+    const output = executionOutput(nonce, async (chunk) => void chunks.push(chunk))
+    await output.write({ stream: "stdout", data: Buffer.from("before ") })
+    const control = Buffer.from(`\0opencode-cwd-${nonce}\0/workspace/child\0after`)
+    for (const [index, byte] of control.entries()) {
+      await output.write({ stream: "stdout", data: Buffer.from([byte]) })
+      if (index === 5) await output.write({ stream: "stderr", data: Buffer.from(" error ") })
+    }
+    await output.finish()
+    expect(chunks.join("")).toBe("before  error after")
+    expect(chunks.join("")).not.toContain("opencode-cwd")
   })
 
   test("remote user shell loads native completion on the target", async () => {

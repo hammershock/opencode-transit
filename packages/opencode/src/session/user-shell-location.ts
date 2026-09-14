@@ -48,6 +48,7 @@ export function makeProvider(
     Effect.gen(function* () {
       const nonce = crypto.randomUUID().replaceAll("-", "")
       const shell = targetShell(input.environment)
+      const output = executionOutput(nonce, (chunk) => Effect.runPromise(input.onOutput?.(chunk) ?? Effect.void))
       const result = yield* process.runShell(UserShellLocal.bareCommand(shell, wrapExecution(input.command, nonce)), {
         cwd: input.cwd,
         shell: "/bin/sh",
@@ -55,10 +56,12 @@ export function makeProvider(
         timeout: EXECUTION_TIMEOUT,
         maxOutputBytes: 8 * 1024 * 1024,
         signal: input.signal,
+        onOutput: output.write,
       })
+      yield* Effect.promise(() => output.finish())
       const visible = readExecutionControl(result.output?.toString("utf8") ?? "", nonce)
       const control = readExecutionControl(result.stdout.toString("utf8"), nonce)
-      if (visible.output) yield* input.onOutput?.(visible.output) ?? Effect.void
+      if (!output.received() && visible.output) yield* input.onOutput?.(visible.output) ?? Effect.void
       return { exitCode: result.exitCode, finalCwd: control.finalCwd }
     })
   const validateDirectory: Provider["validateDirectory"] = (directory) =>
@@ -133,6 +136,73 @@ export function makeProvider(
       return { candidates, ...(degraded ? { degraded: { reason: degraded } } : {}) }
     })
   return { execute, validateDirectory, complete } satisfies Provider
+}
+
+export function executionOutput(nonce: string, emit: (chunk: string) => Promise<void>) {
+  const prefix = Buffer.from(controlPrefix(nonce))
+  const decoder = new TextDecoder()
+  const pending: Array<{ stream: "stdout" | "stderr"; data: Uint8Array }> = []
+  let control = false
+  let received = false
+
+  const visible = async (data: Uint8Array) => {
+    const text = decoder.decode(data, { stream: true })
+    if (text) await emit(text)
+  }
+
+  const flushPending = async () => {
+    const first = pending.shift()
+    if (!first) return
+    await visible(first.data.slice(0, 1))
+    const rest = first.data.slice(1)
+    const replay = [...(rest.length ? [{ ...first, data: rest }] : []), ...pending.splice(0)]
+    for (const chunk of replay) await write(chunk)
+  }
+
+  const write = async (chunk: { readonly stream: "stdout" | "stderr"; readonly data: Uint8Array }) => {
+    received ||= chunk.data.length > 0
+    if (control) {
+      if (chunk.stream === "stderr") return visible(chunk.data)
+      const end = chunk.data.indexOf(0)
+      if (end < 0) return
+      control = false
+      if (end + 1 < chunk.data.length) await write({ ...chunk, data: chunk.data.slice(end + 1) })
+      return
+    }
+    if (pending.length > 0) {
+      pending.push({ ...chunk })
+      const stdout = Buffer.concat(pending.filter((item) => item.stream === "stdout").map((item) => item.data))
+      if (stdout.length < prefix.length && prefix.subarray(0, stdout.length).equals(stdout)) return
+      if (!stdout.subarray(0, prefix.length).equals(prefix)) return flushPending()
+      control = true
+      const queued = pending.splice(0)
+      let skip = prefix.length
+      for (const item of queued) {
+        if (item.stream === "stderr") {
+          await visible(item.data)
+          continue
+        }
+        const data = item.data.slice(Math.min(skip, item.data.length))
+        skip -= item.data.length - data.length
+        if (data.length > 0) await write({ ...item, data })
+      }
+      return
+    }
+    if (chunk.stream === "stderr") return visible(chunk.data)
+    const start = chunk.data.indexOf(0)
+    if (start < 0) return visible(chunk.data)
+    if (start > 0) await visible(chunk.data.slice(0, start))
+    pending.push({ ...chunk, data: chunk.data.slice(start) })
+    return write({ stream: "stdout", data: new Uint8Array() })
+  }
+
+  const finish = async () => {
+    pending.length = 0
+    const text = decoder.decode()
+    if (text) await emit(text)
+  }
+
+  return { write, finish, received: () => received }
 }
 
 export function targetShell(environment: Readonly<Record<string, string>>) {
