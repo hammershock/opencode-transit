@@ -20,6 +20,7 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap"
+import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 
 const it = testEffect(
   AppNodeBuilder.build(
@@ -234,6 +235,48 @@ describe("step-finish token propagation via event", () => {
 })
 
 describe("Session", () => {
+  it.instance("inherits the complete parent location when creating a child session", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const { db } = yield* Database.Service
+      const target = Location.RexdTarget.make({
+        type: "rexd",
+        targetID: Location.TargetID.make("00000000-0000-4000-8000-000000000121"),
+      })
+      const workspaceID = WorkspaceV2.ID.make("wrk_parent")
+      const parent = yield* Effect.acquireRelease(session.create({ title: "parent" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      yield* db
+        .update(SessionTable)
+        .set({
+          directory: "/home/agent/project",
+          target,
+          last_known_target_name: "a100-2gpu",
+          portable_target_label: "a100-2gpu",
+          workspace_id: workspaceID,
+          path: "packages/opencode",
+        })
+        .where(eq(SessionTable.id, parent.id))
+        .run()
+        .pipe(Effect.orDie)
+
+      const child = yield* Effect.acquireRelease(session.create({ parentID: parent.id, title: "child" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+
+      expect(child).toMatchObject({
+        parentID: parent.id,
+        directory: "/home/agent/project",
+        target,
+        lastKnownTargetName: "a100-2gpu",
+        portableTargetLabel: "a100-2gpu",
+        workspaceID,
+        path: "packages/opencode",
+      })
+    }),
+  )
+
   it.instance("preserves execution placement and sync ownership when updating the title", () =>
     Effect.gen(function* () {
       const session = yield* SessionNs.Service

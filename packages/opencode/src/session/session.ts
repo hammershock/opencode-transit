@@ -529,6 +529,7 @@ const layer: Layer.Layer<
       directory: string
       target?: Location.Target
       lastKnownTargetName?: string
+      portableTargetLabel?: string
       path?: string
       metadata?: typeof Metadata.Type
       permission?: PermissionV1.Ruleset
@@ -546,6 +547,7 @@ const layer: Layer.Layer<
         directory: input.directory,
         target: input.target,
         lastKnownTargetName: input.lastKnownTargetName,
+        portableTargetLabel: input.portableTargetLabel,
         path: input.path,
         workspaceID: input.workspaceID,
         syncSpaceID,
@@ -714,19 +716,23 @@ const layer: Layer.Layer<
       const ctx = yield* InstanceState.context
       const workspace = yield* InstanceState.workspaceID
       const location = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
+      const parent = input?.parentID ? yield* get(input.parentID).pipe(Effect.orDie) : undefined
       return yield* createNext({
         parentID: input?.parentID,
-        directory: ctx.directory,
-        target: input?.target ?? location?.target,
-        lastKnownTargetName: input?.lastKnownTargetName ?? location?.lastKnownTargetName,
-        path: sessionPath(ctx.worktree, ctx.directory),
+        directory: parent?.directory ?? ctx.directory,
+        target: parent ? parent.target : (input?.target ?? location?.target),
+        lastKnownTargetName: parent
+          ? parent.lastKnownTargetName
+          : (input?.lastKnownTargetName ?? location?.lastKnownTargetName),
+        portableTargetLabel: parent?.portableTargetLabel,
+        path: parent ? parent.path : sessionPath(ctx.worktree, ctx.directory),
         title: input?.title,
         agent: input?.agent,
         model: input?.model,
         metadata: input?.metadata,
         permission: input?.permission,
         approvalMode: input?.approvalMode,
-        workspaceID: input?.workspaceID ?? workspace,
+        workspaceID: parent ? parent.workspaceID : (input?.workspaceID ?? workspace),
       })
     })
 
