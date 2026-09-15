@@ -254,6 +254,7 @@ const contextLayer = Layer.effect(
           { directory: input.directory },
           Effect.gen(function* () {
             const parent = input.agent ? yield* agents.get(input.agent) : yield* agents.defaultInfo()
+            yield* economics.invalidate(input.sessionID)
             yield* economics.guidance(input.sessionID, parent)
             return yield* inspect(input.sessionID)
           }),

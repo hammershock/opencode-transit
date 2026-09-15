@@ -239,11 +239,24 @@ describe("v2 location HttpApi", () => {
 
     const inspected = await request(`/api/session/${sessionID}/model-context`, tmp.path, {}, true)
     expect(inspected.status, await inspected.clone().text()).toBe(200)
-    expect(await inspected.json()).toMatchObject({
+    const first = (await inspected.json()) as {
+      subagentCatalog: { activatedAt: string }
+      subagentGuidance: string
+    }
+    expect(first).toMatchObject({
       subagentCatalog: { status: "ready", diagnostics: [], truncated: false },
       subagentRefresh: { status: "ready", diagnostics: [] },
       subagentGuidance: expect.stringContaining('<available_subagents status="ready"'),
     })
+
+    await Bun.sleep(2)
+    const reactivated = await request(`/api/session/${sessionID}/activate`, tmp.path, { method: "POST" }, true)
+    expect(reactivated.status, await reactivated.clone().text()).toBe(200)
+    const refreshed = await request(`/api/session/${sessionID}/model-context`, tmp.path, {}, true)
+    expect(refreshed.status, await refreshed.clone().text()).toBe(200)
+    const second = (await refreshed.json()) as typeof first
+    expect(second.subagentCatalog.activatedAt).not.toBe(first.subagentCatalog.activatedAt)
+    expect(second.subagentGuidance).not.toBe(first.subagentGuidance)
   })
 
   test("reloads Skill catalog context only on activation and retains the last good snapshot", async () => {
