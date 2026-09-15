@@ -200,7 +200,8 @@ test.each([
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   const events = createEventSource()
-  const calls = createFetch((url) => {
+  const patches: unknown[] = []
+  const calls = createFetch(async (url, request) => {
     if (url.pathname === "/api/target")
       return json({ path: "/tmp/opencode/targets.jsonc", revision: "test", targets: [], diagnostics: [], valid: true })
     if (url.pathname === "/config/providers")
@@ -208,6 +209,10 @@ test.each([
         providers: [{ id: "test", name: "Test", source: "custom", env: [], options: {}, models: {} }],
         default: {},
       })
+    if (url.pathname === "/global/config" && request.method === "PATCH") {
+      patches.push(await request.json())
+      return json({ experimental: { subagent_economics: true } })
+    }
     if (url.pathname === "/global/config") return json({ experimental: { subagent_economics: false } })
     if (url.pathname === "/session/dummy")
       return json({
@@ -269,8 +274,11 @@ test.each([
     await waitForFrame(setup, "Configure device-local pricing")
     expect(editor.plainText).toBe("Subagent economics")
     setup.mockInput.pressEnter()
-    await waitForFrame(setup, "Device setting · give")
-    expect(setup.captureCharFrame()).toContain("○ disabled")
+    await waitForFrame(setup, "○ disabled")
+    expect(setup.captureCharFrame()).toContain("Device setting · give")
+    setup.mockInput.pressKey(" ")
+    await waitForFrame(setup, "● enabled")
+    expect(patches).toEqual([{ experimental: { subagent_economics: true } }])
     process.emit("SIGHUP")
     await task
   } finally {

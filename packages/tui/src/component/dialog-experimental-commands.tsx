@@ -63,7 +63,6 @@ export function DialogExperimentalCommands(props: { current?: string } = {}) {
       description: "Device setting · give the parent Agent local pricing and routing evidence at Session activation",
       footer: subagentEconomics() === undefined ? "◐ checking" : subagentEconomics() ? "● enabled" : "○ disabled",
       category: "Experimental features",
-      disabled: subagentEconomics() === undefined,
     },
     {
       value: "fork.user-shell.cwd",
