@@ -16,6 +16,7 @@ import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Provider } from "@/provider/provider"
 import { ProviderAuth } from "@/provider/auth"
 import { Agent } from "@/agent/agent"
+import { SubagentEconomics } from "@/agent/economics"
 import { Skill } from "@/skill"
 import { Question } from "@/question"
 import { Permission } from "@/permission"
@@ -88,6 +89,7 @@ export const AppLayer = AppNodeBuilderV1.build(
     SyncControl.node,
     ProviderAuth.node,
     Agent.node,
+    SubagentEconomics.node,
     Skill.node,
     Question.node,
     Permission.node,

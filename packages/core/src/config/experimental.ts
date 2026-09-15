@@ -21,4 +21,7 @@ export class Experimental extends Schema.Class<Experimental>("ConfigV2.Experimen
   location_env: Schema.Boolean.pipe(Schema.optional).annotate({
     description: "Load target-side user and project dotenv files for Location processes (default: false)",
   }),
+  subagent_economics: Schema.Boolean.pipe(Schema.optional).annotate({
+    description: "Provide device-local model economics to the parent Agent for subagent routing (default: false)",
+  }),
 }) {}

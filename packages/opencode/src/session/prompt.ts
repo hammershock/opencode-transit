@@ -53,6 +53,7 @@ import { ModelContextAssembler } from "@opencode-ai/core/model-context-assembler
 import { InstructionContext } from "@opencode-ai/core/instruction-context"
 import { SessionContextEpoch } from "@opencode-ai/core/session/context-epoch"
 import { SessionSkillCatalog } from "@opencode-ai/core/session/skill-catalog"
+import { SubagentEconomics } from "@/agent/economics"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { eq } from "drizzle-orm"
@@ -135,6 +136,7 @@ const layer = Layer.effect(
     const status = yield* SessionStatus.Service
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
+    const economics = yield* SubagentEconomics.Service
     const provider = yield* Provider.Service
     const processor = yield* SessionProcessor.Service
     const compaction = yield* SessionCompaction.Service
@@ -1398,7 +1400,7 @@ const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [context, skillGuidance, mcpInstructions, modelMsgs] = yield* Effect.all([
+            const [context, skillGuidance, economicsGuidance, mcpInstructions, modelMsgs] = yield* Effect.all([
               SessionContextEpoch.forPrompt(
                 db,
                 events,
@@ -1407,6 +1409,7 @@ const layer = Layer.effect(
                 locationContext.locationRevision,
               ).pipe(Effect.catch(Effect.die)),
               SessionSkillCatalog.guidance(db, sessionID),
+              economics.guidance(sessionID, agent),
               sys.mcp(agent, session.permission),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
@@ -1415,6 +1418,7 @@ const layer = Layer.effect(
               context.baseline,
               ...context.advances,
               ...(skillGuidance ? [skillGuidance] : []),
+              ...(economicsGuidance ? [economicsGuidance] : []),
               ...(mcpInstructions ? [mcpInstructions] : []),
             ].filter((part) => part.length > 0)
             const format = lastUser.format ?? { type: "text" as const }
@@ -1852,6 +1856,7 @@ export const node = LayerNode.make({
     SessionStatus.node,
     Session.node,
     Agent.node,
+    SubagentEconomics.node,
     Provider.node,
     SessionProcessor.node,
     SessionCompaction.node,

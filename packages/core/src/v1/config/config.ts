@@ -185,6 +185,9 @@ export const Info = Schema.Struct({
       location_env: Schema.optional(Schema.Boolean).annotate({
         description: "Load target-side user and project dotenv files for Location processes (default: false)",
       }),
+      subagent_economics: Schema.optional(Schema.Boolean).annotate({
+        description: "Provide device-local model economics to the parent Agent for subagent routing (default: false)",
+      }),
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",
       }),
