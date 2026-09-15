@@ -6,9 +6,11 @@ import {
   dialogSessionListSyncStatus,
   dialogSessionListTargetLabel,
   dialogSessionListTargetOptions,
+  fromSyncedSession,
   loadDialogSessionList,
   sessionInDialogTarget,
   syncAvailabilityLabel,
+  syncedSessionNeedsHydration,
   updateDialogSessionListFilters,
 } from "../../src/component/dialog-session-list"
 
@@ -66,6 +68,26 @@ describe("dialog session list", () => {
     expect(syncAvailabilityLabel("partial")).toBe("! partial")
     expect(syncAvailabilityLabel("conflict")).toBe("! conflict")
     expect(syncAvailabilityLabel("unresolved")).toBe("! unresolved")
+  })
+
+  test("uses sync availability instead of the scoped session cache to identify cloud-only sessions", () => {
+    const session = {
+      sessionID: "session",
+      title: "Synced",
+      ownerDeviceID: "device",
+      sourceDeviceID: "device",
+      directory: "/repo",
+      updatedAt: 1,
+      availability: "ready" as const,
+    }
+
+    expect(fromSyncedSession(session).cloudOnly).toBe(false)
+    expect(syncedSessionNeedsHydration(session)).toBe(false)
+    expect(syncedSessionNeedsHydration({ availability: "conflict" })).toBe(false)
+    expect(syncedSessionNeedsHydration({ availability: "metadata-only" })).toBe(true)
+    expect(syncedSessionNeedsHydration({ availability: "hydrating" })).toBe(true)
+    expect(syncedSessionNeedsHydration({ availability: "partial" })).toBe(true)
+    expect(syncedSessionNeedsHydration({ availability: "unresolved" })).toBe(true)
   })
 
   test("tabs between Path and Target while enforcing their valid combinations", () => {

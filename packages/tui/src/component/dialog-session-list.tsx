@@ -125,20 +125,24 @@ export function syncAvailabilityLabel(availability: SyncAvailability) {
   }[availability]
 }
 
+export function syncedSessionNeedsHydration(session: Pick<SyncedSession, "availability">) {
+  return !["ready", "conflict"].includes(session.availability)
+}
+
 export function dialogSessionListSyncStatus(session: Pick<DialogSessionEntry, "cloudOnly" | "syncMetadata">) {
   if (session.cloudOnly) return "cloud"
   if (["ready", "unresolved"].includes(session.syncMetadata?.availability ?? "")) return undefined
   return session.syncMetadata ? syncAvailabilityLabel(session.syncMetadata.availability) : undefined
 }
 
-function fromSyncedSession(session: SyncedSession): DialogSessionEntry {
+export function fromSyncedSession(session: SyncedSession): DialogSessionEntry {
   return {
     id: session.sessionID,
     title: session.title,
     directory: session.directory,
     targetLabel: session.targetLabel,
     sourceDeviceID: session.sourceDeviceID,
-    cloudOnly: true,
+    cloudOnly: syncedSessionNeedsHydration(session),
     time: { updated: session.updatedAt },
     syncMetadata: session,
   }
@@ -518,10 +522,7 @@ export function DialogSessionList() {
       onSelect={async (option) => {
         const selected = sessions().find((session) => session.id === option.value)
         const remote = selected?.syncMetadata
-        if (
-          remote &&
-          (!sync.data.session.some((session) => session.id === option.value) || remote.availability === "partial")
-        ) {
+        if (remote && syncedSessionNeedsHydration(remote)) {
           try {
             const result = await sdk.client.global.syncHydrate({ sessionID: option.value }, { throwOnError: true })
             await Promise.all([sync.session.refresh(), refetchSyncedSessions()])
