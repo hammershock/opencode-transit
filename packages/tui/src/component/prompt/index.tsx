@@ -1430,18 +1430,21 @@ export function Prompt(props: PromptProps) {
               { throwOnError: true },
             )
           })
-        : sdk.client.session.prompt(
-            {
-              sessionID,
-              messageID: optimistic.message.id,
-              ...selectedModel,
-              agent: agent.name,
-              model: selectedModel,
-              variant,
-              parts: optimistic.requestParts,
-            },
-            { throwOnError: true },
-          )
+        : (async () => {
+            await sdk.client.v2.session.revert.commit({ sessionID }, { throwOnError: true })
+            return sdk.client.session.prompt(
+              {
+                sessionID,
+                messageID: optimistic.message.id,
+                ...selectedModel,
+                agent: agent.name,
+                model: selectedModel,
+                variant,
+                parts: optimistic.requestParts,
+              },
+              { throwOnError: true },
+            )
+          })()
       if (admissionSignature) {
         try {
           await request

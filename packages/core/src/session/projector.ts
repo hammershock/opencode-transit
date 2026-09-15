@@ -292,6 +292,7 @@ const layer = Layer.effectDiscard(
         portable_target_label: _portableTargetLabel,
         workspace_id: _workspaceID,
         path: _path,
+        revert: _revert,
         ...metadata
       } = sessionRow(event.data.info)
       return db

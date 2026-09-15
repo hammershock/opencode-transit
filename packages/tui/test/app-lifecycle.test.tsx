@@ -615,6 +615,29 @@ test("session.undo restores a canonical Skill prompt and session.redo clears its
     time: { created: 0, updated: 10 },
     title: "Skill undo",
     location: { directory },
+    agent: "build",
+    model: { providerID: "test", id: "model" },
+  }
+  const model = {
+    id: "model",
+    providerID: "test",
+    api: { id: "model", url: "http://test", npm: "test" },
+    name: "Test Model",
+    capabilities: {
+      temperature: true,
+      reasoning: false,
+      attachment: true,
+      toolcall: true,
+      input: { text: true, audio: false, image: true, video: false, pdf: false },
+      output: { text: true, audio: false, image: false, video: false, pdf: false },
+      interleaved: false,
+    },
+    cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+    limit: { context: 100_000, output: 10_000 },
+    status: "active",
+    options: {},
+    headers: {},
+    release_date: "2026-01-01",
   }
   const message = {
     id: "msg_skill",
@@ -642,12 +665,31 @@ test("session.undo restores a canonical Skill prompt and session.redo clears its
     time: { created: 5 },
   }
   const paths: string[] = []
-  const calls = createFetch((url) => {
+  const requests: string[] = []
+  const calls = createFetch((url, request) => {
     paths.push(url.pathname)
+    requests.push(`${request.method} ${url.pathname}`)
+    if (url.pathname === "/agent")
+      return json([
+        {
+          name: "build",
+          mode: "primary",
+          hidden: false,
+          permission: [],
+          options: {},
+          model: { providerID: "test", modelID: "model" },
+        },
+      ])
+    if (url.pathname === "/config/providers")
+      return json({
+        providers: [{ id: "test", name: "Test", source: "custom", env: [], options: {}, models: { model } }],
+        default: { test: "model" },
+      })
     if (url.pathname === "/api/target")
       return json({ path: "/tmp/opencode/targets.jsonc", revision: "test", targets: [], diagnostics: [], valid: true })
     if (url.pathname === "/session/dummy") return json(legacySession)
-    if (url.pathname === "/session/dummy/message") return json([])
+    if (url.pathname === "/session/dummy/message" && request.method === "GET") return json([])
+    if (url.pathname === "/session/dummy/message" && request.method === "POST") return json({})
     if (url.pathname === "/api/session/dummy") return json({ data: canonicalSession })
     if (url.pathname === "/api/session/dummy/message") return json({ data: [message, previous], cursor: {} })
     if (url.pathname === "/api/session/dummy/target-resolution")
@@ -674,6 +716,7 @@ test("session.undo restores a canonical Skill prompt and session.redo clears its
     if (url.pathname === "/api/session/dummy/interrupt") return new Response(null, { status: 204 })
     if (url.pathname === "/api/session/dummy/revert/stage") return json({ data: { messageID: message.id } })
     if (url.pathname === "/api/session/dummy/revert/clear") return new Response(null, { status: 204 })
+    if (url.pathname === "/api/session/dummy/revert/commit") return new Response(null, { status: 204 })
     if (url.pathname === "/session") return json([legacySession])
   })
   let api: TuiPluginApi | undefined
@@ -765,6 +808,33 @@ test("session.undo restores a canonical Skill prompt and session.redo clears its
     expect(cleared.plainText).toBe("")
     expect(paths).toContain("/api/session/dummy/revert/clear")
     expect(paths).not.toContain("/session/dummy/unrevert")
+
+    api?.keymap.dispatchCommand("session.undo")
+    await waitForRequestCount(paths, "/api/session/dummy/revert/stage", 4)
+    events.emit({
+      directory,
+      project: "project",
+      payload: {
+        id: "evt_submit_revert",
+        type: "session.next.revert.staged",
+        properties: { timestamp: 50, sessionID: "dummy", revert: { messageID: message.id } },
+      },
+    })
+    await waitForFrame(setup, "1 message reverted")
+    api?.keymap.dispatchCommand("prompt.clear")
+    const replacement = await waitForEditorText(setup, "")
+    replacement.focus()
+    replacement.insertText("continue")
+    await waitForFrame(setup, "continue")
+    setup.mockInput.pressEnter()
+    await waitForRequestCount(paths, "/api/session/dummy/revert/commit", 1).catch((error) => {
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\nRequests: ${requests.join(", ")}`)
+    })
+    await waitForRequestCount(paths, "/session/dummy/message", 2)
+
+    expect(requests.indexOf("POST /api/session/dummy/revert/commit")).toBeLessThan(
+      requests.indexOf("POST /session/dummy/message"),
+    )
 
     process.emit("SIGHUP")
     await task
