@@ -24,6 +24,10 @@ import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
+import { Location } from "@opencode-ai/core/location"
+import { SessionTable } from "@opencode-ai/core/session/sql"
+import { eq } from "drizzle-orm"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -52,7 +56,10 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
       RuntimeFlags.node,
       Ripgrep.node,
     ]),
-    [[RuntimeFlags.node, RuntimeFlags.layer(flags)]],
+    [
+      [RuntimeFlags.node, RuntimeFlags.layer(flags)],
+      [LocationServiceMap.node, locationServiceMapLayer],
+    ],
   )
 
 const it = testEffect(layer())
@@ -168,6 +175,50 @@ function reply(
 }
 
 describe("tool.task", () => {
+  it.instance("creates a subagent session at the parent session location", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const { chat, assistant } = yield* seed()
+      const target = Location.RexdTarget.make({
+        type: "rexd",
+        targetID: Location.TargetID.make("00000000-0000-4000-8000-000000000122"),
+      })
+      yield* db
+        .update(SessionTable)
+        .set({ directory: "/home/agent/project", target, last_known_target_name: "a100-2gpu" })
+        .where(eq(SessionTable.id, chat.id))
+        .run()
+        .pipe(Effect.orDie)
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+
+      yield* def.execute(
+        {
+          description: "inspect remote bug",
+          prompt: "inspect the remote workspace",
+          subagent_type: "general",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps: stubOps() },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect((yield* sessions.children(chat.id))[0]).toMatchObject({
+        directory: "/home/agent/project",
+        target,
+        lastKnownTargetName: "a100-2gpu",
+      })
+    }),
+  )
+
   it.instance(
     "description sorts subagents by name and is stable across calls",
     () =>
