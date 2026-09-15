@@ -347,9 +347,8 @@ export const {
           const hydrated = [...fullSyncedSessions]
           const sessions = await listSessions()
           setStore("session", reconcile(sessions))
-          const visible = new Set(sessions.map((session) => session.id))
           fullSyncedSessions.clear()
-          await Promise.all(hydrated.filter((sessionID) => visible.has(sessionID)).map(syncSession))
+          await Promise.allSettled(hydrated.map(syncSession))
         }
       })().finally(() => {
         projectionRefreshFlight = undefined

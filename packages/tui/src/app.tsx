@@ -1091,8 +1091,13 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   event.on("sync.projection.updated", () => {
     if (route.data.type !== "session") return
     const sessionID = route.data.sessionID
-    void sync.session.refresh().then(() => {
+    void sync.session.refresh().then(async () => {
       if (sync.session.get(sessionID)) return
+      const session = await sdk.client.session.get({ sessionID })
+      if (session.response.status !== 404) {
+        if (session.data) await sync.session.sync(sessionID).catch(() => undefined)
+        return
+      }
       showDeletedSessionNotice(sessionID)
     })
   })

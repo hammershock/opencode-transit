@@ -1149,7 +1149,7 @@ test("an open session waits for confirmation before returning home after deletio
   }
 })
 
-test("an open session detects a remotely projected deletion outside its routed Location", async () => {
+test("an open session distinguishes scoped omission from a remotely projected deletion", async () => {
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
@@ -1163,14 +1163,21 @@ test("an open session detects a remotely projected deletion outside its routed L
     version: "0.0.0-test",
     time: { created: 0, updated: 0 },
   }
+  let listed = true
   let present = true
+  const sessionRequests: string[] = []
   const calls = createFetch((url) => {
     if (url.pathname === "/api/target")
       return json({ path: "/tmp/opencode/targets.jsonc", revision: "test", targets: [], diagnostics: [], valid: true })
-    if (url.pathname === "/session/dummy") return json(session)
+    if (url.pathname === "/session/dummy") {
+      sessionRequests.push(url.pathname)
+      return present
+        ? json(session)
+        : json({ name: "NotFoundError", data: { message: "Session not found" } }, { status: 404 })
+    }
     if (url.pathname === "/api/session/dummy/target-resolution")
       return json({ status: "resolved", location: { directory } })
-    if (url.pathname === "/session") return json(present ? [session] : [])
+    if (url.pathname === "/session") return json(listed ? [session] : [])
   })
   let started!: () => void
   const ready = new Promise<void>((resolve) => {
@@ -1198,11 +1205,23 @@ test("an open session detects a remotely projected deletion outside its routed L
 
     await ready
     await setup.waitForVisualIdle()
-    present = false
+    listed = false
+    const initialRequests = sessionRequests.length
     events.emit({
       directory: "/home/remote",
       project: "proj_test",
       payload: { id: "evt_projection", type: "sync.projection.updated", properties: { revision: 1 } },
+    })
+    await waitForSessionRequests(calls.session, 2)
+    await waitForRequestCount(sessionRequests, "/session/dummy", initialRequests + 1)
+    await setup.waitForVisualIdle()
+    expect(setup.captureCharFrame()).not.toContain("Session deleted")
+
+    present = false
+    events.emit({
+      directory: "/home/remote",
+      project: "proj_test",
+      payload: { id: "evt_projection_deleted", type: "sync.projection.updated", properties: { revision: 2 } },
     })
     await waitForFrame(setup, "Session deleted")
 
