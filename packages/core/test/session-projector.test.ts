@@ -12,6 +12,7 @@ import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Prompt } from "@opencode-ai/core/session/prompt"
@@ -300,6 +301,23 @@ describe("SessionProjector", () => {
         sessionID,
         timestamp: DateTime.makeUnsafe(1),
         revert: { messageID: boundary, snapshot: Snapshot.ID.make("tree"), diff: "patch", files: [] },
+      })
+      expect((yield* db.select({ revert: SessionTable.revert }).from(SessionTable).get())?.revert).toMatchObject({
+        messageID: boundary,
+        snapshot: "tree",
+        files: [],
+      })
+      yield* events.publish(SessionV1.Event.Updated, {
+        sessionID,
+        info: {
+          id: sessionID,
+          projectID: Project.ID.global,
+          slug: "test",
+          directory: "/project",
+          title: "legacy update",
+          version: "test",
+          time: { created: 0, updated: 2 },
+        },
       })
       expect((yield* db.select({ revert: SessionTable.revert }).from(SessionTable).get())?.revert).toMatchObject({
         messageID: boundary,

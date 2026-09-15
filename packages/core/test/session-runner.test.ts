@@ -161,7 +161,7 @@ const echo = Layer.effectDiscard(
   ),
 )
 const echoNode = makeLocationNode({ name: "test/session-runner-tools", layer: echo, deps: [ToolRegistry.node] })
-let modelResolveHook = Effect.void
+let modelResolveHook: Effect.Effect<void, SessionRunnerModel.Error> = Effect.void
 let currentModel = model
 const models = SessionRunnerModel.layerWith((session) =>
   modelResolveHook.pipe(Effect.as(session.model?.id === "replacement" ? replacementModel : currentModel)),
@@ -1008,6 +1008,32 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
       expect(requests.map((request) => request.model)).toEqual([model])
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([["Initial context"]])
+    }),
+  )
+
+  it.effect("projects a visible assistant failure when model resolution fails before the provider call", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      modelResolveHook = Effect.fail(
+        new SessionRunnerModel.VariantUnavailableError({
+          providerID: ProviderV2.ID.make("fake"),
+          modelID: ModelV2.ID.make("model"),
+          variant: ModelV2.VariantID.make("missing"),
+        }),
+      )
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "First" }), resume: false })
+      const requestCount = requests.length
+
+      expect(yield* session.resume(sessionID).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
+      const messages = yield* session.messages({ sessionID })
+      expect(messages.find((message) => message.type === "user")).toMatchObject({ type: "user", text: "First" })
+      expect(messages.find((message) => message.type === "assistant")).toMatchObject({
+        type: "assistant",
+        finish: "error",
+        error: { message: "Variant unavailable for fake/model: missing" },
+      })
+      expect(requests).toHaveLength(requestCount)
     }),
   )
 

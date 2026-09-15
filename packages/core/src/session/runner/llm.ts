@@ -210,7 +210,18 @@ const layer = Layer.effect(
           session.id,
           session.locationRevision,
         ))
-      const model = yield* models.resolve(session)
+      const model = yield* models.resolve(session).pipe(
+        Effect.tapError((error) =>
+          createLLMEventPublisher(events, {
+            sessionID: session.id,
+            agent: agent.id,
+            model: session.model ?? {
+              providerID: ProviderV2.ID.make("unknown"),
+              id: ModelV2.ID.make("unknown"),
+            },
+          }).failAssistant(error.message),
+        ),
+      )
       const skillGuidance = yield* SessionSkillCatalog.guidance(db, session.id)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)

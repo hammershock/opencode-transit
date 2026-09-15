@@ -30,11 +30,13 @@ const layer = Layer.effect(
           const connection = yield* integrations.connection.active(
             provider?.integrationID ?? Integration.ID.make(selected.providerID),
           )
-          return yield* SessionRunnerModel.resolve(
-            session,
-            selected,
-            connection ? yield* integrations.connection.resolve(connection) : undefined,
-          )
+          const credential = connection
+            ? yield* integrations.connection.resolve(connection)
+            : yield* auth.get(selected.providerID).pipe(
+                Effect.map(legacyCredential),
+                Effect.catch(() => Effect.succeed(undefined)),
+              )
+          return yield* SessionRunnerModel.resolve(session, selected, credential)
         }
 
         if (!session.model) return yield* new SessionRunnerModel.ModelNotSelectedError({ sessionID: session.id })

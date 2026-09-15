@@ -27,7 +27,7 @@ const layer = AppNodeBuilder.build(LayerNode.group([Catalog.node, Integration.no
 const it = testEffect(layer)
 
 describe("ModelsDevPlugin", () => {
-  it.effect("projects models.dev modes as separate models instead of variants", () =>
+  it.effect("projects models.dev modes separately while preserving reasoning variants", () =>
     Effect.gen(function* () {
       const integrations = yield* Integration.Service
       const catalog = yield* Catalog.Service
@@ -38,7 +38,7 @@ describe("ModelsDevPlugin", () => {
               id: "acme",
               name: "Acme",
               env: [],
-              npm: "@ai-sdk/openai-compatible",
+              npm: "@ai-sdk/openai",
               api: "https://api.acme.test/v1",
               models: {
                 "gpt-5.4": {
@@ -48,6 +48,7 @@ describe("ModelsDevPlugin", () => {
                   release_date: "2026-01-01",
                   attachment: false,
                   reasoning: true,
+                  reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }],
                   temperature: true,
                   tool_call: true,
                   cost: {
@@ -93,7 +94,32 @@ describe("ModelsDevPlugin", () => {
       const base = yield* catalog.model.get(providerID, ModelV2.ID.make("gpt-5.4"))
       const fast = yield* catalog.model.get(providerID, ModelV2.ID.make("gpt-5.4-fast"))
 
-      expect(base?.variants).toEqual([])
+      expect(base?.variants).toEqual([
+        {
+          id: ModelV2.VariantID.make("low"),
+          headers: {},
+          body: {
+            reasoning: { effort: "low", summary: "auto" },
+            include: ["reasoning.encrypted_content"],
+          },
+        },
+        {
+          id: ModelV2.VariantID.make("medium"),
+          headers: {},
+          body: {
+            reasoning: { effort: "medium", summary: "auto" },
+            include: ["reasoning.encrypted_content"],
+          },
+        },
+        {
+          id: ModelV2.VariantID.make("high"),
+          headers: {},
+          body: {
+            reasoning: { effort: "high", summary: "auto" },
+            include: ["reasoning.encrypted_content"],
+          },
+        },
+      ])
       expect(base?.request.body).toEqual({})
       expect(fast).toMatchObject({
         id: "gpt-5.4-fast",
@@ -104,7 +130,23 @@ describe("ModelsDevPlugin", () => {
           headers: { "x-mode": "fast" },
           body: { service_tier: "priority" },
         },
-        variants: [],
+        variants: [
+          {
+            id: "low",
+            headers: {},
+            body: { reasoning: { effort: "low", summary: "auto" }, include: ["reasoning.encrypted_content"] },
+          },
+          {
+            id: "medium",
+            headers: {},
+            body: { reasoning: { effort: "medium", summary: "auto" }, include: ["reasoning.encrypted_content"] },
+          },
+          {
+            id: "high",
+            headers: {},
+            body: { reasoning: { effort: "high", summary: "auto" }, include: ["reasoning.encrypted_content"] },
+          },
+        ],
       })
       expect(fast?.cost).toEqual([
         { input: 5, output: 30, cache: { read: 0.5, write: 0 } },

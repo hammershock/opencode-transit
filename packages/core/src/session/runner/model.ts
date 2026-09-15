@@ -128,6 +128,17 @@ const withVariant = (
 const apiName = (model: ModelV2.Info) =>
   model.api.type === "aisdk" ? `${model.api.type}:${model.api.package}` : model.api.type
 
+const chatGPTRoute = (model: ModelV2.Info, credential: Credential.OAuth) => {
+  const accountID = credential.metadata?.accountID ?? credential.metadata?.accountId
+  return withDefaults(model, OpenAIResponses.route).with({
+    endpoint: { baseURL: "https://chatgpt.com/backend-api/codex" },
+    headers: {
+      originator: "opencode",
+      ...(typeof accountID === "string" ? { "ChatGPT-Account-Id": accountID } : {}),
+    },
+  })
+}
+
 export const fromCatalogModel = (
   model: ModelV2.Info,
   credential?: Credential.Value,
@@ -141,7 +152,10 @@ export const fromCatalogModel = (
   const key = apiKey(resolved, credential)
   if (resolved.api.type === "aisdk" && resolved.api.package === "@ai-sdk/openai") {
     return Effect.succeed(
-      withDefaults(resolved, OpenAIResponses.route)
+      (credential?.type === "oauth" && resolved.providerID === ProviderV2.ID.openai
+        ? chatGPTRoute(resolved, credential)
+        : withDefaults(resolved, OpenAIResponses.route)
+      )
         .with({ auth: key === undefined ? Auth.none : Auth.bearer(key) })
         .model({ id: resolved.api.id }),
     )

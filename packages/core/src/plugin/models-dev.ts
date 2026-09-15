@@ -1,9 +1,11 @@
 import { define } from "./internal"
 import type { ModelV2Info } from "@opencode-ai/sdk/v2/types"
-import { Effect, Stream } from "effect"
+import { Effect, Schema, Stream } from "effect"
 import { EventV2 } from "../event"
+import { ModelV2 } from "../model"
 import { ModelsDev } from "../models-dev"
 import { ProviderV2 } from "../provider"
+import { ConfigProviderOptionsV1 } from "../v1/config/provider-options"
 
 function released(date: string) {
   const time = Date.parse(date)
@@ -80,6 +82,7 @@ function applyModel(
     readonly name?: string
     readonly cost?: ModelV2Info["cost"]
     readonly request?: NonNullable<NonNullable<ModelsDev.Model["experimental"]>["modes"]>[string]["provider"]
+    readonly package?: string
   } = {},
 ) {
   draft.name = input.name ?? model.name
@@ -102,7 +105,7 @@ function applyModel(
     input: [...(model.modalities?.input ?? [])],
     output: [...(model.modalities?.output ?? [])],
   }
-  draft.variants = []
+  draft.variants = modelsDevVariants(model, model.provider?.npm ?? input.package)
   draft.time.released = released(model.release_date)
   draft.cost = input.cost ?? cost(model.cost)
   draft.status = model.status ?? "active"
@@ -114,6 +117,45 @@ function applyModel(
   }
   Object.assign(draft.request.headers, input.request?.headers ?? {})
   Object.assign(draft.request.body, input.request?.body ?? {})
+}
+
+export function modelsDevVariants(model: ModelsDev.Model, packageName?: string): ModelV2Info["variants"] {
+  const decode = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))
+  const effort = model.reasoning_options?.find((option) => option.type === "effort")
+  if (effort && packageName) {
+    const lower = ConfigProviderOptionsV1.get(packageName).request
+    return effort.values.flatMap((value) => {
+      const id = value === null ? "none" : value
+      if (!id) return []
+      const options =
+        packageName === "@ai-sdk/openai"
+          ? { reasoningEffort: id, reasoningSummary: "auto", include: ["reasoning.encrypted_content"] }
+          : packageName === "@ai-sdk/anthropic"
+            ? id === "none"
+              ? { thinking: { type: "disabled" } }
+              : { thinking: { type: "adaptive", display: "summarized" }, effort: id }
+            : packageName === "@ai-sdk/openai-compatible"
+              ? { reasoningEffort: id }
+              : undefined
+      if (!options) return []
+      return [{ id: ModelV2.VariantID.make(id), headers: {}, body: decode(lower(options)) }]
+    })
+  }
+
+  const budget = model.reasoning_options?.find((option) => option.type === "budget_tokens")
+  if (!budget || packageName !== "@ai-sdk/anthropic") return []
+  const maximum = Math.min(budget.max ?? model.limit.output - 1, model.limit.output - 1)
+  if (maximum <= 0) return []
+  const high = Math.min(Math.max(budget.min ?? 0, Math.floor((maximum + 1) / 2)), maximum)
+  const lower = ConfigProviderOptionsV1.get(packageName).request
+  return [
+    { id: "high", tokens: high },
+    { id: "max", tokens: maximum },
+  ].map((variant) => ({
+    id: ModelV2.VariantID.make(variant.id),
+    headers: {},
+    body: decode(lower({ thinking: { type: "enabled", budgetTokens: variant.tokens } })),
+  }))
 }
 
 export const ModelsDevPlugin = define({
@@ -161,13 +203,16 @@ export const ModelsDevPlugin = define({
 
           for (const model of Object.values(item.models)) {
             const baseCost = cost(model.cost)
-            catalog.model.update(providerID, model.id, (draft) => applyModel(draft, model, { cost: baseCost }))
+            catalog.model.update(providerID, model.id, (draft) =>
+              applyModel(draft, model, { cost: baseCost, package: item.npm }),
+            )
             for (const [mode, options] of Object.entries(model.experimental?.modes ?? {})) {
               catalog.model.update(providerID, `${model.id}-${mode}`, (draft) =>
                 applyModel(draft, model, {
                   name: modeName(model, mode),
                   cost: mergeCost(baseCost, options.cost),
                   request: options.provider,
+                  package: item.npm,
                 }),
               )
             }
