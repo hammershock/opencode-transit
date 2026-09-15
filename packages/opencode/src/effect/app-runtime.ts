@@ -90,6 +90,7 @@ export const AppLayer = AppNodeBuilderV1.build(
     ProviderAuth.node,
     Agent.node,
     SubagentEconomics.node,
+    SubagentEconomics.contextNode,
     Skill.node,
     Question.node,
     Permission.node,

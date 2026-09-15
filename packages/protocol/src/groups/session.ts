@@ -25,6 +25,66 @@ import { SessionEvent } from "@opencode-ai/schema/session-event"
 import { ModelContext } from "@opencode-ai/schema/model-context"
 import { Skill } from "@opencode-ai/schema/skill"
 
+export const SubagentEconomicsPricing = Schema.Struct({
+  status: Schema.Literals(["available", "unavailable"]),
+  input: Schema.Finite,
+  output: Schema.Finite,
+  cacheRead: Schema.Finite,
+  cacheWrite: Schema.Finite,
+  tiers: Schema.Array(
+    Schema.Struct({
+      input: Schema.Finite,
+      output: Schema.Finite,
+      cacheRead: Schema.Finite,
+      cacheWrite: Schema.Finite,
+      context: Schema.Finite,
+    }),
+  ),
+  currency: Schema.Literal("USD"),
+  unit: Schema.Literal("1M_tokens"),
+  source: Schema.Literal("model_catalog"),
+})
+
+export const SubagentEconomicsBenchmark = Schema.Struct({
+  dimension: Schema.Literals(["coding", "research", "general"]),
+  benchmark: Schema.String,
+  value: Schema.Finite,
+  unit: Schema.String,
+  source: Schema.String,
+  observedAt: Schema.String,
+  datasetVersion: Schema.String,
+  modelVariant: Schema.String,
+  attribution: Schema.String,
+  status: Schema.Literals(["fresh", "stale"]),
+})
+
+export const SubagentEconomicsEntry = Schema.Struct({
+  agent: Schema.String,
+  model: Schema.Struct({ providerID: Schema.String, modelID: Schema.String }),
+  pricing: SubagentEconomicsPricing,
+  billing: Schema.Struct({
+    mode: Schema.Literals(["pay_as_you_go", "subscription", "token_plan", "prepaid_credits", "free", "unknown"]),
+    source: Schema.optional(Schema.String),
+  }),
+  benchmarks: Schema.Array(SubagentEconomicsBenchmark),
+})
+
+export const SubagentEconomicsCatalog = Schema.Struct({
+  revision: Schema.String,
+  activatedAt: Schema.String,
+  status: Schema.Literals(["disabled", "loading", "ready", "partial", "error"]),
+  agents: Schema.Array(SubagentEconomicsEntry),
+  diagnostics: Schema.Array(Schema.String),
+  truncated: Schema.Boolean,
+})
+
+export const SubagentEconomicsRefresh = Schema.Struct({
+  status: Schema.Literals(["disabled", "loading", "ready", "partial", "error"]),
+  startedAt: Schema.optional(Schema.String),
+  completedAt: Schema.optional(Schema.String),
+  diagnostics: Schema.Array(Schema.String),
+})
+
 const SessionsQueryFields = {
   workspace: Workspace.ID.pipe(Schema.optional),
   limit: Schema.NumberFromString.pipe(Schema.decodeTo(PositiveInt), Schema.optional).annotate({
@@ -325,6 +385,9 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           data: Schema.NullOr(ModelContext.Generation),
           skillCatalog: Schema.NullOr(Skill.AdmittedCatalog),
           skillGuidance: Schema.NullOr(Schema.String),
+          subagentCatalog: Schema.optional(Schema.NullOr(SubagentEconomicsCatalog)),
+          subagentGuidance: Schema.optional(Schema.NullOr(Schema.String)),
+          subagentRefresh: Schema.optional(SubagentEconomicsRefresh),
         }),
         error: [SessionNotFoundError, UnknownError],
       }).annotateMerge(
@@ -332,7 +395,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           identifier: "v2.session.modelContext",
           summary: "Inspect session model context",
           description:
-            "Return the frozen canonical model-context generation, device-local admitted Skill identities, and exact current Skill startup declaration without connecting to or reading from the Session target.",
+            "Return the frozen canonical model-context generation plus device-local Skill and subagent economics inspection data without connecting to or reading from the Session target.",
         }),
       ),
     )

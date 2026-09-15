@@ -213,6 +213,39 @@ describe("v2 location HttpApi", () => {
     expect(await Bun.file(`${tmp.path}/.env`).text()).toStartWith("# Project environment variables for OpenCode.")
   })
 
+  test("exposes device-local subagent guidance after activation", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, experimental: { subagent_economics: true } },
+    })
+    const created = await request("/api/session", tmp.path, {
+      method: "POST",
+      body: JSON.stringify({ location: { target: { type: "local" }, directory: tmp.path } }),
+    })
+    expect(created.status, await created.clone().text()).toBe(200)
+    const sessionID = ((await created.json()) as { data: { id: string } }).data.id
+
+    const before = await request(`/api/session/${sessionID}/model-context`, tmp.path)
+    expect(before.status, await before.clone().text()).toBe(200)
+    expect(await before.json()).toMatchObject({
+      subagentCatalog: null,
+      subagentGuidance: null,
+      subagentRefresh: { status: "loading", diagnostics: [] },
+    })
+
+    const activated = await request(`/api/session/${sessionID}/activate`, tmp.path, { method: "POST" })
+    expect(activated.status, await activated.clone().text()).toBe(200)
+    expect(await activated.json()).toMatchObject({ data: { status: "unchanged" } })
+
+    const inspected = await request(`/api/session/${sessionID}/model-context`, tmp.path)
+    expect(inspected.status, await inspected.clone().text()).toBe(200)
+    expect(await inspected.json()).toMatchObject({
+      subagentCatalog: { status: "ready", diagnostics: [], truncated: false },
+      subagentRefresh: { status: "ready", diagnostics: [] },
+      subagentGuidance: expect.stringContaining('<available_subagents status="ready"'),
+    })
+  })
+
   test("reloads Skill catalog context only on activation and retains the last good snapshot", async () => {
     await using tmp = await tmpdir({
       git: true,
@@ -240,6 +273,7 @@ describe("v2 location HttpApi", () => {
           status: string
           diagnostics: Array<{ kind: string; severity: string; sourceLabel: string }>
         }
+        subagentRefresh?: { status: string; diagnostics: string[] }
       }
     }
     const modelContext = async () => {
@@ -254,6 +288,9 @@ describe("v2 location HttpApi", () => {
         }
         skillCatalog: { skills: Array<{ name: string }> }
         skillGuidance: string
+        subagentCatalog?: unknown
+        subagentGuidance?: string | null
+        subagentRefresh?: { status: string; diagnostics: string[] }
       }
     }
     const advances = async () => {
@@ -265,6 +302,9 @@ describe("v2 location HttpApi", () => {
 
     const initialResponse = await modelContext()
     const initial = initialResponse.data
+    expect(initialResponse.subagentCatalog).toBeNull()
+    expect(initialResponse.subagentGuidance).toBeNull()
+    expect(initialResponse.subagentRefresh).toEqual({ status: "disabled", diagnostics: [] })
     expect(initial.sources["core/skill-guidance"]).toBeUndefined()
     expect(initialResponse.skillCatalog.skills).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "activation-review" })]),

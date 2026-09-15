@@ -942,6 +942,57 @@ export type SessionsModelContextOutput = {
     readonly digest: string
   } | null
   readonly skillGuidance: string | null
+  readonly subagentCatalog?: {
+    readonly revision: string
+    readonly activatedAt: string
+    readonly status: "disabled" | "loading" | "ready" | "partial" | "error"
+    readonly agents: ReadonlyArray<{
+      readonly agent: string
+      readonly model: { readonly providerID: string; readonly modelID: string }
+      readonly pricing: {
+        readonly status: "available" | "unavailable"
+        readonly input: number
+        readonly output: number
+        readonly cacheRead: number
+        readonly cacheWrite: number
+        readonly tiers: ReadonlyArray<{
+          readonly input: number
+          readonly output: number
+          readonly cacheRead: number
+          readonly cacheWrite: number
+          readonly context: number
+        }>
+        readonly currency: "USD"
+        readonly unit: "1M_tokens"
+        readonly source: "model_catalog"
+      }
+      readonly billing: {
+        readonly mode: "pay_as_you_go" | "subscription" | "token_plan" | "prepaid_credits" | "free" | "unknown"
+        readonly source?: string | null
+      }
+      readonly benchmarks: ReadonlyArray<{
+        readonly dimension: "coding" | "research" | "general"
+        readonly benchmark: string
+        readonly value: number
+        readonly unit: string
+        readonly source: string
+        readonly observedAt: string
+        readonly datasetVersion: string
+        readonly modelVariant: string
+        readonly attribution: string
+        readonly status: "fresh" | "stale"
+      }>
+    }>
+    readonly diagnostics: ReadonlyArray<string>
+    readonly truncated: boolean
+  } | null | null
+  readonly subagentGuidance?: string | null | null
+  readonly subagentRefresh?: {
+    readonly status: "disabled" | "loading" | "ready" | "partial" | "error"
+    readonly startedAt?: string | null
+    readonly completedAt?: string | null
+    readonly diagnostics: ReadonlyArray<string>
+  } | null
 }
 
 export type SessionsHistoryInput = {

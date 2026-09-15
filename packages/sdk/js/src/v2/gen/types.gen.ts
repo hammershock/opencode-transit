@@ -2147,6 +2147,7 @@ export type Config = {
     continue_loop_on_deny?: boolean
     user_shell_cwd?: boolean
     location_env?: boolean
+    subagent_economics?: boolean
     mcp_timeout?: number
     policies?: Array<ConfigV2ExperimentalPolicy>
   }
@@ -14570,6 +14571,60 @@ export type V2SessionModelContextResponses = {
     data: ModelContextGeneration
     skillCatalog: SkillAdmittedCatalog
     skillGuidance: string
+    subagentCatalog?: {
+      revision: string
+      activatedAt: string
+      status: "disabled" | "loading" | "ready" | "partial" | "error"
+      agents: Array<{
+        agent: string
+        model: {
+          providerID: string
+          modelID: string
+        }
+        pricing: {
+          status: "available" | "unavailable"
+          input: number
+          output: number
+          cacheRead: number
+          cacheWrite: number
+          tiers: Array<{
+            input: number
+            output: number
+            cacheRead: number
+            cacheWrite: number
+            context: number
+          }>
+          currency: "USD"
+          unit: "1M_tokens"
+          source: "model_catalog"
+        }
+        billing: {
+          mode: "pay_as_you_go" | "subscription" | "token_plan" | "prepaid_credits" | "free" | "unknown"
+          source?: string
+        }
+        benchmarks: Array<{
+          dimension: "coding" | "research" | "general"
+          benchmark: string
+          value: number
+          unit: string
+          source: string
+          observedAt: string
+          datasetVersion: string
+          modelVariant: string
+          attribution: string
+          status: "fresh" | "stale"
+        }>
+      }>
+      diagnostics: Array<string>
+      truncated: boolean
+    }
+    subagentGuidance?: string
+    subagentRefresh?: {
+      status: "disabled" | "loading" | "ready" | "partial" | "error"
+      startedAt?: string
+      completedAt?: string
+      diagnostics: Array<string>
+    }
   }
 }
 

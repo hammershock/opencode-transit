@@ -6,6 +6,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Observability from "@opencode-ai/core/observability"
 import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
+import { SubagentEconomics } from "@/agent/economics"
 import { Auth } from "@/auth"
 import { BackgroundJob } from "@/background/job"
 import { Command } from "@/command"
@@ -248,6 +249,8 @@ export const app = LayerNode.group([
   SyncControl.node,
   ProviderAuth.node,
   Agent.node,
+  SubagentEconomics.node,
+  SubagentEconomics.contextNode,
   Skill.node,
   Question.node,
   Permission.node,
