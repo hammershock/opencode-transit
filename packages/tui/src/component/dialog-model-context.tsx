@@ -94,6 +94,47 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
       value: { title: "Available skills", content: generation.skillGuidance },
     })
   }
+  if (generation.subagentRefresh) {
+    const catalog = generation.subagentCatalog
+    options.push({
+      category: "Subagents",
+      title: "available_subagents",
+      description: `${generation.subagentRefresh.status} · ${catalog?.agents.length ?? 0} available · device-local`,
+      details: [
+        ...(catalog?.truncated ? ["renderer output truncated"] : []),
+        ...generation.subagentRefresh.diagnostics,
+      ],
+      footer: generation.subagentRefresh.completedAt ?? generation.subagentRefresh.startedAt,
+      value: {
+        title: "Available subagents",
+        content:
+          generation.subagentGuidance ??
+          (generation.subagentRefresh.status === "disabled"
+            ? "Subagent economics is disabled for this device."
+            : `Subagent economics catalog is ${generation.subagentRefresh.status}.`),
+      },
+    })
+    for (const agent of catalog?.agents ?? []) {
+      const benchmarks = agent.benchmarks.slice(0, 2)
+      options.push({
+        category: "Subagents",
+        title: agent.agent,
+        description: `${agent.model.providerID}/${agent.model.modelID}`,
+        details: [
+          `billing ${agent.billing.mode}${agent.billing.source ? ` · ${agent.billing.source}` : ""}`,
+          agent.pricing.status === "available"
+            ? `price in ${agent.pricing.input} · out ${agent.pricing.output} ${agent.pricing.currency}/${agent.pricing.unit}`
+            : "price unavailable",
+          ...benchmarks.map(
+            (benchmark) =>
+              `${benchmark.benchmark} ${benchmark.value}${benchmark.unit} · ${benchmark.status} · ${benchmark.observedAt}`,
+          ),
+        ],
+        footer: agent.pricing.source,
+        value: { title: agent.agent, content: JSON.stringify(agent, null, 2) },
+      })
+    }
+  }
   return options
 }
 

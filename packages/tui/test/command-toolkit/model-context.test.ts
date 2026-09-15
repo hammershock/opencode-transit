@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { CommandRegistry, createHostResolver } from "@opencode-ai/command-kit"
 import {
   modelContextCommand,
+  subagentRefreshToast,
   type ModelContextCommandContext,
   type ModelContextGeneration,
 } from "../../src/command-toolkit/model-context"
@@ -60,6 +61,52 @@ const generation: ModelContextGeneration = {
     ],
   },
   skillGuidance: "<available_skills>\n  <skill><name>review-agent</name></skill>\n</available_skills>",
+  subagentCatalog: {
+    revision: "dddddddddddddddd",
+    activatedAt: "2026-09-15T08:00:00.000Z",
+    status: "partial",
+    agents: [
+      {
+        agent: "research",
+        model: { providerID: "openai", modelID: "gpt-5" },
+        pricing: {
+          status: "available",
+          input: 1.25,
+          output: 10,
+          cacheRead: 0.125,
+          cacheWrite: 0,
+          tiers: [],
+          currency: "USD",
+          unit: "1M_tokens",
+          source: "model_catalog",
+        },
+        billing: { mode: "unknown" },
+        benchmarks: [
+          {
+            dimension: "research",
+            benchmark: "ResearchBench",
+            value: 82,
+            unit: "%",
+            source: "benchmark-source",
+            observedAt: "2026-09-14T08:00:00.000Z",
+            datasetVersion: "2026-09",
+            modelVariant: "gpt-5",
+            attribution: "benchmark-source",
+            status: "stale",
+          },
+        ],
+      },
+    ],
+    diagnostics: ["Usage data unavailable"],
+    truncated: true,
+  },
+  subagentGuidance:
+    '<available_subagents status="partial" refreshed_at="2026-09-15T08:00:00.000Z" truncated="true">\n</available_subagents>',
+  subagentRefresh: {
+    status: "partial",
+    completedAt: "2026-09-15T08:00:00.000Z",
+    diagnostics: ["Usage data unavailable"],
+  },
 }
 
 describe("model context inspector", () => {
@@ -104,10 +151,43 @@ describe("model context inspector", () => {
       ["Instructions", "/workspace/project/AGENTS.md"],
       ["Context", "core/skills"],
       ["Skills", "available_skills"],
+      ["Subagents", "available_subagents"],
+      ["Subagents", "research"],
     ])
     expect(options[2]?.value.content).toBe("global rules")
     expect(options[3]?.footer).toBe("read failed")
     expect(options[5]?.description).toBe("1 available · controller-local")
     expect(options[5]?.value.content).toBe(generation.skillGuidance!)
+    expect(options[6]?.description).toBe("partial · 1 available · device-local")
+    expect(options[6]?.details).toEqual(["renderer output truncated", "Usage data unavailable"])
+    expect(options[6]?.value.content).toBe(generation.subagentGuidance!)
+    expect(options[7]?.description).toBe("openai/gpt-5")
+    expect(options[7]?.details).toContain("ResearchBench 82% · stale · 2026-09-14T08:00:00.000Z")
+  })
+
+  test("reports disabled subagent economics without synthetic guidance", () => {
+    const options = modelContextOptions({
+      ...generation,
+      subagentCatalog: undefined,
+      subagentGuidance: undefined,
+      subagentRefresh: { status: "disabled", diagnostics: [] },
+    })
+    const available = options.find((option) => option.title === "available_subagents")
+    expect(available?.description).toBe("disabled · 0 available · device-local")
+    expect(available?.value.content).toBe("Subagent economics is disabled for this device.")
+  })
+
+  test("announces one completed refresh state and ignores disabled or loading states", () => {
+    expect(subagentRefreshToast({ status: "disabled", diagnostics: [] })).toBeUndefined()
+    expect(subagentRefreshToast({ status: "loading", diagnostics: [] })).toBeUndefined()
+    expect(subagentRefreshToast({ status: "ready", diagnostics: [] })).toMatchObject({
+      title: "Subagent catalog ready",
+      variant: "info",
+    })
+    expect(subagentRefreshToast({ status: "partial", diagnostics: ["Usage unavailable"] })).toMatchObject({
+      title: "Subagent catalog partial",
+      message: "Usage unavailable",
+      variant: "warning",
+    })
   })
 })
