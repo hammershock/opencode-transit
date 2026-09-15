@@ -61,3 +61,11 @@ export async function persistUserShellCwd(
   await update({ experimental: { user_shell_cwd: enabled } })
   return enabled
 }
+
+export async function persistSubagentEconomics(
+  enabled: boolean,
+  update: (config: { experimental: { subagent_economics: boolean } }) => Promise<void>,
+) {
+  await update({ experimental: { subagent_economics: enabled } })
+  return enabled
+}

@@ -208,6 +208,7 @@ test.each([
         providers: [{ id: "test", name: "Test", source: "custom", env: [], options: {}, models: {} }],
         default: {},
       })
+    if (url.pathname === "/global/config") return json({ experimental: { subagent_economics: false } })
     if (url.pathname === "/session/dummy")
       return json({
         id: "dummy",
@@ -263,6 +264,13 @@ test.each([
     await setup.waitForVisualIdle()
 
     expect(setup.captureCharFrame()).toContain("Commands")
+    const editor = await waitForEditor(setup)
+    "Subagent economics".split("").forEach((key) => setup.mockInput.pressKey(key))
+    await waitForFrame(setup, "Configure device-local pricing")
+    expect(editor.plainText).toBe("Subagent economics")
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "Device setting · give")
+    expect(setup.captureCharFrame()).toContain("○ disabled")
     process.emit("SIGHUP")
     await task
   } finally {
