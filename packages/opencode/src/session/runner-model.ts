@@ -1,15 +1,12 @@
 export * as OpenCodeSessionRunnerModel from "./runner-model"
 
 import { Auth } from "@/auth"
-import { Provider } from "@/provider/provider"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { Credential } from "@opencode-ai/core/credential"
 import { makeLocationNode } from "@opencode-ai/core/effect/app-node"
 import { Integration } from "@opencode-ai/core/integration"
-import { ModelV2 } from "@opencode-ai/core/model"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
-import { ConfigProviderOptionsV1 } from "@opencode-ai/core/v1/config/provider-options"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer } from "effect"
 
 const layer = Layer.effect(
   SessionRunnerModel.Service,
@@ -17,17 +14,6 @@ const layer = Layer.effect(
     const auth = yield* Auth.Service
     const catalog = yield* Catalog.Service
     const integrations = yield* Integration.Service
-    const legacyProvider = yield* Provider.Service
-
-    const withLegacyVariant = Effect.fnUntraced(function* (model: ModelV2.Info, variant: string | undefined) {
-      if (!variant || variant === "default" || model.variants.some((item) => item.id === variant)) return model
-      const legacy = yield* legacyProvider
-        .getModel(model.providerID, model.id)
-        .pipe(Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)))
-      const resolved = legacy && legacyVariants(legacy).find((item) => item.id === variant)
-      if (!resolved) return model
-      return { ...model, variants: [...model.variants, resolved] }
-    })
 
     return SessionRunnerModel.Service.of({
       resolve: Effect.fn("OpenCode.SessionRunnerModel.resolve")(function* (session) {
@@ -46,7 +32,7 @@ const layer = Layer.effect(
           )
           return yield* SessionRunnerModel.resolve(
             session,
-            yield* withLegacyVariant(selected, session.model?.variant),
+            selected,
             connection ? yield* integrations.connection.resolve(connection) : undefined,
           )
         }
@@ -63,28 +49,11 @@ const layer = Layer.effect(
             providerID: session.model.providerID,
             modelID: session.model.id,
           })
-        return yield* SessionRunnerModel.resolve(
-          session,
-          yield* withLegacyVariant(model, session.model.variant),
-          credential,
-        )
+        return yield* SessionRunnerModel.resolve(session, model, credential)
       }),
     })
   }),
 )
-
-export function legacyVariants(model: {
-  readonly api: { readonly npm: string }
-  readonly variants?: Provider.Model["variants"]
-}) {
-  const lower = ConfigProviderOptionsV1.get(model.api.npm).request
-  const decode = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Json))
-  return Object.entries(model.variants ?? {}).map(([id, options]) => ({
-    id: ModelV2.VariantID.make(id),
-    headers: {},
-    body: decode(lower(options)),
-  }))
-}
 
 export function legacyCredential(info: Auth.Info | undefined): Credential.Value | undefined {
   if (info?.type === "api") return Credential.Key.make({ type: "key", key: info.key, metadata: info.metadata })
@@ -105,5 +74,5 @@ export function legacyCredential(info: Auth.Info | undefined): Credential.Value 
 export const node = makeLocationNode({
   service: SessionRunnerModel.Service,
   layer,
-  deps: [Auth.node, Catalog.node, Integration.node, Provider.node],
+  deps: [Auth.node, Catalog.node, Integration.node],
 })

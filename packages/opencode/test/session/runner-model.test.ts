@@ -1,15 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { Node } from "@opencode-ai/core/effect/app-node"
-import { ModelV2 } from "@opencode-ai/core/model"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import { Auth } from "../../src/auth"
-import { Provider } from "../../src/provider/provider"
 import { OpenCodeSessionRunnerModel } from "../../src/session/runner-model"
 
 describe("SessionRunnerModel compatibility", () => {
   test("preserves location and controller-global dependency scopes", () => {
     expect(OpenCodeSessionRunnerModel.node.tag).toBe(SessionRunnerModel.node.tag)
-    expect(String(Provider.node.tag)).toBe(String(SessionRunnerModel.node.tag))
     expect(Auth.node.tag).toBe(Node.tags.values.global)
   })
 
@@ -47,20 +44,5 @@ describe("SessionRunnerModel compatibility", () => {
         new Auth.WellKnown({ type: "wellknown", key: "TOKEN", token: "value" }),
       ),
     ).toBeUndefined()
-  })
-
-  test("lowers legacy reasoning variants into canonical provider requests", () => {
-    expect(
-      OpenCodeSessionRunnerModel.legacyVariants({
-        api: { npm: "@ai-sdk/openai-compatible" },
-        variants: { medium: { reasoningEffort: "medium" } },
-      }),
-    ).toEqual([
-      {
-        id: ModelV2.VariantID.make("medium"),
-        headers: {},
-        body: { reasoning_effort: "medium" },
-      },
-    ])
   })
 })
