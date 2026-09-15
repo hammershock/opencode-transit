@@ -348,6 +348,8 @@ export const {
           const sessions = await listSessions()
           setStore("session", reconcile(sessions))
           fullSyncedSessions.clear()
+          // The list is scoped by Path/Project and age, so omission is not proof
+          // that a directly loaded Session was deleted.
           await Promise.allSettled(hydrated.map(syncSession))
         }
       })().finally(() => {
