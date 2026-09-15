@@ -235,6 +235,39 @@ describe("step-finish token propagation via event", () => {
 })
 
 describe("Session", () => {
+  it.instance("inherits parent approval mode unless the child explicitly overrides it", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const root = yield* Effect.acquireRelease(session.create({ title: "root" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      const auto = yield* Effect.acquireRelease(session.create({ title: "auto", approvalMode: "auto" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      const normal = yield* Effect.acquireRelease(session.create({ title: "normal", approvalMode: "normal" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      const inheritedAuto = yield* session.create({ parentID: auto.id, title: "inherited-auto" })
+      const inheritedNormal = yield* session.create({ parentID: normal.id, title: "inherited-normal" })
+      const overriddenNormal = yield* session.create({
+        parentID: auto.id,
+        title: "overridden-normal",
+        approvalMode: "normal",
+      })
+      const overriddenAuto = yield* session.create({
+        parentID: normal.id,
+        title: "overridden-auto",
+        approvalMode: "auto",
+      })
+
+      expect(root.approvalMode).toBe("normal")
+      expect(inheritedAuto.approvalMode).toBe("auto")
+      expect(inheritedNormal.approvalMode).toBe("normal")
+      expect(overriddenNormal.approvalMode).toBe("normal")
+      expect(overriddenAuto.approvalMode).toBe("auto")
+    }),
+  )
+
   it.instance("inherits the complete parent location when creating a child session", () =>
     Effect.gen(function* () {
       const session = yield* SessionNs.Service
@@ -244,7 +277,7 @@ describe("Session", () => {
         targetID: Location.TargetID.make("00000000-0000-4000-8000-000000000121"),
       })
       const workspaceID = WorkspaceV2.ID.make("wrk_parent")
-      const parent = yield* Effect.acquireRelease(session.create({ title: "parent" }), (info) =>
+      const parent = yield* Effect.acquireRelease(session.create({ title: "parent", approvalMode: "auto" }), (info) =>
         session.remove(info.id).pipe(Effect.ignore),
       )
       yield* db
@@ -273,6 +306,7 @@ describe("Session", () => {
         portableTargetLabel: "a100-2gpu",
         workspaceID,
         path: "packages/opencode",
+        approvalMode: "auto",
       })
     }),
   )

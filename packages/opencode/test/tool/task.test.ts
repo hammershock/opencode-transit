@@ -641,6 +641,7 @@ describe("tool.task", () => {
       Effect.gen(function* () {
         const sessions = yield* Session.Service
         const { chat, assistant } = yield* seed()
+        yield* sessions.setApprovalMode({ sessionID: chat.id, approvalMode: "auto" })
         const tool = yield* TaskTool
         const def = yield* tool.init()
         let seen: SessionPrompt.PromptInput | undefined
@@ -667,6 +668,7 @@ describe("tool.task", () => {
         const child = yield* sessions.get(result.metadata.sessionId)
         expect(child.parentID).toBe(chat.id)
         expect(child.agent).toBe("reviewer")
+        expect(child.approvalMode).toBe("auto")
         expect(child.permission).toEqual([
           {
             permission: "todowrite",

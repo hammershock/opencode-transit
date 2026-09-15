@@ -731,7 +731,7 @@ const layer: Layer.Layer<
         model: input?.model,
         metadata: input?.metadata,
         permission: input?.permission,
-        approvalMode: input?.approvalMode,
+        approvalMode: input?.approvalMode ?? parent?.approvalMode,
         workspaceID: parent ? parent.workspaceID : (input?.workspaceID ?? workspace),
       })
     })
