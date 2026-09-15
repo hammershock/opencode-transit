@@ -4,6 +4,7 @@ import {
   experimentalCommandSettings,
   overrideDiagnostic,
   persistLocationEnvironment,
+  persistSubagentEconomics,
   persistUserShellCwd,
 } from "../command-toolkit/experimental-settings"
 import { useKV } from "../context/kv"
@@ -30,11 +31,12 @@ function Status(props: { setting: (typeof experimentalCommandSettings)[number] }
   )
 }
 
-export function DialogExperimentalCommands() {
+export function DialogExperimentalCommands(props: { current?: string } = {}) {
   const kv = useKV()
   const sdk = useSDK()
   const toast = useToast()
   const [locationEnvironment, setLocationEnvironment] = createSignal<boolean>()
+  const [subagentEconomics, setSubagentEconomics] = createSignal<boolean>()
   const [userShellCwd, setUserShellCwd] = createSignal<boolean>()
   onMount(
     () =>
@@ -42,6 +44,7 @@ export function DialogExperimentalCommands() {
         .get({ throwOnError: true })
         .then((result) => {
           setLocationEnvironment(result.data.experimental?.location_env === true)
+          setSubagentEconomics(result.data.experimental?.subagent_economics === true)
           setUserShellCwd(result.data.experimental?.user_shell_cwd === true)
         })
         .catch(toast.error),
@@ -54,6 +57,13 @@ export function DialogExperimentalCommands() {
       footer: () => <Status setting={setting} />,
       category: "Experimental commands",
     })),
+    {
+      value: "fork.subagent.economics",
+      title: "Subagent economics",
+      description: "Device setting · give the parent Agent local pricing and routing evidence at Session activation",
+      footer: subagentEconomics() === undefined ? "◐ checking" : subagentEconomics() ? "● enabled" : "○ disabled",
+      category: "Experimental features",
+    },
     {
       value: "fork.user-shell.cwd",
       title: "User Shell CWD continuity",
@@ -76,11 +86,23 @@ export function DialogExperimentalCommands() {
     <DialogSelect
       title="Experimental commands"
       options={options()}
+      current={props.current}
       actions={[
         {
           command: "dialog.experimental.toggle",
           title: "toggle",
           onTrigger: (option: DialogSelectOption<string>) => {
+            if (option.value === "fork.subagent.economics") {
+              const current = subagentEconomics()
+              if (current === undefined) return
+              const enabled = !current
+              void persistSubagentEconomics(enabled, async (config) => {
+                await sdk.client.global.config.update({ config }, { throwOnError: true })
+              })
+                .then(setSubagentEconomics)
+                .catch(toast.error)
+              return
+            }
             if (option.value === "fork.user-shell.cwd") {
               const current = userShellCwd()
               if (current === undefined) return

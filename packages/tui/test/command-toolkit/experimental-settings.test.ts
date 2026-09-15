@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   experimentalCommandSettings,
   persistLocationEnvironment,
+  persistSubagentEconomics,
   persistUserShellCwd,
 } from "../../src/command-toolkit/experimental-settings"
 
@@ -57,5 +58,23 @@ describe("experimental settings", () => {
 
     expect(enabled).toBeTrue()
     expect(patches).toEqual([{ experimental: { user_shell_cwd: true } }])
+  })
+
+  test("persists subagent economics through the canonical config patch", async () => {
+    const patches: unknown[] = []
+    const enabled = await persistSubagentEconomics(true, async (config) => {
+      patches.push(config)
+    })
+
+    expect(enabled).toBeTrue()
+    expect(patches).toEqual([{ experimental: { subagent_economics: true } }])
+  })
+
+  test("does not report changed subagent economics when persistence fails", async () => {
+    expect(
+      persistSubagentEconomics(false, async () => {
+        throw new Error("write failed")
+      }),
+    ).rejects.toThrow("write failed")
   })
 })

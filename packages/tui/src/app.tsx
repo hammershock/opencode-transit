@@ -832,6 +832,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "System",
       },
       {
+        name: "experimental.subagent_economics",
+        title: "Subagent economics",
+        desc: "Configure device-local pricing and routing evidence for parent Agents",
+        run: () => {
+          dialog.replace(() => <DialogExperimentalCommands current="fork.subagent.economics" />)
+        },
+        category: "System",
+      },
+      {
         name: "theme.switch",
         title: "Switch theme",
         desc: "Choose the TUI color theme",
