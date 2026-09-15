@@ -110,6 +110,7 @@ import {
 import { locationQuery } from "../../util/location-query"
 import {
   modelContextCommand,
+  subagentRefreshToast,
   type ModelContextCommandContext,
   type ModelContextGeneration,
 } from "../../command-toolkit/model-context"
@@ -453,6 +454,17 @@ export function Session() {
         activation.sessionID = sessionID
         try {
           const result = await sdk.client.v2.session.activate({ sessionID }, { throwOnError: true })
+          const subagent = await sdk
+            .request(`/api/session/${encodeURIComponent(route.sessionID)}/model-context`)
+            .then(async (response) =>
+              response.ok
+                ? ((await response.json()) as { subagentRefresh?: ModelContextGeneration["subagentRefresh"] })
+                    .subagentRefresh
+                : undefined,
+            )
+            .catch(() => undefined)
+          const subagentToast = subagentRefreshToast(subagent)
+          if (subagentToast) toast.show(subagentToast)
           if (["retained", "unavailable"].includes(result.data.data.status)) {
             toast.show({
               title: "Skill catalog reload incomplete",
@@ -738,12 +750,18 @@ export function Session() {
                 data: ModelContextGeneration | null
                 skillCatalog: ModelContextGeneration["skillCatalog"] | null
                 skillGuidance: string | null
+                subagentCatalog: ModelContextGeneration["subagentCatalog"] | null
+                subagentGuidance: string | null
+                subagentRefresh: ModelContextGeneration["subagentRefresh"]
               }
               if (!result.data) return null
               return {
                 ...result.data,
                 ...(result.skillCatalog ? { skillCatalog: result.skillCatalog } : {}),
                 ...(result.skillGuidance ? { skillGuidance: result.skillGuidance } : {}),
+                ...(result.subagentCatalog ? { subagentCatalog: result.subagentCatalog } : {}),
+                ...(result.subagentGuidance ? { subagentGuidance: result.subagentGuidance } : {}),
+                ...(result.subagentRefresh ? { subagentRefresh: result.subagentRefresh } : {}),
               }
             },
           },

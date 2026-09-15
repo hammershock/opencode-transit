@@ -8,6 +8,8 @@ import { Agent } from "./agent"
 import { Config } from "@/config/config"
 import { Permission } from "@/permission"
 import { Provider } from "@/provider/provider"
+import { SessionContextExtension } from "@opencode-ai/server/session-context-extension"
+import { InstanceStore } from "@/project/instance-store"
 
 const MAX_GUIDANCE_BYTES = 16 * 1024
 
@@ -211,8 +213,67 @@ export function render(catalog: Catalog) {
   return { guidance: [header, start, ...selected, close].join("\n"), truncated }
 }
 
+const contextLayer = Layer.effect(
+  SessionContextExtension.Service,
+  Effect.gen(function* () {
+    const config = yield* Config.Service
+    const agents = yield* Agent.Service
+    const economics = yield* Service
+    const instances = yield* InstanceStore.Service
+
+    const inspect = Effect.fn("SubagentEconomics.inspect")(function* (sessionID: SessionID) {
+      if ((yield* config.get()).experimental?.subagent_economics !== true) {
+        return {
+          subagentCatalog: null,
+          subagentGuidance: null,
+          subagentRefresh: { status: "disabled" as const, diagnostics: [] },
+        }
+      }
+      const catalog = yield* economics.peek(sessionID)
+      if (!catalog) {
+        return {
+          subagentCatalog: null,
+          subagentGuidance: null,
+          subagentRefresh: { status: "loading" as const, diagnostics: [] },
+        }
+      }
+      return {
+        subagentCatalog: catalog,
+        subagentGuidance: render(catalog).guidance,
+        subagentRefresh: {
+          status: catalog.status,
+          completedAt: catalog.activatedAt,
+          diagnostics: catalog.diagnostics,
+        },
+      }
+    })
+
+    return SessionContextExtension.Service.of({
+      activate: Effect.fn("SubagentEconomics.activateContext")(function* (input) {
+        return yield* instances.provide(
+          { directory: input.directory },
+          Effect.gen(function* () {
+            const parent = input.agent ? yield* agents.get(input.agent) : yield* agents.defaultInfo()
+            yield* economics.invalidate(input.sessionID)
+            yield* economics.guidance(input.sessionID, parent)
+            return yield* inspect(input.sessionID)
+          }),
+        )
+      }),
+      inspect: Effect.fn("SubagentEconomics.inspectContext")((input) =>
+        instances.provide({ directory: input.directory }, inspect(input.sessionID)),
+      ),
+    })
+  }),
+)
+
 function escape(value: string) {
   return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
 }
 
 export const node = LayerNode.make({ service: Service, layer, deps: [Config.node, Agent.node, Provider.node] })
+export const contextNode = LayerNode.make({
+  service: SessionContextExtension.Service,
+  layer: contextLayer,
+  deps: [node, Config.node, Agent.node, InstanceStore.node],
+})

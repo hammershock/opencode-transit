@@ -5942,7 +5942,7 @@ export class Session3 extends HeyApiClient {
   /**
    * Inspect session model context
    *
-   * Return the frozen canonical model-context generation, device-local admitted Skill identities, and exact current Skill startup declaration without connecting to or reading from the Session target.
+   * Return the frozen canonical model-context generation plus device-local Skill and subagent economics inspection data without connecting to or reading from the Session target.
    */
   public modelContext<ThrowOnError extends boolean = false>(
     parameters: {

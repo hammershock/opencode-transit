@@ -36,6 +36,57 @@ export type ModelContextGeneration = {
     skills: ReadonlyArray<{ id: string; name: string; sourceLabel: string; digest: string }>
   }
   skillGuidance?: string
+  subagentCatalog?: {
+    revision: string
+    activatedAt: string
+    status: "disabled" | "loading" | "ready" | "partial" | "error"
+    agents: ReadonlyArray<{
+      agent: string
+      model: { providerID: string; modelID: string }
+      pricing: {
+        status: "available" | "unavailable"
+        input: number
+        output: number
+        cacheRead: number
+        cacheWrite: number
+        tiers: ReadonlyArray<{
+          input: number
+          output: number
+          cacheRead: number
+          cacheWrite: number
+          context: number
+        }>
+        currency: "USD"
+        unit: "1M_tokens"
+        source: "model_catalog"
+      }
+      billing: {
+        mode: "pay_as_you_go" | "subscription" | "token_plan" | "prepaid_credits" | "free" | "unknown"
+        source?: string
+      }
+      benchmarks: ReadonlyArray<{
+        dimension: "coding" | "research" | "general"
+        benchmark: string
+        value: number
+        unit: string
+        source: string
+        observedAt: string
+        datasetVersion: string
+        modelVariant: string
+        attribution: string
+        status: "fresh" | "stale"
+      }>
+    }>
+    diagnostics: ReadonlyArray<string>
+    truncated: boolean
+  }
+  subagentGuidance?: string
+  subagentRefresh?: {
+    status: "disabled" | "loading" | "ready" | "partial" | "error"
+    startedAt?: string
+    completedAt?: string
+    diagnostics: ReadonlyArray<string>
+  }
 }
 
 export type ModelContextCommandContext = InvocationContext & {
@@ -43,6 +94,18 @@ export type ModelContextCommandContext = InvocationContext & {
     inspect: () => Promise<ModelContextGeneration | null>
   }
   presentModelContext: (generation: ModelContextGeneration | null) => Promise<void>
+}
+
+export function subagentRefreshToast(refresh: ModelContextGeneration["subagentRefresh"]) {
+  if (!refresh || refresh.status === "disabled" || refresh.status === "loading") return
+  return {
+    title: `Subagent catalog ${refresh.status}`,
+    message:
+      refresh.diagnostics.slice(0, 3).join(" · ") ||
+      (refresh.status === "ready" ? "Device-local routing guidance is ready." : "See /context for details."),
+    variant: refresh.status === "ready" ? ("info" as const) : ("warning" as const),
+    duration: 5000,
+  }
 }
 
 const empty = (raw: RawArguments) =>

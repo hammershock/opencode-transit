@@ -1,5 +1,5 @@
 import { SessionV2 } from "@opencode-ai/core/session"
-import { DateTime, Effect, Stream } from "effect"
+import { DateTime, Effect, Option, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { SessionsCursor } from "@opencode-ai/protocol/groups/session"
@@ -15,6 +15,8 @@ import {
 } from "@opencode-ai/protocol/errors"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Location } from "@opencode-ai/core/location"
+import { SessionContextExtension } from "../session-context-extension"
+import { HttpServerRequest } from "effect/unstable/http"
 
 const DefaultSessionsLimit = 50
 const DefaultSessionHistoryLimit = 50
@@ -22,6 +24,7 @@ const DefaultSessionHistoryLimit = 50
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* SessionV2.Service
+    const contextExtension = yield* Effect.serviceOption(SessionContextExtension.Service)
 
     return handlers
       .handle(
@@ -111,31 +114,65 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.activate",
         Effect.fn(function* (ctx) {
-          return {
-            data: yield* session.activate(ctx.params.sessionID).pipe(
-              Effect.catchTag("Session.NotFoundError", (error) =>
-                Effect.fail(
-                  new SessionNotFoundError({
-                    sessionID: error.sessionID,
-                    message: `Session not found: ${error.sessionID}`,
-                  }),
-                ),
-              ),
-              Effect.catchTag("Session.OperationUnavailableError", (error) =>
-                Effect.fail(
-                  new ServiceUnavailableError({
-                    message: `Session ${error.operation} is not available yet`,
-                    service: `session.${error.operation}`,
-                  }),
-                ),
+          const current = yield* session.get(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) =>
+              Effect.fail(
+                new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                }),
               ),
             ),
+          )
+          const data = yield* session.activate(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) =>
+              Effect.fail(
+                new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                }),
+              ),
+            ),
+            Effect.catchTag("Session.OperationUnavailableError", (error) =>
+              Effect.fail(
+                new ServiceUnavailableError({
+                  message: `Session ${error.operation} is not available yet`,
+                  service: `session.${error.operation}`,
+                }),
+              ),
+            ),
+          )
+          yield* Option.match(contextExtension, {
+            onNone: () => Effect.succeed(undefined),
+            onSome: (extension) =>
+              Effect.gen(function* () {
+                const request = yield* HttpServerRequest.HttpServerRequest
+                return yield* extension.activate({
+                  sessionID: ctx.params.sessionID,
+                  directory: controllerDirectory(request),
+                  agent: current.agent,
+                })
+              }),
+          })
+          return {
+            data,
           }
         }),
       )
       .handle(
         "session.modelContext",
         Effect.fn(function* (ctx) {
+          const subagent = yield* Option.match(contextExtension, {
+            onNone: () => Effect.succeed(undefined),
+            onSome: (extension) =>
+              Effect.gen(function* () {
+                const request = yield* HttpServerRequest.HttpServerRequest
+                return yield* extension.inspect({
+                  sessionID: ctx.params.sessionID,
+                  directory: controllerDirectory(request),
+                })
+              }),
+          })
           const skillView = yield* session.skillView(ctx.params.sessionID).pipe(
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
@@ -165,6 +202,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               )) ?? null,
             skillCatalog: skillView?.catalog ?? null,
             skillGuidance: skillView?.guidance ?? null,
+            subagentCatalog: subagent?.subagentCatalog,
+            subagentGuidance: subagent?.subagentGuidance,
+            subagentRefresh: subagent?.subagentRefresh,
           }
         }),
       )
@@ -505,3 +545,13 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       )
   }),
 )
+
+function controllerDirectory(request: HttpServerRequest.HttpServerRequest) {
+  const directory = request.headers["x-opencode-directory"]
+  if (!directory) return process.cwd()
+  try {
+    return decodeURIComponent(directory)
+  } catch {
+    return directory
+  }
+}
