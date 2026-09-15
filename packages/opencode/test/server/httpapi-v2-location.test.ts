@@ -11,9 +11,9 @@ import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 
 const context = Context.empty() as Context.Context<unknown>
 
-function request(route: string, directory: string, init: RequestInit = {}) {
+function request(route: string, directory: string, init: RequestInit = {}, encodedDirectory = false) {
   const headers = new Headers(init.headers)
-  headers.set("x-opencode-directory", directory)
+  headers.set("x-opencode-directory", encodedDirectory ? encodeURIComponent(directory) : directory)
   if (init.body) headers.set("content-type", "application/json")
   return HttpApiApp.webHandler().handler(
     new Request(`http://localhost${route}`, {
@@ -225,7 +225,7 @@ describe("v2 location HttpApi", () => {
     expect(created.status, await created.clone().text()).toBe(200)
     const sessionID = ((await created.json()) as { data: { id: string } }).data.id
 
-    const before = await request(`/api/session/${sessionID}/model-context`, tmp.path)
+    const before = await request(`/api/session/${sessionID}/model-context`, tmp.path, {}, true)
     expect(before.status, await before.clone().text()).toBe(200)
     expect(await before.json()).toMatchObject({
       subagentCatalog: null,
@@ -233,11 +233,11 @@ describe("v2 location HttpApi", () => {
       subagentRefresh: { status: "loading", diagnostics: [] },
     })
 
-    const activated = await request(`/api/session/${sessionID}/activate`, tmp.path, { method: "POST" })
+    const activated = await request(`/api/session/${sessionID}/activate`, tmp.path, { method: "POST" }, true)
     expect(activated.status, await activated.clone().text()).toBe(200)
     expect(await activated.json()).toMatchObject({ data: { status: "unchanged" } })
 
-    const inspected = await request(`/api/session/${sessionID}/model-context`, tmp.path)
+    const inspected = await request(`/api/session/${sessionID}/model-context`, tmp.path, {}, true)
     expect(inspected.status, await inspected.clone().text()).toBe(200)
     expect(await inspected.json()).toMatchObject({
       subagentCatalog: { status: "ready", diagnostics: [], truncated: false },

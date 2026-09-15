@@ -149,7 +149,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 const request = yield* HttpServerRequest.HttpServerRequest
                 return yield* extension.activate({
                   sessionID: ctx.params.sessionID,
-                  directory: request.headers["x-opencode-directory"] ?? process.cwd(),
+                  directory: controllerDirectory(request),
                   agent: current.agent,
                 })
               }),
@@ -169,7 +169,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 const request = yield* HttpServerRequest.HttpServerRequest
                 return yield* extension.inspect({
                   sessionID: ctx.params.sessionID,
-                  directory: request.headers["x-opencode-directory"] ?? process.cwd(),
+                  directory: controllerDirectory(request),
                 })
               }),
           })
@@ -545,3 +545,13 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       )
   }),
 )
+
+function controllerDirectory(request: HttpServerRequest.HttpServerRequest) {
+  const directory = request.headers["x-opencode-directory"]
+  if (!directory) return process.cwd()
+  try {
+    return decodeURIComponent(directory)
+  } catch {
+    return directory
+  }
+}
