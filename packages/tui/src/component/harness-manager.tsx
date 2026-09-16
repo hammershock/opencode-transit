@@ -53,6 +53,7 @@ export function useHarnessManager(input: { readonly openSkills: () => void }) {
   const [model, setModel] = createSignal<HarnessManagerModel>()
   const [loading, setLoading] = createSignal(false)
   const [loadError, setLoadError] = createSignal<string>()
+  const [anchor, setAnchor] = createSignal<string>()
   let generation = 0
 
   const targetName = (target: string) => {
@@ -288,6 +289,7 @@ export function useHarnessManager(input: { readonly openSkills: () => void }) {
         locked={loading()}
         preserveSelection
         renderFilter={false}
+        current={anchor()}
         options={rows()}
         emptyView={<text>Loading instruction paths…</text>}
         footerHints={[{ title: "enter", label: "edit" }]}
@@ -297,6 +299,7 @@ export function useHarnessManager(input: { readonly openSkills: () => void }) {
             title: "unset",
             disabled: (option) => selectedRead(option)?.mode !== "custom",
             onTrigger: (option) => {
+              setAnchor(option?.value)
               const read = selectedRead(option)
               if (read) void clear(read)
             },
@@ -307,6 +310,7 @@ export function useHarnessManager(input: { readonly openSkills: () => void }) {
             side: "right",
             disabled: (option) => selectedRead(option)?.source?.content === undefined,
             onTrigger: (option) => {
+              setAnchor(option?.value)
               const read = selectedRead(option)
               if (read) preview(read)
             },
@@ -314,6 +318,7 @@ export function useHarnessManager(input: { readonly openSkills: () => void }) {
         ]}
         onSelect={(option) => {
           if (option.value === "retry") return void refresh()
+          setAnchor(option.value)
           const read = selectedRead(option)
           if (read) void selectFile(read)
         }}
@@ -353,6 +358,7 @@ export function useHarnessManager(input: { readonly openSkills: () => void }) {
     setModel(undefined)
     setLoadError(undefined)
     setLoading(false)
+    setAnchor(undefined)
     dialog.replace(menuView, () => {
       if (generation === token) generation++
     })
