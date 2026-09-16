@@ -14,13 +14,15 @@ Closes #
 
 ### Platform coverage
 
+<!-- Mac is the default acceptance controller. Explain why Windows/WSL2 or multi-device checks are required or optional; see docs/testing-workflow.md. Check only platforms actually tested. -->
+
 - [ ] macOS Apple Silicon
 - [ ] Windows WSL2 / Ubuntu x64
 - [ ] Not applicable (documentation/templates only)
 
 Not run or still requiring maintainer verification:
 
-<!-- Missing device access does not prevent an external contribution. List gaps explicitly. -->
+<!-- Separate required gaps from optional unrun platforms. Record explicit maintainer deferrals and remaining risk; Mac success is not Windows evidence. -->
 
 ## UI evidence
 
