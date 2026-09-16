@@ -15,7 +15,7 @@ import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
 import { Plugin } from "@/plugin"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { Effect, Layer, Schema } from "effect"
+import { Deferred, Effect, Layer, Schema } from "effect"
 import { ToolDefinition, ToolOutput } from "@opencode-ai/llm"
 import type { ToolRegistry as LocationToolRegistry } from "@opencode-ai/core/tool/registry"
 import { testEffect } from "../lib/effect"
@@ -250,3 +250,108 @@ it.effect("remote location materialization replaces every location-bound tool in
     expect(skillOutput).toMatchObject({ output: "remote-skill-output", metadata: { locationBound: true } })
   }),
 )
+
+for (const route of ["legacy", "location"] as const) {
+  for (const phase of ["before", "running", "completed"] as const) {
+    it.live(`${route} dispatch cancellation ${phase} owns only the pending invocation`, () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>()
+        const finalized = yield* Deferred.make<void>()
+        const sideEffects: string[] = []
+        const operation = Effect.gen(function* () {
+          sideEffects.push("started")
+          yield* Deferred.succeed(started, undefined)
+          yield* Effect.never.pipe(Effect.ensuring(Deferred.succeed(finalized, undefined)))
+          return { title: "glob", metadata: {}, output: "unreachable" }
+        })
+        const processor = {
+          message: { id: messageID, sessionID } as SessionV1.Assistant,
+          updateToolCall: () => Effect.die("unused"),
+          completeToolCall: () => Effect.die("cancelled work must not complete"),
+        }
+        const tools = yield* SessionTools.resolve({
+          agent,
+          model,
+          session: { id: sessionID, permission: [] } as unknown as Session.Info,
+          processor,
+          bypassAgentCheck: false,
+          messages: [],
+          promptOps: {} as never,
+          ...(route === "location"
+            ? {
+                locationTools: {
+                  definitions: [
+                    ToolDefinition.make({ name: "glob", description: "isolated location", inputSchema: {} }),
+                  ],
+                  settle: (input) =>
+                    (input.call.input as { done?: boolean }).done
+                      ? Effect.succeed({
+                          result: { type: "text" as const, value: "done" },
+                          output: ToolOutput.make({}, [{ type: "text", text: "done" }]),
+                        })
+                      : operation.pipe(Effect.map(() => ({ result: { type: "text" as const, value: "unreachable" } }))),
+                },
+              }
+            : {}),
+        }).pipe(
+          Effect.provideService(ToolRegistry.Service, {
+            ids: () => Effect.succeed(["glob"]),
+            all: () => Effect.succeed([]),
+            named: () => Effect.die("unused"),
+            tools: () =>
+              Effect.succeed([
+                {
+                  id: "glob",
+                  description: "controlled filesystem wait",
+                  parameters: Schema.Struct({}),
+                  jsonSchema: {},
+                  execute: (args) =>
+                    (args as { done?: boolean }).done
+                      ? Effect.succeed({ title: "glob", metadata: {}, output: "done" })
+                      : operation,
+                },
+              ]),
+          }),
+        )
+        const execute = tools.glob.execute!
+        const abort = new AbortController()
+        if (phase === "before") abort.abort()
+        const sibling = yield* Effect.promise(() =>
+          Promise.resolve(
+            execute(
+              { done: true },
+              {
+                toolCallId: "sibling",
+                messages: [],
+                abortSignal: new AbortController().signal,
+              },
+            ),
+          ),
+        )
+        expect(sibling).toMatchObject({ output: "done" })
+        const pending = Promise.resolve(
+          execute(
+            { done: phase === "completed" },
+            {
+              toolCallId: callID,
+              messages: [],
+              abortSignal: abort.signal,
+            },
+          ),
+        ).then(
+          (value) => ({ value }),
+          () => ({ cancelled: true }),
+        )
+        if (phase === "running") yield* Deferred.await(started)
+        if (phase === "completed")
+          expect(yield* Effect.promise(() => pending)).toMatchObject({ value: { output: "done" } })
+        abort.abort()
+        abort.abort()
+        const result = yield* Effect.promise(() => pending).pipe(Effect.timeout("2 seconds"))
+        expect(result).toMatchObject(phase === "completed" ? { value: { output: "done" } } : { cancelled: true })
+        if (phase === "running") yield* Deferred.await(finalized).pipe(Effect.timeout("2 seconds"))
+        expect(sideEffects).toEqual(phase === "running" ? ["started"] : [])
+      }),
+    )
+  }
+}
