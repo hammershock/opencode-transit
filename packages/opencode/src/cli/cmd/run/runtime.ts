@@ -411,10 +411,10 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       if (!hasSession(input, state)) return
       void ctx.sdk.experimental.session.background({ sessionID: state.sessionID }).catch(() => {})
     },
-    onSubagentSelect: (sessionID) => {
-      state.selectSubagent?.(sessionID)
+    onSubagentSelect: (key) => {
+      state.selectSubagent?.(key)
       log?.write("subagent.select", {
-        sessionID,
+        key,
       })
     },
   })
@@ -544,7 +544,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         throw new Error("runtime closed")
       }
 
-      state.selectSubagent = (sessionID) => handle.selectSubagent(sessionID)
+      state.selectSubagent = (key) => handle.selectSubagent(key)
       return { mod, handle }
     })()
     state.stream = next

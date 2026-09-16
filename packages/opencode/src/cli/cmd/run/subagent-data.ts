@@ -1,3 +1,4 @@
+import { TaskInvocation } from "@opencode-ai/core/v1/task-invocation"
 import type { Event, Message, Part, PermissionRequest, QuestionRequest, ToolPart } from "@opencode-ai/sdk/v2"
 import * as Locale from "@/util/locale"
 import {
@@ -35,6 +36,7 @@ type DetailState = {
   sessionID: string
   data: SessionData
   frames: Frame[]
+  messages: Map<string, Message>
 }
 
 export type SubagentData = {
@@ -57,6 +59,7 @@ function createDetail(sessionID: string): DetailState {
       includeUserText: true,
     }),
     frames: [],
+    messages: new Map(),
   }
 }
 
@@ -78,6 +81,7 @@ export function sameSubagentTab(a: FooterSubagentTab | undefined, b: FooterSubag
 
   return (
     a.sessionID === b.sessionID &&
+    a.invocation?.childMessageID === b.invocation?.childMessageID &&
     a.partID === b.partID &&
     a.callID === b.callID &&
     a.label === b.label &&
@@ -294,6 +298,7 @@ function metadata(part: ToolPart, key: string) {
 
 function taskStatus(part: ToolPart): FooterSubagentTab["status"] {
   if (part.state.status === "completed") {
+    if (metadata(part, "background") === true && TaskInvocation.read(metadata(part, "invocation"))) return "running"
     return "completed"
   }
 
@@ -314,6 +319,9 @@ function taskTab(part: ToolPart, sessionID: string): FooterSubagentTab {
 
   return {
     sessionID,
+    ...(TaskInvocation.read(metadata(part, "invocation"))
+      ? { key: part.id, invocation: TaskInvocation.read(metadata(part, "invocation")) }
+      : {}),
     partID: part.id,
     callID: part.callID,
     label,
@@ -345,12 +353,13 @@ function syncTaskTab(data: SubagentData, part: ToolPart, children?: Set<string>)
   }
 
   const next = taskTab(part, sessionID)
-  if (sameSubagentTab(data.tabs.get(sessionID), next)) {
+  const key = next.key ?? sessionID
+  if (sameSubagentTab(data.tabs.get(key), next)) {
     ensureDetail(data, sessionID)
     return false
   }
 
-  data.tabs.set(sessionID, next)
+  data.tabs.set(key, next)
   ensureDetail(data, sessionID)
   return true
 }
@@ -437,6 +446,7 @@ function ensureBlockerTab(
   title: string | undefined,
   kind: "permission" | "question",
 ) {
+  if ([...data.tabs.values()].some((tab) => tab.sessionID === sessionID && tab.invocation)) return false
   const current = data.tabs.get(sessionID)
   if (current) {
     ensureDetail(data, sessionID)
@@ -476,23 +486,15 @@ function isAbortedAssistantMessage(info: Message) {
   return info.role === "assistant" && info.error?.name === "MessageAbortedError"
 }
 
-function cancelSubagentTab(data: SubagentData, sessionID: string) {
-  const current = data.tabs.get(sessionID)
-  if (!current || current.status !== "running") {
-    return false
+function cancelSubagentTab(data: SubagentData, sessionID: string, message: Message) {
+  let changed = false
+  for (const [key, current] of data.tabs) {
+    if (current.sessionID !== sessionID || current.status !== "running") continue
+    if (current.invocation && !TaskInvocation.includes(current.invocation, message)) continue
+    data.tabs.set(key, { ...current, status: "cancelled", lastUpdatedAt: Date.now() })
+    changed = true
   }
-
-  const next = {
-    ...current,
-    status: "cancelled" as const,
-    lastUpdatedAt: Date.now(),
-  }
-  if (sameSubagentTab(current, next)) {
-    return false
-  }
-
-  data.tabs.set(sessionID, next)
-  return true
+  return changed
 }
 
 function compactCallMap(detail: DetailState) {
@@ -600,6 +602,7 @@ function bootstrapChildMessages(input: {
   let changed = false
 
   for (const message of input.messages) {
+    input.detail.messages.set(message.info.id, message.info)
     changed =
       bootstrapChildEvent({
         detail: input.detail,
@@ -639,7 +642,7 @@ function bootstrapChildMessages(input: {
 }
 
 function knownSession(data: SubagentData, sessionID: string) {
-  return data.tabs.has(sessionID)
+  return data.details.has(sessionID)
 }
 
 export function listSubagentPermissions(data: SubagentData) {
@@ -657,22 +660,49 @@ export function createSubagentData(): SubagentData {
   }
 }
 
-function snapshotDetail(detail: DetailState) {
+function snapshotDetail(detail: DetailState, tab: FooterSubagentTab) {
+  const commits = detail.frames.map((item) => item.commit)
+  if (!tab.invocation) return { sessionID: detail.sessionID, commits, unscoped: true }
+  const belongs = (commit: StreamCommit) => {
+    const message = commit.messageID ? detail.messages.get(commit.messageID) : undefined
+    return message !== undefined && TaskInvocation.includes(tab.invocation!, message)
+  }
   return {
     sessionID: detail.sessionID,
-    commits: detail.frames.map((item) => item.commit),
+    commits: commits.filter(belongs),
+    history: commits.filter((commit) => !belongs(commit)),
   }
 }
 
 export function listSubagentTabs(data: SubagentData) {
-  return [...data.tabs.values()].sort((a, b) => {
-    const active = Number(b.status === "running") - Number(a.status === "running")
-    if (active !== 0) {
-      return active
-    }
+  return [...data.tabs.values()]
+    .map((tab) => {
+      if (!tab.background || !tab.invocation || tab.status !== "running") return tab
+      const terminal = [...(data.details.get(tab.sessionID)?.messages.values() ?? [])].findLast(
+        (message) =>
+          TaskInvocation.includes(tab.invocation!, message) &&
+          message.role === "assistant" &&
+          (message.error || (message.time.completed && message.finish === "stop")),
+      )
+      if (!terminal || terminal.role !== "assistant") return tab
+      return {
+        ...tab,
+        status:
+          terminal.error?.name === "MessageAbortedError"
+            ? ("cancelled" as const)
+            : terminal.error
+              ? ("error" as const)
+              : ("completed" as const),
+      }
+    })
+    .sort((a, b) => {
+      const active = Number(b.status === "running") - Number(a.status === "running")
+      if (active !== 0) {
+        return active
+      }
 
-    return b.lastUpdatedAt - a.lastUpdatedAt
-  })
+      return b.lastUpdatedAt - a.lastUpdatedAt
+    })
 }
 
 function snapshotQueues(data: SubagentData) {
@@ -693,17 +723,20 @@ function snapshotState(data: SubagentData, details: FooterSubagentState["details
 export function snapshotSubagentData(data: SubagentData): FooterSubagentState {
   return snapshotState(
     data,
-    Object.fromEntries([...data.details.entries()].map(([sessionID, detail]) => [sessionID, snapshotDetail(detail)])),
+    Object.fromEntries(
+      [...data.tabs.entries()].map(([key, tab]) => [key, snapshotDetail(ensureDetail(data, tab.sessionID), tab)]),
+    ),
   )
 }
 
 export function snapshotSelectedSubagentData(
   data: SubagentData,
-  selectedSessionID: string | undefined,
+  selectedKey: string | undefined,
 ): FooterSubagentState {
-  const detail = selectedSessionID ? data.details.get(selectedSessionID) : undefined
+  const tab = selectedKey ? data.tabs.get(selectedKey) : undefined
+  const detail = tab ? data.details.get(tab.sessionID) : undefined
 
-  return snapshotState(data, detail ? { [detail.sessionID]: snapshotDetail(detail) } : {})
+  return snapshotState(data, detail && tab ? { [selectedKey!]: snapshotDetail(detail, tab) } : {})
 }
 
 export function bootstrapSubagentData(input: BootstrapSubagentInput) {
@@ -737,7 +770,7 @@ export function bootstrapSubagentData(input: BootstrapSubagentInput) {
     changed = ensureBlockerTab(input.data, item.sessionID, child.get(item.sessionID)?.title, "question") || changed
   }
 
-  for (const sessionID of input.data.tabs.keys()) {
+  for (const sessionID of input.data.details.keys()) {
     const detail = ensureDetail(input.data, sessionID)
     const before = queueSnapshot(detail.data)
 
@@ -829,9 +862,10 @@ export function reduceSubagentData(input: {
   }
 
   const detail = ensureDetail(input.data, sessionID)
+  if (event.type === "message.updated") detail.messages.set(event.properties.info.id, event.properties.info)
   const cancelled =
     event.type === "message.updated" && isAbortedAssistantMessage(event.properties.info)
-      ? cancelSubagentTab(input.data, sessionID)
+      ? cancelSubagentTab(input.data, sessionID, event.properties.info)
       : false
   if (event.type === "session.status") {
     if (event.properties.status.type !== "retry") {
@@ -871,6 +905,8 @@ export function reduceSubagentData(input: {
       event,
       thinking: input.thinking,
       limits: input.limits,
-    }) || cancelled
+    }) ||
+    cancelled ||
+    event.type === "message.updated"
   )
 }

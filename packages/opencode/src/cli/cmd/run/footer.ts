@@ -101,7 +101,7 @@ type RunFooterOptions = {
   onBackground?: () => void
   onEditorOpen: (input: { value: string }) => Promise<string | undefined>
   onExit?: () => void
-  onSubagentSelect?: (sessionID: string | undefined) => void
+  onSubagentSelect?: (key: string | undefined) => void
   treeSitterClient?: TreeSitterClient
 }
 

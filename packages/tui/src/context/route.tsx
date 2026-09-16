@@ -9,6 +9,8 @@ export type HomeRoute = {
 }
 
 export type SessionRoute = {
+  messageID?: string
+  taskDescription?: string
   type: "session"
   sessionID: string
   prompt?: PromptInfo

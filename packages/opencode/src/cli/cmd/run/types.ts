@@ -179,7 +179,7 @@ export type FooterPromptRoute =
   | { type: "composer" }
   | { type: "queued-menu" }
   | { type: "subagent-menu" }
-  | { type: "subagent"; sessionID: string }
+  | { type: "subagent"; key: string }
   | { type: "command" }
   | { type: "skill" }
   | { type: "model" }
@@ -187,6 +187,8 @@ export type FooterPromptRoute =
   | { type: "experimental" }
 
 export type FooterSubagentTab = {
+  key?: string
+  invocation?: import("@opencode-ai/core/v1/task-invocation").Info
   sessionID: string
   partID: string
   callID: string
@@ -202,6 +204,8 @@ export type FooterSubagentTab = {
 export type FooterSubagentDetail = {
   sessionID: string
   commits: StreamCommit[]
+  history?: StreamCommit[]
+  unscoped?: boolean
 }
 
 export type FooterSubagentState = {
