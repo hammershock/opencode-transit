@@ -688,8 +688,8 @@ export function RunSubagentSelectBody(props: {
         description: title === item.label ? undefined : item.label,
         footer: subagentStatusLabel(item.status),
         keywords: `${item.label} ${item.description} ${item.title ?? ""} ${item.status}`,
-        sessionID: item.sessionID,
-        current: props.current() === item.sessionID,
+        sessionID: item.key ?? item.sessionID,
+        current: props.current() === (item.key ?? item.sessionID),
       }
     }),
   )

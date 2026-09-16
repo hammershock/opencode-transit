@@ -1458,3 +1458,39 @@ test("direct variant panel renders current variant selector", async () => {
     app.renderer.destroy()
   }
 })
+
+test("subagent selection keeps two invocations of one child independently navigable", async () => {
+  const tabs = [
+    { ...subagent({ sessionID: "same-child", label: "General", description: "First invocation" }), key: "first-call" },
+    {
+      ...subagent({ sessionID: "same-child", label: "General", description: "Second invocation" }),
+      key: "second-call",
+    },
+  ]
+  const selected: string[] = []
+  const app = await testRender(
+    () => (
+      <box width={100} height={RUN_SUBAGENT_PANEL_ROWS}>
+        <RunSubagentSelectBody
+          theme={() => RUN_THEME_FALLBACK.footer}
+          tabs={() => tabs}
+          current={() => "first-call"}
+          onClose={() => {}}
+          onSelect={(key) => selected.push(key)}
+        />
+      </box>
+    ),
+    { width: 100, height: RUN_SUBAGENT_PANEL_ROWS },
+  )
+  try {
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("First invocation")
+    expect(app.captureCharFrame()).toContain("Second invocation")
+    app.mockInput.pressEnter()
+    app.mockInput.pressKey("ARROW_DOWN")
+    app.mockInput.pressEnter()
+    expect(selected).toEqual(["first-call", "second-call"])
+  } finally {
+    app.renderer.destroy()
+  }
+})

@@ -182,8 +182,10 @@ export const TaskTool = Tool.define(
         modelID: msg.info.modelID,
         providerID: msg.info.providerID,
       }
+      const childMessageID = MessageID.ascending()
       const metadata = {
         parentSessionId: ctx.sessionID,
+        invocation: { parentMessageID: ctx.messageID, callID: ctx.callID, childMessageID },
         sessionId: nextSession.id,
         model,
         ...(runInBackground ? { background: true } : {}),
@@ -200,7 +202,7 @@ export const TaskTool = Tool.define(
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
         const parts = yield* ops.resolvePromptParts(params.prompt)
         const result = yield* ops.prompt({
-          messageID: MessageID.ascending(),
+          messageID: childMessageID,
           sessionID: nextSession.id,
           model: {
             modelID: model.modelID,

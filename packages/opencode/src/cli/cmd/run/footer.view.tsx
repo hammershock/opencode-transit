@@ -178,14 +178,14 @@ export function RunFooterView(props: RunFooterViewProps) {
   })
   const tabs = createMemo(() => subagent().tabs)
   const activeTabs = createMemo(() => tabs().filter((item) => item.status === "running"))
-  const selectedTab = createMemo(() => tabs().find((item) => item.sessionID === selected()))
+  const selectedTab = createMemo(() => tabs().find((item) => (item.key ?? item.sessionID) === selected()))
   const selectedIndex = createMemo(() => {
     const sessionID = selected()
     if (!sessionID) {
       return 0
     }
 
-    return tabs().findIndex((item) => item.sessionID === sessionID) + 1
+    return tabs().findIndex((item) => (item.key ?? item.sessionID) === sessionID) + 1
   })
   const foregroundSubagents = createMemo(
     () => props.backgroundSubagents && activeTabs().some((item) => !item.background),
@@ -409,14 +409,16 @@ export function RunFooterView(props: RunFooterViewProps) {
 
     const routeState = route()
     const current =
-      routeState.type === "subagent" ? tabs().findIndex((item) => item.sessionID === routeState.sessionID) : -1
+      routeState.type === "subagent"
+        ? tabs().findIndex((item) => (item.key ?? item.sessionID) === routeState.sessionID)
+        : -1
     const index = current === -1 ? 0 : (current + dir + tabs().length) % tabs().length
     const next = tabs()[index]
     if (!next) {
       return
     }
 
-    openTab(next.sessionID)
+    openTab(next.key ?? next.sessionID)
   }
   const composer = createPromptState({
     directory: props.directory,
@@ -662,7 +664,7 @@ export function RunFooterView(props: RunFooterViewProps) {
       return
     }
 
-    if (tabs().some((item) => item.sessionID === current.sessionID)) {
+    if (tabs().some((item) => (item.key ?? item.sessionID) === current.sessionID)) {
       return
     }
 

@@ -362,8 +362,8 @@ function composeFooter(input: {
 }
 
 function traceTabs(trace: Trace | undefined, prev: FooterSubagentTab[], next: FooterSubagentTab[]) {
-  const before = new Map(prev.map((item) => [item.sessionID, item]))
-  const after = new Map(next.map((item) => [item.sessionID, item]))
+  const before = new Map(prev.map((item) => [item.key ?? item.sessionID, item]))
+  const after = new Map(next.map((item) => [item.key ?? item.sessionID, item]))
 
   for (const [sessionID, tab] of after) {
     if (sameSubagentTab(before.get(sessionID), tab)) {
@@ -459,7 +459,7 @@ function createLayer(input: StreamInput) {
         const replayedParts = new Set<string>()
         const recovering = new Set<string>()
         const tracked = (sessionID: string | undefined) =>
-          sessionID === input.sessionID || (!!sessionID && state.subagent.tabs.has(sessionID))
+          sessionID === input.sessionID || (!!sessionID && state.subagent.details.has(sessionID))
         const currentSubagentState = () => {
           if (state.selectedSubagent && !state.subagent.tabs.has(state.selectedSubagent)) {
             state.selectedSubagent = undefined
@@ -482,7 +482,10 @@ function createLayer(input: StreamInput) {
             return
           }
 
-          if (event.properties.sessionID !== input.sessionID && !state.subagent.tabs.has(event.properties.sessionID)) {
+          if (
+            event.properties.sessionID !== input.sessionID &&
+            !state.subagent.details.has(event.properties.sessionID)
+          ) {
             return
           }
 
@@ -788,7 +791,7 @@ function createLayer(input: StreamInput) {
           booting = false
           yield* drainBuffered()
 
-          const sessions = [...state.subagent.tabs.keys()]
+          const sessions = [...state.subagent.details.keys()]
           if (sessions.length === 0) {
             return
           }

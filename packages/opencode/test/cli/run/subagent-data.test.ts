@@ -256,6 +256,7 @@ describe("run subagent data", () => {
       "child-1": {
         sessionID: "child-1",
         commits: [],
+        unscoped: true,
       },
     })
     expect(snapshot.permissions.map((item) => item.id)).toEqual(["perm-1"])
@@ -544,4 +545,81 @@ describe("run subagent data", () => {
       }),
     ])
   })
+})
+
+test("separate invocations survive reordered progress, cancellation and replay", () => {
+  const data = createSubagentData()
+  const calls = ["first", "second"].map((id) => ({
+    id,
+    sessionID: "parent-1",
+    messageID: `parent-${id}`,
+    callID: `call-${id}`,
+    type: "tool" as const,
+    tool: "task",
+    state: {
+      status: "completed" as const,
+      title: id,
+      input: { description: id, subagent_type: "general" },
+      metadata: {
+        sessionId: "child-1",
+        background: true,
+        invocation: { parentMessageID: `parent-${id}`, callID: `call-${id}`, childMessageID: `input-${id}` },
+      },
+      output: "started",
+      time: { start: 1, end: 2 },
+    },
+  }))
+  bootstrapSubagentData({
+    data,
+    messages: [{ parts: calls }],
+    children: [{ id: "child-1" }],
+    permissions: [],
+    questions: [],
+  })
+  const first = childMessage({ messageID: "answer-first", sessionID: "child-1", role: "assistant", parts: [] })
+  if (first.info.role !== "assistant") throw new Error("expected assistant")
+  first.info.parentID = "input-first"
+  const message = { ...first.info, error: { name: "MessageAbortedError", data: { message: "cancelled" } } }
+  reduce(data, {
+    type: "message.part.updated",
+    properties: {
+      part: {
+        id: "text-first",
+        sessionID: "child-1",
+        messageID: message.id,
+        type: "text",
+        text: "Earlier work",
+        time: { start: 1, end: 2 },
+      },
+    },
+  })
+  // Parentage may arrive after a text part; it must reclassify only that message.
+  reduce(data, { type: "message.updated", properties: { sessionID: "child-1", info: message } })
+  reduce(data, { type: "message.part.updated", properties: { part: calls[0] } })
+  const state = snapshotSubagentData(data)
+  expect(state.tabs.find((tab) => tab.key === "second")).toMatchObject({ description: "second", status: "running" })
+  expect(state.tabs.find((tab) => tab.key === "first")).toMatchObject({ description: "first", status: "cancelled" })
+  expect(state.details.second?.commits).toEqual([])
+  expect(state.details.second?.history?.some((commit) => commit.text === "Earlier work")).toBe(true)
+  expect(state.details.first?.commits.some((commit) => commit.text === "Earlier work")).toBe(true)
+  const replay = createSubagentData()
+  bootstrapSubagentData({
+    data: replay,
+    messages: [{ parts: calls.toReversed() }],
+    children: [{ id: "child-1" }],
+    permissions: [],
+    questions: [],
+  })
+  bootstrapSubagentCalls({
+    data: replay,
+    sessionID: "child-1",
+    messages: [{ info: message as ChildMessage["info"], parts: [] }],
+    thinking: true,
+    limits: {},
+  })
+  expect(
+    snapshotSubagentData(replay)
+      .tabs.map((tab) => [tab.key, tab.status])
+      .sort(),
+  ).toEqual(state.tabs.map((tab) => [tab.key, tab.status]).sort())
 })

@@ -1,3 +1,9 @@
+import {
+  bootstrapSubagentData,
+  bootstrapSubagentCalls,
+  createSubagentData,
+  snapshotSubagentData,
+} from "@/cli/cmd/run/subagent-data"
 import { afterEach, describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
@@ -332,6 +338,100 @@ describe("tool.task", () => {
       expect(result.output).toContain(`<task id="${child.id}" state="completed">`)
       expect(seen?.sessionID).toBe(child.id)
       expect(seen?.variant).toBe("xhigh")
+    }),
+  )
+
+  it.instance("resumed Task metadata reconstructs separate invocation progress and stable child title", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const child = yield* sessions.create({ parentID: chat.id, title: "Stable child title" })
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const parents: SessionV1.WithParts["parts"][] = []
+      const children: SessionV1.WithParts[] = []
+      const boundaries: string[] = []
+      for (const description of ["first investigation", "second investigation"]) {
+        const callID = description
+        const partID = PartID.ascending()
+        const recorded: Record<string, unknown>[] = []
+        const result = yield* def.execute(
+          {
+            description,
+            prompt: description,
+            subagent_type: "general",
+            task_id: child.id,
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID,
+            agent: "build",
+            abort: new AbortController().signal,
+            messages: [],
+            ask: () => Effect.void,
+            metadata: (value) =>
+              Effect.sync(() => {
+                recorded.push(value.metadata ?? {})
+              }),
+            extra: {
+              promptOps: {
+                ...stubOps(),
+                prompt: (input: SessionPrompt.PromptInput) =>
+                  Effect.sync(() => {
+                    expect(recorded[0]?.invocation).toMatchObject({ childMessageID: input.messageID, callID })
+                    boundaries.push(input.messageID!)
+                    const message = reply(input, description)
+                    children.push(message)
+                    return message
+                  }),
+              },
+            },
+          },
+        )
+        parents.push([
+          {
+            id: partID,
+            type: "tool",
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID,
+            tool: "task",
+            state: {
+              status: "completed",
+              title: result.title,
+              input: { description, subagent_type: "general" },
+              metadata: result.metadata,
+              output: result.output,
+              time: { start: 1, end: 2 },
+            },
+          },
+        ])
+      }
+      expect(new Set(boundaries).size).toBe(2)
+      expect((yield* sessions.get(child.id)).title).toBe("Stable child title")
+      const data = createSubagentData()
+      bootstrapSubagentData({
+        data,
+        messages: parents.map((parts) => ({ parts })),
+        children: [{ id: child.id }],
+        permissions: [],
+        questions: [],
+      })
+      bootstrapSubagentCalls({ data, sessionID: child.id, messages: children, thinking: true, limits: {} })
+      const state = snapshotSubagentData(data)
+      expect(state.tabs).toHaveLength(2)
+      for (const [index, parts] of parents.entries()) {
+        const detail = state.details[parts[0]!.id]!
+        expect(detail.commits.filter((commit) => commit.kind === "assistant").map((commit) => commit.text)).toEqual([
+          index === 0 ? "first investigation" : "second investigation",
+        ])
+        expect(
+          detail.history?.some(
+            (commit) => commit.text === (index === 0 ? "second investigation" : "first investigation"),
+          ),
+        ).toBe(true)
+      }
     }),
   )
 
@@ -896,9 +996,11 @@ describe("tool.task", () => {
 
       expect(result.metadata.sessionId).toBe(started.metadata.sessionId)
       expect(result.metadata.background).toBe(true)
+      expect(result.metadata.invocation.childMessageID).not.toBe(started.metadata.invocation.childMessageID)
       expect(result.output).toContain("Background task updated")
       first.resolve()
       expect((yield* jobs.get(started.metadata.sessionId))?.status).toBe("running")
+      expect((yield* Effect.promise(() => updated.promise)).messageID).toBe(result.metadata.invocation.childMessageID)
       expect((yield* Effect.promise(() => updated.promise)).parts).toEqual([
         { type: "text", text: "also inspect cancellation" },
       ])
