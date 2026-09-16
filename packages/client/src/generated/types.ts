@@ -886,7 +886,7 @@ export type SessionsModelContextOutput = {
   readonly data: {
     readonly version: 1
     readonly generation: number
-    readonly reason: "created" | "legacy-backfill" | "location-rebound" | "init"
+    readonly reason: "created" | "legacy-backfill" | "location-rebound" | "init" | "instructions-applied"
     readonly locationRevision: number
     readonly environment:
       | {
@@ -1001,6 +1001,70 @@ export type SessionsModelContextOutput = {
   } | null
 }
 
+export type SessionsInstructionsStatusInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionsInstructionsStatusOutput = {
+  readonly status: "ready" | "busy" | "unresolved"
+  readonly blockers: ReadonlyArray<string>
+}
+
+export type SessionsInstructionsApplyInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionsInstructionsApplyOutput = {
+  readonly version: 1
+  readonly generation: number
+  readonly reason: "created" | "legacy-backfill" | "location-rebound" | "init" | "instructions-applied"
+  readonly locationRevision: number
+  readonly environment:
+    | {
+        readonly harness: "OpenCode Transit"
+        readonly entrypoint: "opencode-transit"
+        readonly targetKind: "local" | "rexd"
+        readonly targetName: string
+        readonly directory: string
+        readonly projectRoot: string
+        readonly vcs?: string
+        readonly platform: string
+      }
+    | {
+        readonly harness: "OpenCode REXD"
+        readonly entrypoint: "opencode-rexd"
+        readonly targetKind: "local" | "rexd"
+        readonly targetName: string
+        readonly directory: string
+        readonly projectRoot: string
+        readonly vcs?: string
+        readonly platform: string
+      }
+  readonly instructions: ReadonlyArray<{
+    readonly id: string
+    readonly origin:
+      | "global-file"
+      | "target-file"
+      | "project-file"
+      | "configured-file"
+      | "configured-url"
+      | "nested-file"
+    readonly scope: "global" | "target" | "project" | "nested"
+    readonly source: string
+    readonly declaredBy?: string
+    readonly status: "loaded" | "ignored"
+    readonly failureStage?: "discovery" | "read" | "fetch"
+    readonly content?: string
+    readonly digest?: string
+  }>
+  readonly digest: string
+  readonly baseline: string
+  readonly sources: {
+    readonly [x: string]: {
+      readonly value: JsonValue
+      readonly baseline?: string
+      readonly removed?: string
+      readonly refresh?: "generation" | "activation"
+    }
+  }
+}
+
 export type SessionsHistoryInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
   readonly limit?: { readonly limit?: number | undefined; readonly after?: number | undefined }["limit"]
@@ -1098,7 +1162,7 @@ export type SessionsHistoryOutput = {
           readonly context?: {
             readonly version: 1
             readonly generation: number
-            readonly reason: "created" | "legacy-backfill" | "location-rebound" | "init"
+            readonly reason: "created" | "legacy-backfill" | "location-rebound" | "init" | "instructions-applied"
             readonly locationRevision: number
             readonly environment:
               | {
@@ -1298,7 +1362,7 @@ export type SessionsHistoryOutput = {
           readonly context: {
             readonly version: 1
             readonly generation: number
-            readonly reason: "created" | "legacy-backfill" | "location-rebound" | "init"
+            readonly reason: "created" | "legacy-backfill" | "location-rebound" | "init" | "instructions-applied"
             readonly locationRevision: number
             readonly environment:
               | {
@@ -1942,7 +2006,7 @@ export type SessionsEventsOutput =
         readonly context?: {
           readonly version: 1
           readonly generation: number
-          readonly reason: "created" | "legacy-backfill" | "location-rebound" | "init"
+          readonly reason: "created" | "legacy-backfill" | "location-rebound" | "init" | "instructions-applied"
           readonly locationRevision: number
           readonly environment:
             | {
@@ -2142,7 +2206,7 @@ export type SessionsEventsOutput =
         readonly context: {
           readonly version: 1
           readonly generation: number
-          readonly reason: "created" | "legacy-backfill" | "location-rebound" | "init"
+          readonly reason: "created" | "legacy-backfill" | "location-rebound" | "init" | "instructions-applied"
           readonly locationRevision: number
           readonly environment:
             | {
@@ -5584,6 +5648,154 @@ export type TargetsImportLegacyOutput = {
     }>
     readonly valid: boolean
   }
+}
+
+export type ServerHarnessSettingsOutput = {
+  readonly version: 1
+  readonly path: string
+  readonly home?: string
+  readonly revision: string
+  readonly global?: string
+  readonly targets: ReadonlyArray<{ readonly target: "local" | string; readonly reference: string }>
+  readonly diagnostics: ReadonlyArray<{
+    readonly kind: "invalid-config" | "unsupported-version" | "invalid-target" | "invalid-reference"
+    readonly field: string
+    readonly message: string
+  }>
+  readonly valid: boolean
+}
+
+export type ServerHarnessGlobalOutput = {
+  readonly scope: { readonly type: "global" } | { readonly type: "target"; readonly target: "local" | string }
+  readonly mode: "default" | "custom" | "unset" | "invalid"
+  readonly source?: {
+    readonly reference: string
+    readonly resolved: string
+    readonly status: "readable" | "missing" | "unreadable"
+    readonly content?: string
+    readonly size?: number
+    readonly digest?: string
+    readonly truncated?: boolean
+    readonly diagnostic?: string
+    readonly sharedTargets: ReadonlyArray<"local" | string>
+  }
+  readonly diagnostics: ReadonlyArray<{
+    readonly kind: "invalid-config" | "unsupported-version" | "invalid-target" | "invalid-reference"
+    readonly field: string
+    readonly message: string
+  }>
+}
+
+export type ServerHarnessTargetInput = { readonly target: { readonly target: "local" | string }["target"] }
+
+export type ServerHarnessTargetOutput = {
+  readonly scope: { readonly type: "global" } | { readonly type: "target"; readonly target: "local" | string }
+  readonly mode: "default" | "custom" | "unset" | "invalid"
+  readonly source?: {
+    readonly reference: string
+    readonly resolved: string
+    readonly status: "readable" | "missing" | "unreadable"
+    readonly content?: string
+    readonly size?: number
+    readonly digest?: string
+    readonly truncated?: boolean
+    readonly diagnostic?: string
+    readonly sharedTargets: ReadonlyArray<"local" | string>
+  }
+  readonly diagnostics: ReadonlyArray<{
+    readonly kind: "invalid-config" | "unsupported-version" | "invalid-target" | "invalid-reference"
+    readonly field: string
+    readonly message: string
+  }>
+}
+
+export type ServerHarnessValidateInput = { readonly reference: { readonly reference: string }["reference"] }
+
+export type ServerHarnessValidateOutput = {
+  readonly reference: string
+  readonly resolved: string
+  readonly status: "readable" | "missing" | "unreadable"
+  readonly content?: string
+  readonly size?: number
+  readonly digest?: string
+  readonly truncated?: boolean
+  readonly diagnostic?: string
+  readonly sharedTargets: ReadonlyArray<"local" | string>
+}
+
+export type ServerHarnessBindInput = {
+  readonly scope: {
+    readonly scope: { readonly type: "global" } | { readonly type: "target"; readonly target: "local" | string }
+    readonly reference: string
+    readonly expectedRevision: string
+  }["scope"]
+  readonly reference: {
+    readonly scope: { readonly type: "global" } | { readonly type: "target"; readonly target: "local" | string }
+    readonly reference: string
+    readonly expectedRevision: string
+  }["reference"]
+  readonly expectedRevision: {
+    readonly scope: { readonly type: "global" } | { readonly type: "target"; readonly target: "local" | string }
+    readonly reference: string
+    readonly expectedRevision: string
+  }["expectedRevision"]
+}
+
+export type ServerHarnessBindOutput = {
+  readonly version: 1
+  readonly path: string
+  readonly home?: string
+  readonly revision: string
+  readonly global?: string
+  readonly targets: ReadonlyArray<{ readonly target: "local" | string; readonly reference: string }>
+  readonly diagnostics: ReadonlyArray<{
+    readonly kind: "invalid-config" | "unsupported-version" | "invalid-target" | "invalid-reference"
+    readonly field: string
+    readonly message: string
+  }>
+  readonly valid: boolean
+}
+
+export type ServerHarnessResetGlobalInput = {
+  readonly expectedRevision: { readonly expectedRevision: string }["expectedRevision"]
+}
+
+export type ServerHarnessResetGlobalOutput = {
+  readonly version: 1
+  readonly path: string
+  readonly home?: string
+  readonly revision: string
+  readonly global?: string
+  readonly targets: ReadonlyArray<{ readonly target: "local" | string; readonly reference: string }>
+  readonly diagnostics: ReadonlyArray<{
+    readonly kind: "invalid-config" | "unsupported-version" | "invalid-target" | "invalid-reference"
+    readonly field: string
+    readonly message: string
+  }>
+  readonly valid: boolean
+}
+
+export type ServerHarnessUnbindInput = {
+  readonly target: { readonly target: "local" | string; readonly expectedRevision: string }["target"]
+  readonly expectedRevision: {
+    readonly target: "local" | string
+    readonly expectedRevision: string
+  }["expectedRevision"]
+}
+
+export type ServerHarnessUnbindOutput = {
+  readonly version: 1
+  readonly path: string
+  readonly home?: string
+  readonly revision: string
+  readonly global?: string
+  readonly targets: ReadonlyArray<{ readonly target: "local" | string; readonly reference: string }>
+  readonly diagnostics: ReadonlyArray<{
+    readonly kind: "invalid-config" | "unsupported-version" | "invalid-target" | "invalid-reference"
+    readonly field: string
+    readonly message: string
+  }>
+  readonly valid: boolean
 }
 
 export type EnvironmentListInput = {

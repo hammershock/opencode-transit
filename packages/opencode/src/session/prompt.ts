@@ -71,6 +71,7 @@ import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { ToolRegistry as LocationToolRegistry } from "@opencode-ai/core/tool/registry"
 import { TargetRegistry } from "@opencode-ai/core/target-registry"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
+import { SessionActivity } from "@opencode-ai/core/session/activity"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -165,6 +166,7 @@ const layer = Layer.effect(
     const locations = yield* LocationServiceMap.Service
     const targetRegistry = yield* TargetRegistry.Service
     const locationAccess = yield* SessionLocationAccess.Service
+    const activity = yield* SessionActivity.Service
     const { db } = database
     const sessionLocation = (sessionID: SessionID) => locationAccess.require(sessionID).pipe(Effect.catch(Effect.die))
     const contextAt = Effect.fn("SessionPrompt.contextAt")(function* (input: {
@@ -1497,7 +1499,11 @@ const layer = Layer.effect(
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
-      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
+      return yield* state.ensureRunning(
+        input.sessionID,
+        lastAssistant(input.sessionID),
+        activity.withActivity(input.sessionID, "process_execution", runLoop(input.sessionID)),
+      )
     })
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
@@ -1884,6 +1890,7 @@ export const node = LayerNode.make({
     LocationServiceMap.node,
     TargetRegistry.node,
     SessionLocationAccess.node,
+    SessionActivity.node,
   ],
 })
 

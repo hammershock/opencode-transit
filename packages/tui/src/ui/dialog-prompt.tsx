@@ -21,6 +21,7 @@ export type DialogPromptProps = {
         value: string
         cursor: number
         candidates: string[]
+        error?: string
       }
     | undefined
   >
@@ -42,9 +43,11 @@ export function DialogPrompt(props: DialogPromptProps) {
   const [completing, setCompleting] = createSignal(false)
   const [candidates, setCandidates] = createSignal<string[]>([])
   const [selected, setSelected] = createSignal(0)
+  const [completionError, setCompletionError] = createSignal<string>()
   const visibleCandidates = createMemo(() => promptCandidateWindow(candidates(), selected()))
   let textarea: TextareaRenderable
   let completedValue: string | undefined
+  let completionGeneration = 0
 
   function confirm() {
     if (props.busy) return
@@ -58,13 +61,30 @@ export function DialogPrompt(props: DialogPromptProps) {
     textarea.cursorOffset = Bun.stringWidth(value)
     setCandidates([])
     setSelected(0)
+    setCompletionError(undefined)
   }
 
   async function complete() {
     if (!props.complete || completing()) return
+    const generation = ++completionGeneration
+    const value = textarea.plainText
+    const cursor = textarea.cursorOffset
     setCompleting(true)
-    const result = await props.complete(textarea.plainText, textarea.cursorOffset).finally(() => setCompleting(false))
+    setCompletionError(undefined)
+    const result = await props.complete(value, cursor).catch((error) => ({
+      value,
+      cursor,
+      candidates: [],
+      error: error instanceof Error ? error.message : String(error),
+    }))
+    if (generation !== completionGeneration || textarea.plainText !== value) return
+    setCompleting(false)
     if (!result) return setCandidates([])
+    if (result.error) {
+      setCandidates([])
+      setCompletionError(result.error)
+      return
+    }
     if (result.candidates.length === 1) return apply(result.candidates[0]!)
     setCandidates(result.candidates)
     setSelected(0)
@@ -153,7 +173,7 @@ export function DialogPrompt(props: DialogPromptProps) {
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
           {props.title}
         </text>
-        <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
+        <text fg={theme.textMuted} onMouseUp={() => dialog.pop()}>
           esc
         </text>
       </box>
@@ -178,6 +198,9 @@ export function DialogPrompt(props: DialogPromptProps) {
               return
             }
             completedValue = undefined
+            completionGeneration++
+            setCompleting(false)
+            setCompletionError(undefined)
             setCandidates([])
           }}
         />
@@ -186,6 +209,9 @@ export function DialogPrompt(props: DialogPromptProps) {
         </Show>
         <Show when={completing()}>
           <Spinner color={theme.textMuted}>Reading directories…</Spinner>
+        </Show>
+        <Show when={completionError()}>
+          <text fg={theme.error}>{completionError()}</text>
         </Show>
         <Show when={candidates().length > 0}>
           <box flexDirection="column">

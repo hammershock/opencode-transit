@@ -21,7 +21,7 @@ describe("HarnessInstructions", () => {
     await fs.writeFile(fallback, "fallback")
     const settings = HarnessInstructions.make({ directory: config, home, lockDirectory: path.join(root.path, "locks") })
 
-    expect(await settings.list()).toMatchObject({ version: 1, global: undefined, targets: [], valid: true })
+    expect(await settings.list()).toMatchObject({ version: 1, home, global: undefined, targets: [], valid: true })
     expect(await settings.read({ type: "global" })).toMatchObject({
       mode: "default",
       source: { resolved: canonical, status: "readable", content: "canonical" },
@@ -67,7 +67,8 @@ describe("HarnessInstructions", () => {
       mode: "custom",
       source: { reference: "policies/global.md", resolved: relative, content: "global policy" },
     })
-    expect(await settings.read({ type: "target", target: first })).toMatchObject({
+    const selected = await settings.read({ type: "target", target: first })
+    expect(selected).toMatchObject({
       mode: "custom",
       source: {
         resolved: shared,
@@ -75,6 +76,7 @@ describe("HarnessInstructions", () => {
         sharedTargets: [first, second],
       },
     })
+    expect(selected.source?.digest).toBe(new Bun.CryptoHasher("sha256").update("shared target policy").digest("hex"))
     expect(await settings.validate("~/shared/target.md")).toMatchObject({
       resolved: shared,
       status: "readable",

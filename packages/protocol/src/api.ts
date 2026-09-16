@@ -23,6 +23,7 @@ import { CredentialGroup } from "./groups/credential"
 import { ProjectCopyGroup } from "./groups/project-copy"
 import { TargetGroup } from "./groups/target"
 import { makeEnvironmentGroup } from "./groups/environment"
+import { HarnessGroup } from "./groups/harness"
 
 // Protocol owns middleware placement, while Server injects concrete keys so Core service identities stay downstream.
 const makeApiFromGroup = <
@@ -56,6 +57,7 @@ const makeApiFromGroup = <
     .add(ReferenceGroup.middleware(locationMiddleware))
     .add(ProjectCopyGroup.middleware(locationMiddleware))
     .add(TargetGroup)
+    .add(HarnessGroup)
     .add(makeEnvironmentGroup(locationMiddleware, sessionLocationMiddleware))
     .annotateMerge(
       OpenApi.annotations({

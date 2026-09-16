@@ -34,6 +34,7 @@ export type InstructionSettingsDiagnostic = typeof InstructionSettingsDiagnostic
 export const InstructionSettingsSnapshot = Schema.Struct({
   version: Schema.Literal(1),
   path: AbsolutePath,
+  home: optional(AbsolutePath),
   revision: Revision,
   global: optional(Schema.NonEmptyString),
   targets: Schema.Array(InstructionBinding),
@@ -51,6 +52,8 @@ export const InstructionSource = Schema.Struct({
   status: InstructionFileStatus,
   content: optional(Schema.String),
   size: optional(NonNegativeInt),
+  digest: optional(Schema.String),
+  truncated: optional(Schema.Boolean),
   diagnostic: optional(Schema.String),
   sharedTargets: Schema.Array(InstructionTarget),
 }).annotate({ identifier: "Harness.InstructionSource" })

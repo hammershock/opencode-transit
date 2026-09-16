@@ -77,7 +77,13 @@ export type Instruction = typeof Instruction.Type
 export const Instructions = Schema.Array(Instruction).annotate({ identifier: "ModelContext.Instructions" })
 export type Instructions = typeof Instructions.Type
 
-export const GenerationReason = Schema.Literals(["created", "legacy-backfill", "location-rebound", "init"])
+export const GenerationReason = Schema.Literals([
+  "created",
+  "legacy-backfill",
+  "location-rebound",
+  "init",
+  "instructions-applied",
+])
 export type GenerationReason = typeof GenerationReason.Type
 
 /** Canonical, durable identity for one accepted Location-aware context generation. */

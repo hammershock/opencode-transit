@@ -73,6 +73,7 @@ export function make(options: {
     return Harness.InstructionSettingsSnapshot.make({
       version: 1,
       path: AbsolutePath.make(filepath),
+      home: AbsolutePath.make(options.home),
       revision: revision(config.text),
       global: decoded.global,
       targets: decoded.targets,
@@ -91,7 +92,12 @@ export function make(options: {
       .map((binding) => binding.target)
       .toSorted()
     const content = await fs.readFile(resolved, "utf8").then(
-      (value) => ({ status: "readable" as const, content: value, size: Buffer.byteLength(value) }),
+      (value) => ({
+        status: "readable" as const,
+        content: value,
+        size: Buffer.byteLength(value),
+        digest: createHash("sha256").update(value).digest("hex"),
+      }),
       (error: NodeJS.ErrnoException) =>
         error.code === "ENOENT"
           ? { status: "missing" as const, diagnostic: "Configured instruction file does not exist" }

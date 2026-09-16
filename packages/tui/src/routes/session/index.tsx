@@ -125,6 +125,8 @@ import {
 } from "../../util/session-message"
 import { skillCommand, type SkillCommandContext } from "../../command-toolkit/skill"
 import { useSkillManager } from "../../component/skill-manager"
+import { harnessCommand, type HarnessCommandContext } from "../../command-toolkit/harness"
+import { useHarnessManager } from "../../component/harness-manager"
 
 addDefaultParsers(parsers.parsers)
 
@@ -638,6 +640,7 @@ export function Session() {
   const syncSettings = useSyncSettings()
   const targetManager = useTargetManager()
   const skillManager = useSkillManager()
+  const harnessManager = useHarnessManager({ sessionID: route.sessionID, openSkills: skillManager.open })
   const coreCommandHost = createMemo(() =>
     createCommandHost<
       EnvironmentCommandContext &
@@ -646,12 +649,14 @@ export function Session() {
         SyncCommandContext &
         ApprovalModeCommandContext &
         ModelContextCommandContext &
-        SkillCommandContext
+        SkillCommandContext &
+        HarnessCommandContext
     >({
       register: (registry) => {
         environmentCommands.forEach((command) => registry.register(command))
         registry.register(targetCommand)
         registry.register(skillCommand)
+        registry.register(harnessCommand)
         sessionControlCommands.forEach((command) => registry.register(command))
         registry.register(approvalModeCommand)
         syncCommands.forEach((command) => registry.register(command))
@@ -688,6 +693,7 @@ export function Session() {
           abortSignal: new AbortController().signal,
           openTargetManager: targetManager.open,
           openSkillManager: skillManager.open,
+          openHarnessManager: harnessManager.open,
           sessionControls: {
             outputExpansion: setOutputExpansion,
             delete: async () => {

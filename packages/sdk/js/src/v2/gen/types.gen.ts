@@ -2995,6 +2995,11 @@ export type UnknownError1 = {
   ref?: string
 }
 
+export type SessionInstructionApplyStatus = {
+  status: "ready" | "busy" | "unresolved"
+  blockers: Array<string>
+}
+
 export type SessionDurableEvent =
   | SessionNextAgentSwitched
   | SessionNextModelSwitched
@@ -3392,7 +3397,7 @@ export type ModelContextSourceState = {
 export type ModelContextGeneration = {
   version: 1
   generation: number
-  reason: "created" | "legacy-backfill" | "location-rebound" | "init"
+  reason: "created" | "legacy-backfill" | "location-rebound" | "init" | "instructions-applied"
   locationRevision: number
   environment: ModelContextEnvironment
   instructions: ModelContextInstructions
@@ -7142,6 +7147,73 @@ export type SessionLocationRebindingRestoreResult = {
   }
   resolvedSessionIDs: Array<string>
   failedSessionIDs: Array<string>
+}
+
+export type HarnessInstructionTarget = "local" | string
+
+export type HarnessInstructionBinding = {
+  target: HarnessInstructionTarget
+  reference: string
+}
+
+export type HarnessInstructionSettingsDiagnostic = {
+  kind: "invalid-config" | "unsupported-version" | "invalid-target" | "invalid-reference"
+  field: string
+  message: string
+}
+
+export type HarnessInstructionSettingsSnapshot = {
+  version: 1
+  path: string
+  home?: string
+  revision: string
+  global?: string
+  targets: Array<HarnessInstructionBinding>
+  diagnostics: Array<HarnessInstructionSettingsDiagnostic>
+  valid: boolean
+}
+
+export type HarnessInstructionScope =
+  | {
+      type: "global"
+    }
+  | {
+      type: "target"
+      target: HarnessInstructionTarget
+    }
+
+export type HarnessInstructionSource = {
+  reference: string
+  resolved: string
+  status: "readable" | "missing" | "unreadable"
+  content?: string
+  size?: number
+  digest?: string
+  truncated?: boolean
+  diagnostic?: string
+  sharedTargets: Array<HarnessInstructionTarget>
+}
+
+export type HarnessInstructionRead = {
+  scope: HarnessInstructionScope
+  mode: "default" | "custom" | "unset" | "invalid"
+  source?: HarnessInstructionSource
+  diagnostics: Array<HarnessInstructionSettingsDiagnostic>
+}
+
+export type HarnessInstructionBindInput = {
+  scope: HarnessInstructionScope
+  reference: string
+  expectedRevision: string
+}
+
+export type HarnessInstructionRevisionInput = {
+  expectedRevision: string
+}
+
+export type HarnessInstructionTargetMutationInput = {
+  target: HarnessInstructionTarget
+  expectedRevision: string
 }
 
 export type EventModelsDevRefreshed = {
@@ -14630,6 +14702,91 @@ export type V2SessionModelContextResponses = {
 
 export type V2SessionModelContextResponse = V2SessionModelContextResponses[keyof V2SessionModelContextResponses]
 
+export type V2SessionInstructionsStatusData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/instructions/status"
+}
+
+export type V2SessionInstructionsStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionInstructionsStatusError =
+  V2SessionInstructionsStatusErrors[keyof V2SessionInstructionsStatusErrors]
+
+export type V2SessionInstructionsStatusResponses = {
+  /**
+   * SessionInstructionApplyStatus
+   */
+  200: SessionInstructionApplyStatus
+}
+
+export type V2SessionInstructionsStatusResponse =
+  V2SessionInstructionsStatusResponses[keyof V2SessionInstructionsStatusResponses]
+
+export type V2SessionInstructionsApplyData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/instructions/apply"
+}
+
+export type V2SessionInstructionsApplyErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionInstructionsApplyError = V2SessionInstructionsApplyErrors[keyof V2SessionInstructionsApplyErrors]
+
+export type V2SessionInstructionsApplyResponses = {
+  /**
+   * ModelContext.Generation
+   */
+  200: ModelContextGeneration
+}
+
+export type V2SessionInstructionsApplyResponse =
+  V2SessionInstructionsApplyResponses[keyof V2SessionInstructionsApplyResponses]
+
 export type V2SessionHistoryData = {
   body?: never
   path: {
@@ -18186,6 +18343,270 @@ export type V2TargetLegacyImportResponses = {
 }
 
 export type V2TargetLegacyImportResponse = V2TargetLegacyImportResponses[keyof V2TargetLegacyImportResponses]
+
+export type V2HarnessInstructionsSettingsData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/harness/instructions"
+}
+
+export type V2HarnessInstructionsSettingsErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type V2HarnessInstructionsSettingsError =
+  V2HarnessInstructionsSettingsErrors[keyof V2HarnessInstructionsSettingsErrors]
+
+export type V2HarnessInstructionsSettingsResponses = {
+  /**
+   * Harness.InstructionSettingsSnapshot
+   */
+  200: HarnessInstructionSettingsSnapshot
+}
+
+export type V2HarnessInstructionsSettingsResponse =
+  V2HarnessInstructionsSettingsResponses[keyof V2HarnessInstructionsSettingsResponses]
+
+export type V2HarnessInstructionsGlobalData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/api/harness/instructions/global"
+}
+
+export type V2HarnessInstructionsGlobalErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type V2HarnessInstructionsGlobalError =
+  V2HarnessInstructionsGlobalErrors[keyof V2HarnessInstructionsGlobalErrors]
+
+export type V2HarnessInstructionsGlobalResponses = {
+  /**
+   * Harness.InstructionRead
+   */
+  200: HarnessInstructionRead
+}
+
+export type V2HarnessInstructionsGlobalResponse =
+  V2HarnessInstructionsGlobalResponses[keyof V2HarnessInstructionsGlobalResponses]
+
+export type V2HarnessInstructionsTargetData = {
+  body?: never
+  path: {
+    target: HarnessInstructionTarget
+  }
+  query?: never
+  url: "/api/harness/instructions/target/{target}"
+}
+
+export type V2HarnessInstructionsTargetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type V2HarnessInstructionsTargetError =
+  V2HarnessInstructionsTargetErrors[keyof V2HarnessInstructionsTargetErrors]
+
+export type V2HarnessInstructionsTargetResponses = {
+  /**
+   * Harness.InstructionRead
+   */
+  200: HarnessInstructionRead
+}
+
+export type V2HarnessInstructionsTargetResponse =
+  V2HarnessInstructionsTargetResponses[keyof V2HarnessInstructionsTargetResponses]
+
+export type V2HarnessInstructionsValidateData = {
+  body: {
+    reference: string
+  }
+  path?: never
+  query?: never
+  url: "/api/harness/instructions/validate"
+}
+
+export type V2HarnessInstructionsValidateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type V2HarnessInstructionsValidateError =
+  V2HarnessInstructionsValidateErrors[keyof V2HarnessInstructionsValidateErrors]
+
+export type V2HarnessInstructionsValidateResponses = {
+  /**
+   * Harness.InstructionSource
+   */
+  200: HarnessInstructionSource
+}
+
+export type V2HarnessInstructionsValidateResponse =
+  V2HarnessInstructionsValidateResponses[keyof V2HarnessInstructionsValidateResponses]
+
+export type V2HarnessInstructionsBindData = {
+  body: HarnessInstructionBindInput
+  path?: never
+  query?: never
+  url: "/api/harness/instructions/binding"
+}
+
+export type V2HarnessInstructionsBindErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type V2HarnessInstructionsBindError = V2HarnessInstructionsBindErrors[keyof V2HarnessInstructionsBindErrors]
+
+export type V2HarnessInstructionsBindResponses = {
+  /**
+   * Harness.InstructionSettingsSnapshot
+   */
+  200: HarnessInstructionSettingsSnapshot
+}
+
+export type V2HarnessInstructionsBindResponse =
+  V2HarnessInstructionsBindResponses[keyof V2HarnessInstructionsBindResponses]
+
+export type V2HarnessInstructionsGlobalResetData = {
+  body: HarnessInstructionRevisionInput
+  path?: never
+  query?: never
+  url: "/api/harness/instructions/global/reset"
+}
+
+export type V2HarnessInstructionsGlobalResetErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type V2HarnessInstructionsGlobalResetError =
+  V2HarnessInstructionsGlobalResetErrors[keyof V2HarnessInstructionsGlobalResetErrors]
+
+export type V2HarnessInstructionsGlobalResetResponses = {
+  /**
+   * Harness.InstructionSettingsSnapshot
+   */
+  200: HarnessInstructionSettingsSnapshot
+}
+
+export type V2HarnessInstructionsGlobalResetResponse =
+  V2HarnessInstructionsGlobalResetResponses[keyof V2HarnessInstructionsGlobalResetResponses]
+
+export type V2HarnessInstructionsTargetUnbindData = {
+  body: HarnessInstructionTargetMutationInput
+  path?: never
+  query?: never
+  url: "/api/harness/instructions/target/unbind"
+}
+
+export type V2HarnessInstructionsTargetUnbindErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type V2HarnessInstructionsTargetUnbindError =
+  V2HarnessInstructionsTargetUnbindErrors[keyof V2HarnessInstructionsTargetUnbindErrors]
+
+export type V2HarnessInstructionsTargetUnbindResponses = {
+  /**
+   * Harness.InstructionSettingsSnapshot
+   */
+  200: HarnessInstructionSettingsSnapshot
+}
+
+export type V2HarnessInstructionsTargetUnbindResponse =
+  V2HarnessInstructionsTargetUnbindResponses[keyof V2HarnessInstructionsTargetUnbindResponses]
 
 export type V2EnvironmentListData = {
   body?: never
