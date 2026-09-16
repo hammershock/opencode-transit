@@ -5,7 +5,7 @@ status: accepted
 authors:
   - hammershock
 created: 2026-09-10
-updated: 2026-09-10
+updated: 2026-09-16
 depends-on:
   - 0002
   - 0003
@@ -66,7 +66,8 @@ provider / agent base prompt                    (model-scoped, not durable here)
   -> Location environment identity               (Session context)
   -> controller date and timezone                (dynamic Session context)
   -> controller-global ambient instructions      (Session context)
-  -> target project instructions: root -> cwd    (Session context)
+  -> controller-owned target instructions        (Session context)
+  -> Location project instructions: root -> cwd  (Session context)
   -> nested target instructions discovered later (durable extension)
   -> other upstream dynamic context sources       (owned by their existing contracts)
 ```
@@ -144,6 +145,22 @@ Location rebind 必须重新执行项目发现，并把结果写入新 generatio
 需要 target 当前时间的任务由 Agent 在目标 Location 显式执行命令查询。
 
 ## Instruction discovery
+
+### 2026-09-16 accepted amendment: controller-owned target rules
+
+维护者于 2026-09-16 明确授权在既有全局规则与 Location 项目规则之间加入一层 controller-owned target
+规则。规范顺序为 controller global -> controller target -> Location project/root/cwd/nested：
+
+1. local Location 读取 `<OpenCode user config directory>/targets/local/AGENTS.md`；
+2. Rexd Location 读取 `<OpenCode user config directory>/targets/<TargetID>/AGENTS.md`；
+3. 两者都只通过控制端文件系统读取，不因文件缺失或失败而在 target HOME 或 Location 文件系统查找替代文件；
+4. durable snapshot 和 `/context` 使用稳定的脱敏 target source label，不携带控制端绝对路径或 TargetID；同一代际内的
+   source identity 仍必须唯一；
+5. 该可选文件缺失时保持原行为，读取失败沿用本 RFC 的 ignored diagnostic；
+6. 它遵守既有 generation 冻结、`/init` refresh、Location rebind 原子 replacement 和同步语义。普通 turn、Session
+   re-entry 与 Skill activation 都不得热重载它。
+
+该决策不增加 target registry 字段，不发现 target HOME，也不改变 RFC-0012 的 Skill 可见性或独立 activation 语义。
 
 ### 全局规则
 
@@ -266,7 +283,8 @@ TUI 面板使用本 fork 的视觉规范，默认展示：
 1. 控制端和 target 使用故意不同的 cwd、项目根与 platform 时，录制的远程模型请求只包含 target 工作环境；控制端项目规则不会混入。
 2. local 与 Rexd 通过同一个 assembler 产生相同 schema，并分别从正确 filesystem 读取 source。
 3. target 侧 Git root、非 Git fallback、workspace root 分离和 symlink Location 均有 contract test。
-4. 全局规则、项目 `AGENTS.md`、OpenCode fallback、全局/项目 `instructions`、glob 和 URL 的来源及顺序有测试。
+4. 全局规则、controller-owned target `AGENTS.md`、项目 `AGENTS.md`、OpenCode fallback、全局/项目
+   `instructions`、glob 和 URL 的来源及顺序有测试。
 5. 初始链和按需嵌套链都按根到具体目录排序；重复 read/list 不重复追加。
 6. new、legacy-backfill、rebind 和 `/init` generation 均 durable、幂等，并在 prompt admission 前完成；普通 turn、重启和透明重连不读取规则。
 7. context baseline、replacement 和 extension 可以通过 RFC-0010 在 Mac 与 `mywindows` 双向同步，另一设备构造的模型请求使用相同正文、顺序和 digest。

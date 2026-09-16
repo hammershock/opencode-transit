@@ -17,8 +17,8 @@ export type ModelContextGeneration = {
   }
   instructions: ReadonlyArray<{
     id: string
-    origin: "global-file" | "project-file" | "configured-file" | "configured-url" | "nested-file"
-    scope: "global" | "project" | "nested"
+    origin: "global-file" | "target-file" | "project-file" | "configured-file" | "configured-url" | "nested-file"
+    scope: "global" | "target" | "project" | "nested"
     source: string
     declaredBy?: string
     status: "loaded" | "ignored"

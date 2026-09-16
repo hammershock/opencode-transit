@@ -56,8 +56,15 @@ export type ControllerTime = typeof ControllerTime.Type
 
 export const Instruction = Schema.Struct({
   id: Schema.NonEmptyString,
-  origin: Schema.Literals(["global-file", "project-file", "configured-file", "configured-url", "nested-file"]),
-  scope: Schema.Literals(["global", "project", "nested"]),
+  origin: Schema.Literals([
+    "global-file",
+    "target-file",
+    "project-file",
+    "configured-file",
+    "configured-url",
+    "nested-file",
+  ]),
+  scope: Schema.Literals(["global", "target", "project", "nested"]),
   source: Schema.NonEmptyString,
   declaredBy: optional(Schema.NonEmptyString),
   status: Schema.Literals(["loaded", "ignored"]),

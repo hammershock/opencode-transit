@@ -28,7 +28,7 @@ const key = SystemContext.Key.make("core/instructions")
 const fallbackNames = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"] as const
 
 type Side = "controller" | "target"
-type Scope = "global" | "project" | "nested"
+type Scope = "global" | "target" | "project" | "nested"
 type Origin = ModelContext.Instruction["origin"]
 
 export interface Interface {
@@ -95,6 +95,7 @@ const layer = Layer.effect(
       origin: Origin
       scope: Scope
       source: string
+      displaySource?: string
       declaredBy?: string
       content?: string
       failureStage?: "discovery" | "read" | "fetch"
@@ -103,7 +104,7 @@ const layer = Layer.effect(
         id: `instruction:${Hash.sha256(`${input.side}:${input.identity}`)}`,
         origin: input.origin,
         scope: input.scope,
-        source: display(input.source, input.side),
+        source: input.displaySource ?? display(input.source, input.side),
         declaredBy: input.declaredBy,
         status: input.failureStage ? "ignored" : "loaded",
         failureStage: input.failureStage,
@@ -117,6 +118,7 @@ const layer = Layer.effect(
       origin: Origin
       scope: Scope
       source: string
+      displaySource?: string
       declaredBy?: string
       failureStage: "discovery" | "read" | "fetch"
     }) {
@@ -133,6 +135,8 @@ const layer = Layer.effect(
       filesystem: FSUtil.Interface
       side: Side
       filepath: string
+      identity?: string
+      displaySource?: string
       origin: Origin
       scope: Scope
       declaredBy?: string
@@ -143,13 +147,13 @@ const layer = Layer.effect(
       if (content === undefined)
         return yield* ignored({
           ...input,
-          identity: input.filepath,
+          identity: input.identity ?? input.filepath,
           source: input.filepath,
           failureStage: "read",
         })
       return instruction({
         ...input,
-        identity: input.filepath,
+        identity: input.identity ?? input.filepath,
         source: input.filepath,
         content,
       })
@@ -175,6 +179,25 @@ const layer = Layer.effect(
         ]
       }
       return []
+    })
+
+    const targetFile = Effect.fn("InstructionContext.targetFile")(function* () {
+      const target =
+        location.target.type === "local"
+          ? path.join(global.config, "targets", "local", "AGENTS.md")
+          : path.join(global.config, "targets", location.target.targetID, "AGENTS.md")
+      if (!(yield* controllerFS.existsSafe(target))) return []
+      return [
+        yield* read({
+          filesystem: controllerFS,
+          side: "controller",
+          filepath: target,
+          identity: "target-profile/AGENTS.md",
+          displaySource: "<target-config>/AGENTS.md",
+          origin: "target-file",
+          scope: "target",
+        }),
+      ]
     })
 
     const projectFiles = Effect.fn("InstructionContext.projectFiles")(function* () {
@@ -357,9 +380,10 @@ const layer = Layer.effect(
     })
 
     const observeSources = Effect.fn("InstructionContext.observeSources")(function* () {
-      return yield* Effect.all([globalFile(), configured("global"), projectFiles(), configured("project")], {
-        concurrency: "unbounded",
-      }).pipe(Effect.map((groups) => Array.dedupeWith(groups.flat(), (left, right) => left.id === right.id)))
+      return yield* Effect.all(
+        [globalFile(), configured("global"), targetFile(), projectFiles(), configured("project")],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.map((groups) => Array.dedupeWith(groups.flat(), (left, right) => left.id === right.id)))
     })
 
     const observe = Effect.fn("InstructionContext.observe")(function* () {

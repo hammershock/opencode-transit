@@ -911,8 +911,14 @@ export type SessionsModelContextOutput = {
         }
     readonly instructions: ReadonlyArray<{
       readonly id: string
-      readonly origin: "global-file" | "project-file" | "configured-file" | "configured-url" | "nested-file"
-      readonly scope: "global" | "project" | "nested"
+      readonly origin:
+        | "global-file"
+        | "target-file"
+        | "project-file"
+        | "configured-file"
+        | "configured-url"
+        | "nested-file"
+      readonly scope: "global" | "target" | "project" | "nested"
       readonly source: string
       readonly declaredBy?: string
       readonly status: "loaded" | "ignored"
@@ -1117,8 +1123,14 @@ export type SessionsHistoryOutput = {
                 }
             readonly instructions: ReadonlyArray<{
               readonly id: string
-              readonly origin: "global-file" | "project-file" | "configured-file" | "configured-url" | "nested-file"
-              readonly scope: "global" | "project" | "nested"
+              readonly origin:
+                | "global-file"
+                | "target-file"
+                | "project-file"
+                | "configured-file"
+                | "configured-url"
+                | "nested-file"
+              readonly scope: "global" | "target" | "project" | "nested"
               readonly source: string
               readonly declaredBy?: string
               readonly status: "loaded" | "ignored"
@@ -1311,8 +1323,14 @@ export type SessionsHistoryOutput = {
                 }
             readonly instructions: ReadonlyArray<{
               readonly id: string
-              readonly origin: "global-file" | "project-file" | "configured-file" | "configured-url" | "nested-file"
-              readonly scope: "global" | "project" | "nested"
+              readonly origin:
+                | "global-file"
+                | "target-file"
+                | "project-file"
+                | "configured-file"
+                | "configured-url"
+                | "nested-file"
+              readonly scope: "global" | "target" | "project" | "nested"
               readonly source: string
               readonly declaredBy?: string
               readonly status: "loaded" | "ignored"
@@ -1949,8 +1967,14 @@ export type SessionsEventsOutput =
               }
           readonly instructions: ReadonlyArray<{
             readonly id: string
-            readonly origin: "global-file" | "project-file" | "configured-file" | "configured-url" | "nested-file"
-            readonly scope: "global" | "project" | "nested"
+            readonly origin:
+              | "global-file"
+              | "target-file"
+              | "project-file"
+              | "configured-file"
+              | "configured-url"
+              | "nested-file"
+            readonly scope: "global" | "target" | "project" | "nested"
             readonly source: string
             readonly declaredBy?: string
             readonly status: "loaded" | "ignored"
@@ -2143,8 +2167,14 @@ export type SessionsEventsOutput =
               }
           readonly instructions: ReadonlyArray<{
             readonly id: string
-            readonly origin: "global-file" | "project-file" | "configured-file" | "configured-url" | "nested-file"
-            readonly scope: "global" | "project" | "nested"
+            readonly origin:
+              | "global-file"
+              | "target-file"
+              | "project-file"
+              | "configured-file"
+              | "configured-url"
+              | "nested-file"
+            readonly scope: "global" | "target" | "project" | "nested"
             readonly source: string
             readonly declaredBy?: string
             readonly status: "loaded" | "ignored"
