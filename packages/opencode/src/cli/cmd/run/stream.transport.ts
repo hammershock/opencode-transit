@@ -101,7 +101,7 @@ export type SessionTurnInput = {
 
 export type SessionTransport = {
   runPromptTurn(input: SessionTurnInput): Promise<void>
-  selectSubagent(sessionID: string | undefined): void
+  selectSubagent(key: string | undefined): void
   replayOnResize(input: SessionResizeReplayInput): Promise<boolean>
   close(): Promise<void>
 }
@@ -365,24 +365,26 @@ function traceTabs(trace: Trace | undefined, prev: FooterSubagentTab[], next: Fo
   const before = new Map(prev.map((item) => [item.key ?? item.sessionID, item]))
   const after = new Map(next.map((item) => [item.key ?? item.sessionID, item]))
 
-  for (const [sessionID, tab] of after) {
-    if (sameSubagentTab(before.get(sessionID), tab)) {
+  for (const [key, tab] of after) {
+    if (sameSubagentTab(before.get(key), tab)) {
       continue
     }
 
     trace?.write("subagent.tab", {
-      sessionID,
+      sessionID: tab.sessionID,
+      key,
       tab,
     })
   }
 
-  for (const sessionID of before.keys()) {
-    if (after.has(sessionID)) {
+  for (const [key, tab] of before) {
+    if (after.has(key)) {
       continue
     }
 
     trace?.write("subagent.tab", {
-      sessionID,
+      sessionID: tab.sessionID,
+      key,
       cleared: true,
     })
   }
@@ -1412,13 +1414,13 @@ function createLayer(input: StreamInput) {
           return
         })
 
-        const selectSubagent = Effect.fn("RunStreamTransport.selectSubagent")((sessionID: string | undefined) =>
+        const selectSubagent = Effect.fn("RunStreamTransport.selectSubagent")((key: string | undefined) =>
           Effect.sync(() => {
             if (closed) {
               return
             }
 
-            const next = sessionID && state.subagent.tabs.has(sessionID) ? sessionID : undefined
+            const next = key && state.subagent.tabs.has(key) ? key : undefined
             if (state.selectedSubagent === next) {
               return
             }
@@ -1458,7 +1460,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
 
   return {
     runPromptTurn: (next) => runtime.runPromise((svc) => svc.runPromptTurn(next)),
-    selectSubagent: (sessionID) => runtime.runSync((svc) => svc.selectSubagent(sessionID)),
+    selectSubagent: (key) => runtime.runSync((svc) => svc.selectSubagent(key)),
     replayOnResize: (next) => runtime.runPromise((svc) => svc.replayOnResize(next)),
     close: () => runtime.runPromise((svc) => svc.close()),
   }

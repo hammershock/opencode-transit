@@ -179,7 +179,7 @@ export type FooterPromptRoute =
   | { type: "composer" }
   | { type: "queued-menu" }
   | { type: "subagent-menu" }
-  | { type: "subagent"; sessionID: string }
+  | { type: "subagent"; key: string }
   | { type: "command" }
   | { type: "skill" }
   | { type: "model" }

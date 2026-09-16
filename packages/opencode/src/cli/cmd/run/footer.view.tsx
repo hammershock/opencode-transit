@@ -124,7 +124,7 @@ export type RunFooterViewProps = {
   onRows: (rows: number) => void
   onLayout: (input: { route: FooterPromptRoute; autocomplete: boolean; subagentRows: number }) => void
   onStatus: (text: string) => void
-  onSubagentSelect?: (sessionID: string | undefined) => void
+  onSubagentSelect?: (key: string | undefined) => void
   onQueuedRemove: (messageID: string) => Promise<boolean>
 }
 
@@ -174,7 +174,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   )
   const selected = createMemo(() => {
     const current = route()
-    return current.type === "subagent" ? current.sessionID : undefined
+    return current.type === "subagent" ? current.key : undefined
   })
   const tabs = createMemo(() => subagent().tabs)
   const activeTabs = createMemo(() => tabs().filter((item) => item.status === "running"))
@@ -196,7 +196,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   })
   const detail = createMemo(() => {
     const current = route()
-    return current.type === "subagent" ? subagent().details[current.sessionID] : undefined
+    return current.type === "subagent" ? subagent().details[current.key] : undefined
   })
   const command = useKeymapSelector(
     (keymap: OpenTuiKeymap) =>
@@ -392,9 +392,9 @@ export function RunFooterView(props: RunFooterViewProps) {
     setRoute({ type: "composer" })
   }
 
-  const openTab = (sessionID: string) => {
-    setRoute({ type: "subagent", sessionID })
-    props.onSubagentSelect?.(sessionID)
+  const openTab = (key: string) => {
+    setRoute({ type: "subagent", key })
+    props.onSubagentSelect?.(key)
   }
 
   const closeTab = () => {
@@ -410,7 +410,7 @@ export function RunFooterView(props: RunFooterViewProps) {
     const routeState = route()
     const current =
       routeState.type === "subagent"
-        ? tabs().findIndex((item) => (item.key ?? item.sessionID) === routeState.sessionID)
+        ? tabs().findIndex((item) => (item.key ?? item.sessionID) === routeState.key)
         : -1
     const index = current === -1 ? 0 : (current + dir + tabs().length) % tabs().length
     const next = tabs()[index]
@@ -664,7 +664,7 @@ export function RunFooterView(props: RunFooterViewProps) {
       return
     }
 
-    if (tabs().some((item) => (item.key ?? item.sessionID) === current.sessionID)) {
+    if (tabs().some((item) => (item.key ?? item.sessionID) === current.key)) {
       return
     }
 

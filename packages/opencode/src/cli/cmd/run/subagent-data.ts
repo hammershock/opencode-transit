@@ -731,12 +731,12 @@ export function snapshotSubagentData(data: SubagentData): FooterSubagentState {
 
 export function snapshotSelectedSubagentData(
   data: SubagentData,
-  selectedSessionID: string | undefined,
+  selectedKey: string | undefined,
 ): FooterSubagentState {
-  const tab = selectedSessionID ? data.tabs.get(selectedSessionID) : undefined
+  const tab = selectedKey ? data.tabs.get(selectedKey) : undefined
   const detail = tab ? data.details.get(tab.sessionID) : undefined
 
-  return snapshotState(data, detail && tab ? { [selectedSessionID!]: snapshotDetail(detail, tab) } : {})
+  return snapshotState(data, detail && tab ? { [selectedKey!]: snapshotDetail(detail, tab) } : {})
 }
 
 export function bootstrapSubagentData(input: BootstrapSubagentInput) {
