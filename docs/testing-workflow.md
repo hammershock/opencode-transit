@@ -193,7 +193,7 @@ For account-wide cloud reset, verify the manifest is invalidated before object c
 - fork Core commands resolve to the same identity and availability from slash autocomplete, direct submit and `Ctrl+P`.
 - User Shell and path completion share the eight-row candidate interaction; accepting a candidate never submits or executes.
 - `/permissions` distinguishes device Default from durable Session mode; changing either leaves the other unchanged, and old Sessions open in normal mode.
-- `/sessions` keeps search separate from the Path and Target rows; `Tab` changes row focus, left/right changes the focused row, and `Cwd` only coexists with `local`.
+- `/sessions` keeps search separate from the independent Path and Target rows; `Tab` changes row focus and left/right changes only the focused value. Apply both filters to the deduplicated local-plus-cloud candidate set across projects; verify all four combinations, exact normalized Cwd matching, persisted values, delayed metadata, and discovery of another project's local Session without cloud metadata.
 - list statuses use the shared symbols, remain right-aligned as asynchronous state changes, expose long errors only in focused detail and contain no emoji.
 - v1 sync setup and management are present only in the TUI; Web/Desktop retain upstream behavior and expose no partial sync product flow.
 

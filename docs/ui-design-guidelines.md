@@ -27,7 +27,7 @@ This document defines the normative interaction and presentation rules for fork-
   Target: [local] All mywindows a100-2gpu
   ```
 
-  The search input is separate. `Tab` moves between Path and Target; left/right changes the focused value. `Cwd` only coexists with `local`; selecting another target or Target `All` moves Path to `All`.
+  The search input is separate. `Tab` moves between Path and Target; left/right changes only the focused value. Both filters are independent and all combinations are valid. Apply them after merging local Sessions across projects with cloud metadata; `All` must not retain a hidden project restriction.
 
 ## Status language and symbols
 
