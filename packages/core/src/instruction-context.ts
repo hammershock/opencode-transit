@@ -11,6 +11,7 @@ import { makeLocationNode } from "./effect/app-node"
 import { Flag } from "./flag/flag"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
+import { HarnessInstructions } from "./harness/instructions"
 import { Location } from "./location"
 import { SystemContext } from "./system-context/index"
 import { SystemContextRegistry } from "./system-context/registry"
@@ -28,7 +29,7 @@ const key = SystemContext.Key.make("core/instructions")
 const fallbackNames = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"] as const
 
 type Side = "controller" | "target"
-type Scope = "global" | "project" | "nested"
+type Scope = "global" | "target" | "project" | "nested"
 type Origin = ModelContext.Instruction["origin"]
 
 export interface Interface {
@@ -51,6 +52,7 @@ const layer = Layer.effect(
     const controllerFS = yield* ControllerFileSystem.Service
     const config = yield* Config.Service
     const global = yield* Global.Service
+    const harness = yield* HarnessInstructions.Service
     const location = yield* Location.Service
     const registry = yield* SystemContextRegistry.Service
     const { db } = yield* Database.Service
@@ -95,6 +97,7 @@ const layer = Layer.effect(
       origin: Origin
       scope: Scope
       source: string
+      displaySource?: string
       declaredBy?: string
       content?: string
       failureStage?: "discovery" | "read" | "fetch"
@@ -103,7 +106,7 @@ const layer = Layer.effect(
         id: `instruction:${Hash.sha256(`${input.side}:${input.identity}`)}`,
         origin: input.origin,
         scope: input.scope,
-        source: display(input.source, input.side),
+        source: input.displaySource ?? display(input.source, input.side),
         declaredBy: input.declaredBy,
         status: input.failureStage ? "ignored" : "loaded",
         failureStage: input.failureStage,
@@ -117,6 +120,7 @@ const layer = Layer.effect(
       origin: Origin
       scope: Scope
       source: string
+      displaySource?: string
       declaredBy?: string
       failureStage: "discovery" | "read" | "fetch"
     }) {
@@ -133,6 +137,8 @@ const layer = Layer.effect(
       filesystem: FSUtil.Interface
       side: Side
       filepath: string
+      identity?: string
+      displaySource?: string
       origin: Origin
       scope: Scope
       declaredBy?: string
@@ -143,38 +149,71 @@ const layer = Layer.effect(
       if (content === undefined)
         return yield* ignored({
           ...input,
-          identity: input.filepath,
+          identity: input.identity ?? input.filepath,
           source: input.filepath,
           failureStage: "read",
         })
       return instruction({
         ...input,
-        identity: input.filepath,
+        identity: input.identity ?? input.filepath,
         source: input.filepath,
         content,
       })
     })
 
-    const globalFile = Effect.fn("InstructionContext.globalFile")(function* () {
-      const candidates = [
-        { filepath: path.join(global.config, "AGENTS.md"), origin: "global-file" as const },
-        ...(!Flag.OPENCODE_DISABLE_CLAUDE_CODE_PROMPT
-          ? [{ filepath: path.join(global.home, ".claude", "CLAUDE.md"), origin: "global-file" as const }]
-          : []),
-      ]
-      for (const candidate of candidates) {
-        if (!(yield* controllerFS.existsSafe(candidate.filepath))) continue
+    const harnessFile = Effect.fn("InstructionContext.harnessFile")(function* (scope: "global" | "target") {
+      const selected = yield* Effect.tryPromise({
+        try: () =>
+          harness.read(
+            scope === "global"
+              ? { type: "global" }
+              : {
+                  type: "target",
+                  target: location.target.type === "local" ? "local" : location.target.targetID,
+                },
+          ),
+        catch: () => new Error("Harness instruction settings are unavailable"),
+      }).pipe(Effect.exit)
+      const origin = scope === "global" ? ("global-file" as const) : ("target-file" as const)
+      const label = scope === "global" ? "<global-instructions>" : "<target-instructions>"
+      if (Exit.isFailure(selected) || selected.value.mode === "invalid")
         return [
-          yield* read({
-            filesystem: controllerFS,
+          yield* ignored({
             side: "controller",
-            filepath: candidate.filepath,
-            origin: candidate.origin,
-            scope: "global",
+            identity: `${scope}-profile/settings`,
+            origin,
+            scope,
+            source: label,
+            displaySource: label,
+            failureStage: "discovery",
           }),
         ]
-      }
-      return []
+      if (!selected.value.source) return []
+      const custom = selected.value.mode === "custom"
+      const source = selected.value.source
+      if (source.status !== "readable")
+        return [
+          yield* ignored({
+            side: "controller",
+            identity: custom ? `${scope}-profile/instructions` : source.resolved,
+            origin,
+            scope,
+            source: source.resolved,
+            displaySource: custom ? label : undefined,
+            failureStage: "read",
+          }),
+        ]
+      return [
+        instruction({
+          side: "controller",
+          identity: custom ? `${scope}-profile/instructions` : source.resolved,
+          origin,
+          scope,
+          source: source.resolved,
+          displaySource: custom ? label : undefined,
+          content: source.content,
+        }),
+      ]
     })
 
     const projectFiles = Effect.fn("InstructionContext.projectFiles")(function* () {
@@ -357,9 +396,10 @@ const layer = Layer.effect(
     })
 
     const observeSources = Effect.fn("InstructionContext.observeSources")(function* () {
-      return yield* Effect.all([globalFile(), configured("global"), projectFiles(), configured("project")], {
-        concurrency: "unbounded",
-      }).pipe(Effect.map((groups) => Array.dedupeWith(groups.flat(), (left, right) => left.id === right.id)))
+      return yield* Effect.all(
+        [harnessFile("global"), configured("global"), harnessFile("target"), projectFiles(), configured("project")],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.map((groups) => Array.dedupeWith(groups.flat(), (left, right) => left.id === right.id)))
     })
 
     const observe = Effect.fn("InstructionContext.observe")(function* () {
@@ -549,6 +589,7 @@ export const node = makeLocationNode({
     EventV2.node,
     FSUtil.locationNode,
     Global.node,
+    HarnessInstructions.node,
     Location.node,
     SystemContextRegistry.node,
   ],

@@ -462,6 +462,15 @@ describe("SessionSync", () => {
         digest: "digest-global",
       },
       {
+        id: "target-profile",
+        origin: "target-file",
+        scope: "target",
+        source: "<target-instructions>",
+        status: "loaded",
+        content: "controller target rules",
+        digest: "digest-target",
+      },
+      {
         id: "project",
         origin: "project-file",
         scope: "project",
@@ -484,7 +493,7 @@ describe("SessionSync", () => {
         [ModelContext.Key.make("core/environment")]: { value: environment, baseline: "environment" },
         [ModelContext.Key.make("core/instructions")]: {
           value: instructions,
-          baseline: "controller rules\ntarget rules",
+          baseline: "controller rules\ncontroller target rules\ntarget rules",
         },
       },
     })
@@ -522,7 +531,12 @@ describe("SessionSync", () => {
 
         const hydrated = yield* SessionContextEpoch.inspect(database, sessionID)
         expect(hydrated).toEqual(context)
-        expect(hydrated?.instructions.map((item) => item.content)).toEqual(["controller rules", "target rules"])
+        expect(hydrated?.instructions.map((item) => item.content)).toEqual([
+          "controller rules",
+          "controller target rules",
+          "target rules",
+        ])
+        expect(JSON.stringify(hydrated)).not.toContain("targets/00000000")
       }).pipe(Effect.scoped, Effect.provide(layer)),
     )
   })

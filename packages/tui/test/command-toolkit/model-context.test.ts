@@ -33,6 +33,15 @@ const generation: ModelContextGeneration = {
       digest: "1111111111111111",
     },
     {
+      id: "target",
+      origin: "target-file",
+      scope: "target",
+      source: "<target-config>/AGENTS.md",
+      status: "loaded",
+      content: "target rules",
+      digest: "2222222222222222",
+    },
+    {
       id: "project",
       origin: "project-file",
       scope: "project",
@@ -148,6 +157,7 @@ describe("model context inspector", () => {
       ["Environment", "mywindows · rexd"],
       ["Context", "core/date"],
       ["Instructions", "/controller/AGENTS.md"],
+      ["Instructions", "<target-config>/AGENTS.md"],
       ["Instructions", "/workspace/project/AGENTS.md"],
       ["Context", "core/skills"],
       ["Skills", "available_skills"],
@@ -155,14 +165,15 @@ describe("model context inspector", () => {
       ["Subagents", "research"],
     ])
     expect(options[2]?.value.content).toBe("global rules")
-    expect(options[3]?.footer).toBe("read failed")
-    expect(options[5]?.description).toBe("1 available · controller-local")
-    expect(options[5]?.value.content).toBe(generation.skillGuidance!)
-    expect(options[6]?.description).toBe("partial · 1 available · device-local")
-    expect(options[6]?.details).toEqual(["renderer output truncated", "Usage data unavailable"])
-    expect(options[6]?.value.content).toBe(generation.subagentGuidance!)
-    expect(options[7]?.description).toBe("openai/gpt-5")
-    expect(options[7]?.details).toContain("ResearchBench 82% · stale · 2026-09-14T08:00:00.000Z")
+    expect(options[3]?.value.content).toBe("target rules")
+    expect(options[4]?.footer).toBe("read failed")
+    expect(options[6]?.description).toBe("1 available · controller-local")
+    expect(options[6]?.value.content).toBe(generation.skillGuidance!)
+    expect(options[7]?.description).toBe("partial · 1 available · device-local")
+    expect(options[7]?.details).toEqual(["renderer output truncated", "Usage data unavailable"])
+    expect(options[7]?.value.content).toBe(generation.subagentGuidance!)
+    expect(options[8]?.description).toBe("openai/gpt-5")
+    expect(options[8]?.details).toContain("ResearchBench 82% · stale · 2026-09-14T08:00:00.000Z")
   })
 
   test("reports disabled subagent economics without synthetic guidance", () => {

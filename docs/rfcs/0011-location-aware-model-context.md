@@ -5,7 +5,7 @@ status: accepted
 authors:
   - hammershock
 created: 2026-09-10
-updated: 2026-09-10
+updated: 2026-09-16
 depends-on:
   - 0002
   - 0003
@@ -66,7 +66,8 @@ provider / agent base prompt                    (model-scoped, not durable here)
   -> Location environment identity               (Session context)
   -> controller date and timezone                (dynamic Session context)
   -> controller-global ambient instructions      (Session context)
-  -> target project instructions: root -> cwd    (Session context)
+  -> controller-owned target instructions        (Session context)
+  -> Location project instructions: root -> cwd  (Session context)
   -> nested target instructions discovered later (durable extension)
   -> other upstream dynamic context sources       (owned by their existing contracts)
 ```
@@ -144,6 +145,30 @@ Location rebind 必须重新执行项目发现，并把结果写入新 generatio
 需要 target 当前时间的任务由 Agent 在目标 Location 显式执行命令查询。
 
 ## Instruction discovery
+
+### 2026-09-16 accepted amendment: configurable controller-owned rules
+
+维护者于 2026-09-16 明确授权在既有全局规则与 Location 项目规则之间加入一层 controller-owned target
+规则，并以共享文件引用设计取代尚未发布的固定 per-target sidecar 提案。规范顺序为 controller global -> controller
+target -> Location project/root/cwd/nested：
+
+1. 一个 versioned、device-local controller settings source 同时拥有 global 与 target instruction bindings；不得在
+   target registry 或第二份配置中复制 binding fact；
+2. global binding 未设置时保留 `<OpenCode user config directory>/AGENTS.md` 与 `~/.claude/CLAUDE.md` fallback；设置后只读取
+   显式文件，不因缺失或失败回退 default；
+3. local 或 Rexd target binding 未设置时没有 target rule；设置后读取它引用的 controller 文件。多个 target 可以引用同一
+   文件；unbind 一个 target 不删除文件或改变其他 target；
+4. 相对引用以 controller user-config directory 为基准，绝对路径属于 controller filesystem，`~/` 只使用 controller
+   HOME。不得以 remote cwd 或 target HOME 解释；
+5. durable snapshot 和 `/context` 对自定义 global/target 来源使用稳定脱敏 label，不携带 controller 绝对路径或
+   TargetID；实际 configured reference、resolved path、文件状态与共享引用信息只属于 device-local settings view；
+6. 显式 missing、unreadable 或 invalid settings 产生 ignored diagnostic，禁止静默采用另一个 policy；
+7. settings mutation 使用 typed、atomic、revision-aware service。保存只影响 future admission；普通 turn、Session
+   re-entry 与 Skill activation 都不得热重载已经接纳的 instruction；
+8. Location rebind 仍原子建立包含新 target binding 与新 Location rules 的 replacement generation，sync 仍传输已接纳正文。
+
+该决策不发现 target HOME，不改变 RFC-0012 的 Skill 可见性或独立 activation 语义，也不禁止 private target policy
+记录必要的稳定路径或本地 identity convention；但 secret value 永远不得写入 instruction file。
 
 ### 全局规则
 
@@ -266,7 +291,8 @@ TUI 面板使用本 fork 的视觉规范，默认展示：
 1. 控制端和 target 使用故意不同的 cwd、项目根与 platform 时，录制的远程模型请求只包含 target 工作环境；控制端项目规则不会混入。
 2. local 与 Rexd 通过同一个 assembler 产生相同 schema，并分别从正确 filesystem 读取 source。
 3. target 侧 Git root、非 Git fallback、workspace root 分离和 symlink Location 均有 contract test。
-4. 全局规则、项目 `AGENTS.md`、OpenCode fallback、全局/项目 `instructions`、glob 和 URL 的来源及顺序有测试。
+4. 全局规则、controller-owned target `AGENTS.md`、项目 `AGENTS.md`、OpenCode fallback、全局/项目
+   `instructions`、glob 和 URL 的来源及顺序有测试。
 5. 初始链和按需嵌套链都按根到具体目录排序；重复 read/list 不重复追加。
 6. new、legacy-backfill、rebind 和 `/init` generation 均 durable、幂等，并在 prompt admission 前完成；普通 turn、重启和透明重连不读取规则。
 7. context baseline、replacement 和 extension 可以通过 RFC-0010 在 Mac 与 `mywindows` 双向同步，另一设备构造的模型请求使用相同正文、顺序和 digest。

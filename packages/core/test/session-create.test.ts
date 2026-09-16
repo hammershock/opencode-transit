@@ -10,12 +10,14 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventTable } from "@opencode-ai/core/event/sql"
 import { Location } from "@opencode-ai/core/location"
+import { HarnessInstructions } from "@opencode-ai/core/harness/instructions"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionContextEpoch } from "@opencode-ai/core/session/context-epoch"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
@@ -27,6 +29,7 @@ import { SessionContextEpochTable, SessionTable } from "@opencode-ai/core/sessio
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
+import { Harness } from "@opencode-ai/schema/harness"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -54,10 +57,106 @@ const it = testEffect(
     ],
   ),
 )
+const rebindHarnessState = { content: "target A policy" }
+const unusedHarnessMethod = async (): Promise<never> => {
+  throw new Error("Harness settings mutation is not used by this test")
+}
+const harnessInstructions = Layer.succeed(
+  HarnessInstructions.Service,
+  HarnessInstructions.Service.of({
+    list: unusedHarnessMethod,
+    read: async (scope) => {
+      if (scope.type === "global") return Harness.InstructionRead.make({ scope, mode: "default", diagnostics: [] })
+      const content = rebindHarnessState.content
+      return Harness.InstructionRead.make({
+        scope,
+        mode: "custom",
+        source: Harness.InstructionSource.make({
+          reference: "policies/local.md",
+          resolved: AbsolutePath.make("/controller/policies/local.md"),
+          status: "readable",
+          content,
+          size: content.length,
+          sharedTargets: ["local"],
+        }),
+        diagnostics: [],
+      })
+    },
+    resetGlobal: unusedHarnessMethod,
+    bind: unusedHarnessMethod,
+    unbind: unusedHarnessMethod,
+    validate: unusedHarnessMethod,
+  }),
+)
+const rebindIt = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([
+      Database.node,
+      EventV2.node,
+      SessionProjector.node,
+      SessionStore.node,
+      SessionLocationRuntime.node,
+      SessionV2.node,
+    ]),
+    [
+      [ProjectV2.node, projects],
+      [SessionExecution.node, SessionExecution.noopLayer],
+      [HarnessInstructions.node, harnessInstructions],
+    ],
+  ),
+)
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const id = SessionV2.ID.create()
 
 describe("SessionV2.create", () => {
+  rebindIt.live("atomically replaces admitted target instructions during a real Session rebind", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (destination) => Effect.promise(() => destination[Symbol.asyncDispose]()),
+        ).pipe(
+          Effect.flatMap((destination) =>
+            Effect.gen(function* () {
+              rebindHarnessState.content = "target A policy"
+              const session = yield* SessionV2.Service
+              const database = (yield* Database.Service).db
+              const created = yield* session.create({
+                location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
+              })
+              const before = yield* SessionContextEpoch.inspect(database, created.id)
+              expect(before?.instructions).toMatchObject([
+                { scope: "target", source: "<target-instructions>", content: "target A policy" },
+              ])
+
+              rebindHarnessState.content = "target B policy"
+              expect(
+                yield* session.rebindLocation({
+                  sessionID: created.id,
+                  expectedRevision: created.locationRevision,
+                  destination: Location.Ref.make({ directory: AbsolutePath.make(destination.path) }),
+                }),
+              ).toMatchObject({ status: "rebound", revision: created.locationRevision + 1 })
+              const after = yield* SessionContextEpoch.inspect(database, created.id)
+              expect(after).toMatchObject({
+                generation: (before?.generation ?? 0) + 1,
+                reason: "location-rebound",
+                locationRevision: created.locationRevision + 1,
+              })
+              expect(after?.instructions).toMatchObject([
+                { scope: "target", source: "<target-instructions>", content: "target B policy" },
+              ])
+              expect(after?.baseline).not.toContain("target A policy")
+            }),
+          ),
+        ),
+      ),
+    ),
+  )
+
   it.effect("guards direct Core mutators when the Session Location is unresolved", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
