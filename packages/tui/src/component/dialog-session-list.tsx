@@ -31,7 +31,6 @@ import { TextAttributes } from "@opentui/core"
 import { useTuiPaths } from "../context/runtime"
 import { syncOperationFailure } from "../context/sync-settings"
 
-type SessionListFilter = { scope?: "project"; path?: string }
 export type DialogSessionListFilters = {
   readonly focus: "cwd" | "target"
   readonly cwd: "cwd" | "all"
@@ -53,7 +52,7 @@ type SyncedSession = {
   readonly availability: SyncAvailability
 }
 
-type DialogSessionEntry = {
+type DialogSessionEntry = SessionListLocationRecord & {
   readonly id: string
   readonly title: string
   readonly directory: string
@@ -64,7 +63,7 @@ type DialogSessionEntry = {
   readonly targetLabel?: string
   readonly sourceDeviceID?: string
   readonly cloudOnly?: boolean
-  readonly time: { readonly updated: number }
+  readonly time: { readonly updated: number; readonly archived?: number }
   readonly syncMetadata?: SyncedSession
 }
 
@@ -76,21 +75,22 @@ export function updateDialogSessionListFilters(
   if (key === "tab") return { ...filters, focus: filters.focus === "cwd" ? "target" : "cwd" }
   if (filters.focus === "cwd") {
     const cwd = filters.cwd === "cwd" ? "all" : "cwd"
-    return { ...filters, cwd, target: cwd === "cwd" ? "local" : filters.target }
+    return { ...filters, cwd }
   }
   const current = Math.max(0, targets.indexOf(filters.target))
   const offset = key === "right" ? 1 : -1
   const target = targets[(current + offset + targets.length) % targets.length] ?? "local"
-  return { ...filters, target, cwd: target === "local" ? filters.cwd : "all" }
+  return { ...filters, target }
 }
 
-export function dialogSessionListLocationFilter(input: {
-  mode: DialogSessionListFilters["cwd"]
-  worktree?: string
-  directory?: string
-}): SessionListFilter {
-  if (input.mode === "all" || !input.worktree || !input.directory) return { scope: "project" }
-  return { path: path.relative(path.resolve(input.worktree), input.directory).replaceAll("\\", "/") }
+export function sessionInDialogPath(session: SessionListLocationRecord, mode: "cwd" | "all", directory: string) {
+  if (mode === "all") return true
+  const normalize = (value: string) => {
+    const windows = /^[a-z]:[\\/]/i.test(value) || value.startsWith("\\\\")
+    const normalized = (windows ? path.win32 : path.posix).normalize(value)
+    return normalized.replace(/[\\/]+$/, "") || "/"
+  }
+  return normalize(sessionListLocation(session).directory) === normalize(directory)
 }
 
 export function dialogSessionListTargetOptions(sessions: readonly SessionListLocationRecord[], selected = "local") {
@@ -103,15 +103,6 @@ export function dialogSessionListTargetOptions(sessions: readonly SessionListLoc
 
 export function sessionInDialogTarget(session: SessionListLocationRecord, target: string) {
   return target === "all" || sessionListLocation(session).target === target
-}
-
-export function dialogSessionListTargetLabel(input: {
-  readonly lastKnownTargetName?: string
-  readonly remote?: Pick<SyncedSession, "ownerDeviceID" | "targetLabel">
-  readonly currentDeviceID?: string
-}) {
-  if (input.remote?.ownerDeviceID === input.currentDeviceID) return input.lastKnownTargetName
-  return input.remote?.targetLabel ?? input.lastKnownTargetName
 }
 
 export function syncAvailabilityLabel(availability: SyncAvailability) {
@@ -148,25 +139,39 @@ export function fromSyncedSession(session: SyncedSession): DialogSessionEntry {
   }
 }
 
-export function createDialogSessionListQuery(input: { search?: string; filter: SessionListFilter }) {
-  const search = input.search?.trim()
-  return {
-    roots: true,
-    limit: search ? 30 : 100,
-    ...(search ? { search } : {}),
-    ...input.filter,
+export async function loadDialogSessionList<T>(input: {
+  list: (
+    query: { limit: number; archived: true },
+    options: { headers: Record<string, null> },
+  ) => Promise<{ data?: T[] }>
+}) {
+  // The legacy global cursor uses updated time alone. Expand the complete prefix
+  // instead, so equal timestamps at a page boundary cannot hide Sessions.
+  for (let limit = 100; ; limit *= 2) {
+    const result = await input
+      .list(
+        { limit, archived: true },
+        {
+          // The SDK rewrites inherited Location headers into query filters on GET.
+          headers: { "x-opencode-directory": null, "x-opencode-workspace": null, "x-opencode-target": null },
+        },
+      )
+      .catch(() => undefined)
+    if (!result?.data) return undefined
+    if (result.data.length < limit) return result.data
   }
 }
 
-export function loadDialogSessionList<T>(input: {
-  search?: string
-  filter: SessionListFilter
-  list: (query: ReturnType<typeof createDialogSessionListQuery>) => Promise<{ data?: T[] }>
-}) {
-  return input.list(createDialogSessionListQuery(input)).then(
-    (result) => result.data,
-    () => undefined,
-  )
+export function mergeDialogSessions(local: readonly DialogSessionEntry[], remote: readonly SyncedSession[]) {
+  const metadata = new Map(remote.map((session) => [session.sessionID, session]))
+  const rows = new Map(local.map((session) => [session.id, session]))
+  return [...rows.values(), ...remote.filter((session) => !rows.has(session.sessionID)).map(fromSyncedSession)]
+    .filter((session) => !session.parentID && session.time.archived === undefined && !metadata.get(session.id)?.deleted)
+    .map((session) => ({
+      ...session,
+      sourceDeviceID: metadata.get(session.id)?.sourceDeviceID,
+      syncMetadata: metadata.get(session.id),
+    }))
 }
 
 export function DialogSessionList() {
@@ -189,42 +194,23 @@ export function DialogSessionList() {
   const rememberedTarget = typeof savedTarget === "string" && savedTarget.trim() ? savedTarget : "local"
   const [filters, setFilters] = createSignal<DialogSessionListFilters>({
     focus: "cwd",
-    cwd: kv.get("session_directory_filter_enabled", true) && rememberedTarget === "local" ? "cwd" : "all",
+    cwd: kv.get("session_directory_filter_enabled", true) ? "cwd" : "all",
     target: rememberedTarget,
   })
   const deleteHint = useCommandShortcut("session.delete")
   const quickSwitch1 = useCommandShortcut("session.quick_switch.1")
   const quickSwitch9 = useCommandShortcut("session.quick_switch.9")
 
-  const locationFilter = createMemo(() =>
-    dialogSessionListLocationFilter({
-      mode: filters().cwd,
-      worktree: project.data.instance.path.worktree,
-      directory: project.data.instance.path.directory,
-    }),
-  )
-  const [browseResults, { refetch: refetchBrowse }] = createResource(locationFilter, (filter) =>
-    loadDialogSessionList({ filter, list: (query) => sdk.client.session.list(query) }),
-  )
-  const [searchResults, { refetch }] = createResource(
-    () => ({ query: search(), filter: locationFilter() }),
-    (input) => {
-      if (!input.query) return undefined
-      return loadDialogSessionList({
-        search: input.query,
-        filter: input.filter,
-        list: (query) => sdk.client.session.list(query),
-      })
-    },
+  const [browseResults, { refetch: refetchBrowse }] = createResource(() =>
+    loadDialogSessionList({ list: (query, options) => sdk.client.experimental.session.list(query, options) }),
   )
   const [cloudSessions, { refetch: refetchSyncedSessions }] = createResource(
     async (): Promise<{
-      readonly deviceID?: string
       readonly sessions: SyncedSession[]
     }> => {
       try {
-        const [status, sessions] = await Promise.all([sdk.client.global.syncStatus(), sdk.client.global.syncSessions()])
-        return { deviceID: status.data?.deviceID, sessions: (sessions.data ?? []) as SyncedSession[] }
+        const sessions = await sdk.client.global.syncSessions()
+        return { sessions: (sessions.data ?? []) as SyncedSession[] }
       } catch {
         // Sync is optional. A local session list remains usable when the secure
         // store is locked, sync is not configured, or the provider is offline.
@@ -240,7 +226,7 @@ export function DialogSessionList() {
     listRefreshFlight = (async () => {
       while (listRefreshRequested) {
         listRefreshRequested = false
-        await Promise.all([refetchBrowse(), refetchSyncedSessions(), ...(search() ? [refetch()] : [])])
+        await Promise.all([refetchBrowse(), refetchSyncedSessions()])
       }
     })().finally(() => {
       listRefreshFlight = undefined
@@ -251,45 +237,9 @@ export function DialogSessionList() {
 
   const currentSessionID = createMemo(() => (route.data.type === "session" ? route.data.sessionID : undefined))
   const allSessions = createMemo(() => {
-    const searched = searchResults()
-    const browsed = browseResults() ?? sync.data.session
-    // The upstream server search only knows about titles. Keep its wider title
-    // matches, but merge the reusable browse query so location/device fields can
-    // be searched locally without teaching this component about sync transport.
-    const result = searched
-      ? [...searched, ...browsed.filter((candidate) => !searched.some((item) => item.id === candidate.id))]
-      : browsed
-    const synced = new Map(sync.data.session.map((session) => [session.id, session]))
-    const remote = new Map((cloudSessions()?.sessions ?? []).map((session) => [session.sessionID, session]))
-    const ids = new Set(result.map((session) => session.id))
-    const extra = [currentSessionID(), ...local.session.pinned()].flatMap((id) => {
-      if (!id || ids.has(id)) return []
-      const session = synced.get(id)
-      if (session) ids.add(id)
-      return session ? [session] : []
-    })
-    const query = search().trim().toLowerCase()
-    const remoteOnly = [...remote.values()]
-      .filter((session) => !ids.has(session.sessionID))
-      .filter((session) => !session.deleted)
-      .map(fromSyncedSession)
-    const localEntry = (session: (typeof sync.data.session)[number]): DialogSessionEntry => ({
-      ...session,
-      targetLabel: dialogSessionListTargetLabel({
-        lastKnownTargetName: session.lastKnownTargetName,
-        remote: remote.get(session.id),
-        currentDeviceID: cloudSessions()?.deviceID,
-      }),
-      sourceDeviceID: remote.get(session.id)?.sourceDeviceID,
-      syncMetadata: remote.get(session.id),
-    })
-    return [
-      ...result.map((session) => localEntry(synced.get(session.id) ?? session)),
-      ...extra.map(localEntry),
-      ...remoteOnly,
-    ]
-      .filter((session) => !deleted().has(session.id))
-      .filter((session) => sessionListMatches(session as typeof session & SessionListLocationRecord, query))
+    return mergeDialogSessions(browseResults() ?? sync.data.session, cloudSessions()?.sessions ?? []).filter(
+      (session) => !deleted().has(session.id),
+    )
   })
   const targetOptions = createMemo(() =>
     dialogSessionListTargetOptions(
@@ -298,9 +248,10 @@ export function DialogSessionList() {
     ),
   )
   const sessions = createMemo(() =>
-    allSessions().filter((session) =>
-      sessionInDialogTarget(session as typeof session & SessionListLocationRecord, filters().target),
-    ),
+    allSessions()
+      .filter((session) => sessionInDialogPath(session, filters().cwd, project.data.instance.path.directory))
+      .filter((session) => sessionInDialogTarget(session, filters().target))
+      .filter((session) => sessionListMatches(session, search())),
   )
 
   onCleanup(
@@ -313,6 +264,8 @@ export function DialogSessionList() {
       void refreshList()
     }),
   )
+  onCleanup(event.on("session.created", () => void refreshList()))
+  onCleanup(event.on("session.updated", () => void refreshList()))
 
   function recover(session: DialogSessionEntry) {
     const workspace = project.workspace.get(session.workspaceID!)
@@ -378,7 +331,6 @@ export function DialogSessionList() {
           await project.workspace.sync()
           await sync.session.refresh()
           await refetchBrowse()
-          if (search()) await refetch()
           if (info?.workspaceID === session.workspaceID) {
             route.navigate({ type: "home" })
           }
@@ -429,8 +381,7 @@ export function DialogSessionList() {
         .map((x) => [x.id, x]),
     )
 
-    const searchResult = searchResults()
-    const order = searchResult ? orderByRecency(sessions()) : browseOrder()
+    const order = browseOrder()
     const current = currentSessionID()
     const displayOrder = current && sessionMap.has(current) && !order.includes(current) ? [...order, current] : order
 
@@ -643,7 +594,6 @@ export function DialogSessionList() {
                 await sync.session.refresh()
               }
               await refetchBrowse()
-              if (search()) await refetch()
               setToDelete(undefined)
               return
             }
