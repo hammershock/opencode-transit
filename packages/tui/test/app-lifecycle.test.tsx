@@ -511,6 +511,103 @@ test("Ctrl+P opens the production Skill Manager without a model turn", async () 
   }
 }, 10_000)
 
+test("the Harness command opens its keyboard-navigable controller instruction manager without a model turn", async () => {
+  const setup = await createTestRenderer({ width: 88, height: 32, useThread: false })
+  const core = await import("@opentui/core")
+  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  const events = createEventSource()
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/target")
+      return json({
+        path: "/tmp/opencode/targets.jsonc",
+        revision: "target",
+        targets: [],
+        diagnostics: [],
+        valid: true,
+      })
+    if (url.pathname === "/api/harness/instructions")
+      return json({
+        version: 1,
+        path: "/tmp/opencode/harness.jsonc",
+        revision: "0".repeat(64),
+        targets: [{ target: "local", reference: "policies/local.md" }],
+        diagnostics: [],
+        valid: true,
+      })
+    if (url.pathname === "/api/harness/instructions/global")
+      return json({ scope: { type: "global" }, mode: "default", diagnostics: [] })
+    if (url.pathname === "/api/harness/instructions/target/local")
+      return json({
+        scope: { type: "target", target: "local" },
+        mode: "custom",
+        source: {
+          reference: "policies/local.md",
+          resolved: "/tmp/opencode/policies/local.md",
+          status: "readable",
+          content: "local policy",
+          size: 12,
+          sharedTargets: ["local"],
+        },
+        diagnostics: [],
+      })
+    if (url.pathname === "/config/providers")
+      return json({
+        providers: [{ id: "test", name: "Test", source: "custom", env: [], options: {}, models: {} }],
+        default: {},
+      })
+  })
+  let started!: () => void
+  let api: TuiPluginApi | undefined
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
+  })
+
+  try {
+    const { run } = await import("../src/app")
+    const task = Effect.runPromise(
+      run({
+        url: "http://test",
+        directory,
+        config: createTuiResolvedConfig({ plugin_enabled: {} }),
+        fetch: calls.fetch,
+        events: events.source,
+        args: {},
+        pluginHost: {
+          async start(input) {
+            api = input.api
+            started()
+          },
+          async dispose() {},
+        },
+      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+    )
+
+    await ready
+    await setup.waitForVisualIdle()
+    const sessionRequests = calls.session.length
+    api!.keymap.dispatchCommand("fork.harness.manage")
+    await waitForFrame(setup, "Harness")
+    expect(setup.captureCharFrame()).toContain("Instructions")
+    expect(setup.captureCharFrame()).toContain("Skills")
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "Harness instructions · Controller filesystem")
+    await waitForFrame(setup, "policies/local.md")
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("Global")
+    expect(frame).toContain("Default AGENTS.md / CLAUDE.md discovery")
+    expect(frame).toContain("local")
+    expect(frame).toContain("policies/local.md")
+    expect(frame).toContain("Save affects future admission")
+    expect(calls.session).toHaveLength(sessionRequests)
+
+    process.emit("SIGHUP")
+    await task
+  } finally {
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    mock.restore()
+  }
+}, 10_000)
+
 test("QuickStart accepts and renders keyboard input without starving the keymap", async () => {
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
   const core = await import("@opentui/core")

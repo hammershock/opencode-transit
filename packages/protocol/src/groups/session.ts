@@ -400,6 +400,20 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
       ),
     )
     .add(
+      HttpApiEndpoint.post("session.instructionsApply", "/api/session/:sessionID/instructions/apply", {
+        params: { sessionID: Session.ID },
+        success: ModelContext.Generation,
+        error: [SessionNotFoundError, ConflictError, InvalidRequestError, ServiceUnavailableError, UnknownError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.instructions.apply",
+          summary: "Apply saved harness instructions to one idle Session",
+          description:
+            "Rereads instructions and atomically establishes one durable generation without invoking the model or editing project files.",
+        }),
+      ),
+    )
+    .add(
       HttpApiEndpoint.get("session.history", "/api/session/:sessionID/history", {
         params: { sessionID: Session.ID },
         query: SessionHistoryQuery,

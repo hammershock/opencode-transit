@@ -33,6 +33,8 @@ import type {
   SessionsContextOutput,
   SessionsModelContextInput,
   SessionsModelContextOutput,
+  SessionsInstructionsApplyInput,
+  SessionsInstructionsApplyOutput,
   SessionsHistoryInput,
   SessionsHistoryOutput,
   SessionsEventsInput,
@@ -166,6 +168,18 @@ import type {
   TargetsPreviewLegacyImportOutput,
   TargetsImportLegacyInput,
   TargetsImportLegacyOutput,
+  ServerHarnessSettingsOutput,
+  ServerHarnessGlobalOutput,
+  ServerHarnessTargetInput,
+  ServerHarnessTargetOutput,
+  ServerHarnessValidateInput,
+  ServerHarnessValidateOutput,
+  ServerHarnessBindInput,
+  ServerHarnessBindOutput,
+  ServerHarnessResetGlobalInput,
+  ServerHarnessResetGlobalOutput,
+  ServerHarnessUnbindInput,
+  ServerHarnessUnbindOutput,
   EnvironmentListInput,
   EnvironmentListOutput,
   EnvironmentReloadInput,
@@ -527,6 +541,17 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/model-context`,
             successStatus: 200,
             declaredStatuses: [404, 500, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      instructionsApply: (input: SessionsInstructionsApplyInput, requestOptions?: RequestOptions) =>
+        request<SessionsInstructionsApplyOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/instructions/apply`,
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 503, 500, 401],
             empty: false,
           },
           requestOptions,
@@ -1396,6 +1421,89 @@ export function make(options: ClientOptions) {
             body: { sourceRevision: input["sourceRevision"], expectedRevision: input["expectedRevision"] },
             successStatus: 200,
             declaredStatuses: [409, 403, 400, 404, 500, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+    },
+    "server.harness": {
+      settings: (requestOptions?: RequestOptions) =>
+        request<ServerHarnessSettingsOutput>(
+          {
+            method: "GET",
+            path: `/api/harness/instructions`,
+            successStatus: 200,
+            declaredStatuses: [500, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      global: (requestOptions?: RequestOptions) =>
+        request<ServerHarnessGlobalOutput>(
+          {
+            method: "GET",
+            path: `/api/harness/instructions/global`,
+            successStatus: 200,
+            declaredStatuses: [500, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      target: (input: ServerHarnessTargetInput, requestOptions?: RequestOptions) =>
+        request<ServerHarnessTargetOutput>(
+          {
+            method: "GET",
+            path: `/api/harness/instructions/target/${encodeURIComponent(input.target)}`,
+            successStatus: 200,
+            declaredStatuses: [500, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      validate: (input: ServerHarnessValidateInput, requestOptions?: RequestOptions) =>
+        request<ServerHarnessValidateOutput>(
+          {
+            method: "POST",
+            path: `/api/harness/instructions/validate`,
+            body: { reference: input["reference"] },
+            successStatus: 200,
+            declaredStatuses: [409, 400, 500, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      bind: (input: ServerHarnessBindInput, requestOptions?: RequestOptions) =>
+        request<ServerHarnessBindOutput>(
+          {
+            method: "PUT",
+            path: `/api/harness/instructions/binding`,
+            body: { scope: input["scope"], reference: input["reference"], expectedRevision: input["expectedRevision"] },
+            successStatus: 200,
+            declaredStatuses: [409, 400, 500, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      resetGlobal: (input: ServerHarnessResetGlobalInput, requestOptions?: RequestOptions) =>
+        request<ServerHarnessResetGlobalOutput>(
+          {
+            method: "POST",
+            path: `/api/harness/instructions/global/reset`,
+            body: { expectedRevision: input["expectedRevision"] },
+            successStatus: 200,
+            declaredStatuses: [409, 400, 500, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      unbind: (input: ServerHarnessUnbindInput, requestOptions?: RequestOptions) =>
+        request<ServerHarnessUnbindOutput>(
+          {
+            method: "POST",
+            path: `/api/harness/instructions/target/unbind`,
+            body: { target: input["target"], expectedRevision: input["expectedRevision"] },
+            successStatus: 200,
+            declaredStatuses: [409, 400, 500, 401],
             empty: false,
           },
           requestOptions,

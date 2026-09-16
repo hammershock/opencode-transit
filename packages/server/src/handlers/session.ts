@@ -209,6 +209,44 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.instructionsApply",
+        Effect.fn(function* (ctx) {
+          return yield* session.applyInstructions(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) =>
+              Effect.fail(
+                new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                }),
+              ),
+            ),
+            Effect.catchTag("Session.OperationUnavailableError", (error) =>
+              Effect.fail(
+                new ServiceUnavailableError({
+                  message: `Session ${error.operation} is not available yet`,
+                  service: `session.${error.operation}`,
+                }),
+              ),
+            ),
+            Effect.catchTag("Session.InstructionApplyBusyError", (error) =>
+              Effect.fail(
+                new ConflictError({
+                  message: `Session is not idle: ${error.blockers.join(", ")}`,
+                  resource: "session_activity",
+                }),
+              ),
+            ),
+            Effect.catchTag("InstructionContext.ApplyError", (error) =>
+              Effect.fail(
+                error.kind === "unavailable-source"
+                  ? new InvalidRequestError({ message: error.message, kind: "instruction_source" })
+                  : new ServiceUnavailableError({ message: error.message, service: "session.instructions" }),
+              ),
+            ),
+          )
+        }),
+      )
+      .handle(
         "session.switchAgent",
         Effect.fn(function* (ctx) {
           yield* session.switchAgent({ sessionID: ctx.params.sessionID, agent: ctx.payload.agent }).pipe(

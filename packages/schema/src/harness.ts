@@ -51,6 +51,7 @@ export const InstructionSource = Schema.Struct({
   status: InstructionFileStatus,
   content: optional(Schema.String),
   size: optional(NonNegativeInt),
+  truncated: optional(Schema.Boolean),
   diagnostic: optional(Schema.String),
   sharedTargets: Schema.Array(InstructionTarget),
 }).annotate({ identifier: "Harness.InstructionSource" })

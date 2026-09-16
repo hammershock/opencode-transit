@@ -41,6 +41,17 @@ export async function completeLocalDirectory(input: {
   cursor: number
   cwd: string
 }) {
+  return completeLocalPath({ ...input, kind: "directory" })
+}
+
+export async function completeLocalPath(input: {
+  sdk: SDK
+  home: string
+  value: string
+  cursor: number
+  cwd: string
+  kind: "directory" | "file"
+}) {
   const prefix = input.value.slice(0, input.cursor)
   const expanded =
     prefix === "~" ? input.home : prefix.startsWith("~/") ? path.join(input.home, prefix.slice(2)) : prefix
@@ -52,8 +63,12 @@ export async function completeLocalDirectory(input: {
     { throwOnError: true },
   )
   const candidates = result.data.data
-    .filter((entry) => entry.type === "directory" && path.basename(entry.path).startsWith(fragment))
-    .map((entry) => path.join(parent, path.basename(entry.path)) + path.sep)
+    .filter(
+      (entry) =>
+        (entry.type === "directory" || (input.kind === "file" && entry.type === "file")) &&
+        path.basename(entry.path).startsWith(fragment),
+    )
+    .map((entry) => path.join(parent, path.basename(entry.path)) + (entry.type === "directory" ? path.sep : ""))
     .sort()
   const completion = candidates.slice(1).reduce((common, candidate) => {
     let index = 0

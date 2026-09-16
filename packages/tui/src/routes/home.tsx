@@ -27,6 +27,8 @@ import { adaptKeymapCommands, adaptServerCommands } from "../command-toolkit/ups
 import { useKV } from "../context/kv"
 import { skillCommand, type SkillCommandContext } from "../command-toolkit/skill"
 import { useSkillManager } from "../component/skill-manager"
+import { harnessCommand, type HarnessCommandContext } from "../command-toolkit/harness"
+import { useHarnessManager } from "../component/harness-manager"
 
 let once = false
 const placeholder = {
@@ -55,6 +57,7 @@ export function Home() {
   const { theme } = useTheme()
   const targetManager = useTargetManager()
   const skillManager = useSkillManager()
+  const harnessManager = useHarnessManager({ openSkills: skillManager.open })
   const keymap = useOpencodeKeymap()
   const upstreamCommandEntries = useKeymapSelector((value) =>
     value.getCommandEntries({ visibility: "reachable", namespace: "palette" }),
@@ -68,11 +71,18 @@ export function Home() {
     return theme.textMuted
   })
   const commandHost = createMemo(() =>
-    createCommandHost<ApprovalModeCommandContext & SyncCommandContext & TargetCommandContext & SkillCommandContext>({
+    createCommandHost<
+      ApprovalModeCommandContext &
+        SyncCommandContext &
+        TargetCommandContext &
+        SkillCommandContext &
+        HarnessCommandContext
+    >({
       register: (registry) => {
         registry.register(approvalModeCommand)
         registry.register(targetCommand)
         registry.register(skillCommand)
+        registry.register(harnessCommand)
         syncCommands.forEach((command) => registry.register(command))
       },
       context: (source) => ({
@@ -94,6 +104,7 @@ export function Home() {
         },
         openTargetManager: targetManager.open,
         openSkillManager: skillManager.open,
+        openHarnessManager: harnessManager.open,
         openSyncSettings: syncSettings.open,
       }),
       upstream: () => [

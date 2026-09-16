@@ -54,11 +54,18 @@ values still never belong in instruction files.
 
 ## Lifecycle
 
-A new Session admits the files resolved at context initialization. Saving a binding or editing a referenced file affects
-future admission only: an existing Session keeps its frozen copy across ordinary turns, process restart, Session re-entry,
-transparent reconnect, and Skill activation. Existing successful context refresh and Location rebind boundaries reread the
-current bindings and establish one replacement durable generation. Location rebind also reevaluates the target binding for the
-new Location.
+A new Session admits the files resolved at context initialization. Use `/harness instructions` to select controller-global and
+target files; `/harness skills` opens the existing Skill manager. The file browser is always controller-side, including while
+the current Session is remote. It shows readability, a bounded preview, shared targets, and whether saved rules match the
+current Session's admitted generation.
+
+Saving a binding or editing a referenced file affects future admission only: an existing Session keeps its frozen copy across
+ordinary turns, process restart, Session re-entry, transparent reconnect, and Skill activation. Choose **Apply saved
+instructions** to reread the initial chain for the current idle Session and establish one durable `instructions-applied`
+generation. Apply does not invoke the model, run `/init`, write project files, change Location revision, or update other
+Sessions. If the Session is busy or unresolved, or a selected source cannot be read, Apply retains the previous generation and
+reports the blocker. Existing successful `/init` refresh and Location rebind boundaries remain valid; Location rebind also
+reevaluates the target binding for the new Location.
 
 The admitted instruction bodies sync as part of Session context. A receiving device uses that accepted generation instead of
 consulting its own device-local bindings. `/context` displays the admitted state and sanitized diagnostics; it does not expose

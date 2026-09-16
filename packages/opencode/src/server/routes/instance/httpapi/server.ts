@@ -66,6 +66,7 @@ import { PtyTicket } from "@opencode-ai/core/pty/ticket"
 import { TargetRegistry } from "@opencode-ai/core/target-registry"
 import { TargetBindingRegistry } from "@opencode-ai/core/target-binding-registry"
 import { SkillSettings } from "@opencode-ai/core/skill/settings"
+import { HarnessInstructions } from "@opencode-ai/core/harness/instructions"
 import { SyncSetup } from "@opencode-ai/core/sync/setup"
 import { SyncControl } from "@opencode-ai/core/sync/control"
 import { SessionSync } from "@opencode-ai/core/sync/session"
@@ -293,6 +294,7 @@ export const app = LayerNode.group([
   TargetRegistry.node,
   TargetBindingRegistry.node,
   SkillSettings.node,
+  HarnessInstructions.node,
   SessionLocationAccess.node,
   SessionLocationMutation.node,
   SessionActivity.node,

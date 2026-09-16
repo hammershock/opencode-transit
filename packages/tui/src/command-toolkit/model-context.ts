@@ -3,7 +3,7 @@ import { defineCommand, type InvocationContext, type RawArguments } from "@openc
 export type ModelContextGeneration = {
   version: 1
   generation: number
-  reason: "created" | "legacy-backfill" | "location-rebound" | "init"
+  reason: "created" | "legacy-backfill" | "location-rebound" | "init" | "instructions-applied"
   locationRevision: number
   environment: {
     harness: "OpenCode Transit"

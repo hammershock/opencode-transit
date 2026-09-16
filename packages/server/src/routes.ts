@@ -14,6 +14,7 @@ import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { TargetRegistry } from "@opencode-ai/core/target-registry"
 import { TargetBindingRegistry } from "@opencode-ai/core/target-binding-registry"
 import { SkillSettings } from "@opencode-ai/core/skill/settings"
+import { HarnessInstructions } from "@opencode-ai/core/harness/instructions"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { SessionLocationMutation } from "@opencode-ai/core/session/location-mutation"
 import { SessionActivity } from "@opencode-ai/core/session/activity"
@@ -44,6 +45,7 @@ const applicationServices = LayerNode.group([
   TargetRegistry.node,
   TargetBindingRegistry.node,
   SkillSettings.node,
+  HarnessInstructions.node,
   SessionLocationAccess.node,
   SessionLocationMutation.node,
   SessionActivity.node,

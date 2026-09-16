@@ -1,15 +1,22 @@
 import { describe, expect } from "bun:test"
 import path from "path"
-import { chmod, mkdir } from "node:fs/promises"
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
 import { Effect, Layer, Stream } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { makeGlobalNode } from "@opencode-ai/core/effect/app-node"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventTable } from "@opencode-ai/core/event/sql"
 import { Location } from "@opencode-ai/core/location"
+import {
+  buildLocationServiceMap,
+  localProvider,
+  type LocationProvider,
+  LocationServiceMap,
+} from "@opencode-ai/core/location-services"
 import { HarnessInstructions } from "@opencode-ai/core/harness/instructions"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProjectV2 } from "@opencode-ai/core/project"
@@ -57,7 +64,22 @@ const it = testEffect(
     ],
   ),
 )
-const rebindHarnessState = { content: "target A policy" }
+const rebindHarnessState = { content: "target A policy", status: "readable" as "readable" | "missing" }
+const executionState = { resumes: 0, wakes: 0 }
+const executionLayer = Layer.succeed(
+  SessionExecution.Service,
+  SessionExecution.Service.of({
+    active: Effect.succeed(new Set()),
+    resume: () => Effect.sync(() => void executionState.resumes++),
+    wake: () => Effect.sync(() => void executionState.wakes++),
+    wakeAndWait: () => Effect.sync(() => void executionState.wakes++),
+    interrupt: () => Effect.void,
+  }),
+)
+const syntheticRexd: LocationProvider = {
+  target: "rexd",
+  build: (ref, replacements) => localProvider.build(ref, replacements),
+}
 const unusedHarnessMethod = async (): Promise<never> => {
   throw new Error("Harness settings mutation is not used by this test")
 }
@@ -74,9 +96,10 @@ const harnessInstructions = Layer.succeed(
         source: Harness.InstructionSource.make({
           reference: "policies/local.md",
           resolved: AbsolutePath.make("/controller/policies/local.md"),
-          status: "readable",
-          content,
-          size: content.length,
+          status: rebindHarnessState.status,
+          content: rebindHarnessState.status === "readable" ? content : undefined,
+          size: rebindHarnessState.status === "readable" ? content.length : undefined,
+          diagnostic: rebindHarnessState.status === "missing" ? "Configured file is missing" : undefined,
           sharedTargets: ["local"],
         }),
         diagnostics: [],
@@ -88,6 +111,11 @@ const harnessInstructions = Layer.succeed(
     validate: unusedHarnessMethod,
   }),
 )
+const providerMap = makeGlobalNode({
+  service: LocationServiceMap.Service,
+  layer: buildLocationServiceMap([[HarnessInstructions.node, harnessInstructions]], [localProvider, syntheticRexd]),
+  deps: [],
+})
 const rebindIt = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
@@ -100,8 +128,9 @@ const rebindIt = testEffect(
     ]),
     [
       [ProjectV2.node, projects],
-      [SessionExecution.node, SessionExecution.noopLayer],
+      [SessionExecution.node, executionLayer],
       [HarnessInstructions.node, harnessInstructions],
+      [LocationServiceMap.node, providerMap],
     ],
   ),
 )
@@ -153,6 +182,123 @@ describe("SessionV2.create", () => {
             }),
           ),
         ),
+      ),
+    ),
+  )
+
+  rebindIt.live("applies saved instructions to only the selected idle Session without model or project mutation", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          rebindHarnessState.content = "target A policy"
+          rebindHarnessState.status = "readable"
+          executionState.resumes = 0
+          executionState.wakes = 0
+          const projectFile = path.join(tmp.path, "AGENTS.md")
+          yield* Effect.promise(() => writeFile(projectFile, "project policy"))
+          const session = yield* SessionV2.Service
+          const first = yield* session.create({
+            location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
+          })
+          const second = yield* session.create({
+            location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
+          })
+          const firstBefore = yield* session.modelContext(first.id)
+          const secondBefore = yield* session.modelContext(second.id)
+          const skillBefore = yield* session.skillView(first.id)
+
+          rebindHarnessState.content = "target B policy"
+          const applied = yield* session.applyInstructions(first.id)
+
+          expect(applied).toMatchObject({
+            generation: (firstBefore?.generation ?? 0) + 1,
+            reason: "instructions-applied",
+            locationRevision: first.locationRevision,
+          })
+          expect(applied.instructions).toMatchObject([
+            { scope: "target", content: "target B policy" },
+            { scope: "project", content: "project policy" },
+          ])
+          expect(
+            Object.fromEntries(Object.entries(applied.sources).filter(([key]) => key !== "core/instructions")),
+          ).toEqual(
+            Object.fromEntries(Object.entries(firstBefore!.sources).filter(([key]) => key !== "core/instructions")),
+          )
+          expect(yield* session.skillView(first.id)).toEqual(skillBefore)
+          expect(yield* session.modelContext(second.id)).toEqual(secondBefore)
+          expect(secondBefore?.baseline).toContain("target A policy")
+          expect(yield* Effect.promise(() => readFile(projectFile, "utf8"))).toBe("project policy")
+          expect(executionState).toEqual({ resumes: 0, wakes: 0 })
+        }),
+      ),
+    ),
+  )
+
+  rebindIt.live("keeps the admitted generation when explicit instruction application cannot read a source", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          rebindHarnessState.content = "admitted policy"
+          rebindHarnessState.status = "readable"
+          const session = yield* SessionV2.Service
+          const created = yield* session.create({
+            location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
+          })
+          const before = yield* session.modelContext(created.id)
+
+          rebindHarnessState.status = "missing"
+          expect(yield* session.applyInstructions(created.id).pipe(Effect.flip)).toMatchObject({
+            _tag: "InstructionContext.ApplyError",
+            kind: "unavailable-source",
+          })
+          expect(yield* session.modelContext(created.id)).toEqual(before)
+          rebindHarnessState.status = "readable"
+        }),
+      ),
+    ),
+  )
+
+  rebindIt.live("rejects instruction application while a turn is queued and when Location is unresolved", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          rebindHarnessState.content = "stable policy"
+          rebindHarnessState.status = "readable"
+          const session = yield* SessionV2.Service
+          const busy = yield* session.create({
+            location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
+          })
+          const busyBefore = yield* session.modelContext(busy.id)
+          yield* session.prompt({ sessionID: busy.id, prompt: Prompt.make({ text: "queued" }), resume: false })
+          expect(yield* session.applyInstructions(busy.id).pipe(Effect.flip)).toMatchObject({
+            _tag: "Session.InstructionApplyBusyError",
+            blockers: ["queued_turn"],
+          })
+          expect(yield* session.modelContext(busy.id)).toEqual(busyBefore)
+
+          const unresolved = yield* session.create({
+            location: Location.Ref.make({
+              target: {
+                type: "rexd",
+                targetID: Location.TargetID.make("33333333-3333-4333-8333-333333333333"),
+              },
+              directory: AbsolutePath.make(tmp.path),
+            }),
+          })
+          expect(yield* session.applyInstructions(unresolved.id).pipe(Effect.flip)).toMatchObject({
+            _tag: "Session.OperationUnavailableError",
+            operation: "location",
+          })
+        }),
       ),
     ),
   )

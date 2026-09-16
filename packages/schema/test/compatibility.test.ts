@@ -56,4 +56,10 @@ describe("schema compatibility", () => {
       targets: [{ target: "local" }, { target: "11111111-1111-4111-8111-111111111111" }],
     })
   })
+
+  test("model context generation reasons preserve version 1 values and add explicit instruction application", () => {
+    expect(Schema.decodeUnknownSync(ModelContext.GenerationReason)("created")).toBe("created")
+    expect(Schema.decodeUnknownSync(ModelContext.GenerationReason)("init")).toBe("init")
+    expect(Schema.decodeUnknownSync(ModelContext.GenerationReason)("instructions-applied")).toBe("instructions-applied")
+  })
 })

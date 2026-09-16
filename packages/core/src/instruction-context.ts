@@ -41,9 +41,16 @@ export interface Interface {
   }) => Effect.Effect<void>
   /** Explicit generation boundary used only after a successful `/init` workflow. */
   readonly reload: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  /** Prepare one strict replacement for an explicit current-Session instruction application. */
+  readonly prepareApply: (sessionID: SessionSchema.ID) => Effect.Effect<ModelContext.Generation, ApplyError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/InstructionContext") {}
+
+export class ApplyError extends Schema.TaggedErrorClass<ApplyError>()("InstructionContext.ApplyError", {
+  kind: Schema.Literals(["missing-generation", "unavailable-source", "unavailable-context"]),
+  message: Schema.String,
+}) {}
 
 const layer = Layer.effect(
   Service,
@@ -523,59 +530,93 @@ const layer = Layer.effect(
           ),
         )
 
+    const prepareReplacement = Effect.fn("InstructionContext.prepareReplacement")(function* (
+      sessionID: SessionSchema.ID,
+      reason: Extract<ModelContext.GenerationReason, "init" | "instructions-applied">,
+      strict: boolean,
+    ) {
+      const row = yield* db
+        .select()
+        .from(SessionContextEpochTable)
+        .where(eq(SessionContextEpochTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row)
+        return yield* new ApplyError({
+          kind: "missing-generation",
+          message: "The Session has no admitted model context",
+        })
+      const snapshot = yield* Schema.decodeUnknownEffect(SystemContext.Snapshot)(row.snapshot).pipe(
+        Effect.mapError(
+          () => new ApplyError({ kind: "unavailable-context", message: "The admitted context is unreadable" }),
+        ),
+      )
+      const previous = snapshot[key]
+        ? yield* Schema.decodeUnknownEffect(ModelContext.Instructions)(snapshot[key]!.value).pipe(
+            Effect.mapError(
+              () =>
+                new ApplyError({ kind: "unavailable-context", message: "The admitted instructions are unreadable" }),
+            ),
+          )
+        : ModelContext.Instructions.make([])
+      // Initial-chain replacement preserves admitted nested rules unless their file
+      // no longer exists in this Location. It never rereads nested rule bodies.
+      const nested = yield* Effect.filter(
+        previous.filter((item) => item.origin === "nested-file"),
+        (item) => targetFS.existsSafe(item.source),
+        { concurrency: "unbounded" },
+      )
+      const initial = yield* observe()
+      const unavailable = strict ? initial.find((item) => item.status === "ignored") : undefined
+      if (unavailable)
+        return yield* new ApplyError({
+          kind: "unavailable-source",
+          message: `Instruction source is unavailable: ${unavailable.source}`,
+        })
+      const known = new Set(initial.map((item) => item.id))
+      const instructions = ModelContext.Instructions.make([...initial, ...nested.filter((item) => !known.has(item.id))])
+      const rendered = yield* SystemContext.initialize(source(Effect.succeed(instructions))).pipe(
+        Effect.mapError(
+          () => new ApplyError({ kind: "unavailable-context", message: "Instructions could not be rendered" }),
+        ),
+      )
+      const replacement = SystemContext.rebaseline(yield* registry.load(), {
+        ...snapshot,
+        [key]: rendered.snapshot[key]!,
+      })
+      if (replacement._tag === "ReplacementBlocked")
+        return yield* new ApplyError({
+          kind: "unavailable-context",
+          message: "An admitted context source is unavailable",
+        })
+      return SessionContextEpoch.materialize(replacement.generation, {
+        generation: row.generation + 1,
+        reason,
+        locationRevision: row.location_revision,
+      })
+    })
+
     const reload = (sessionID: SessionSchema.ID) =>
       locks
         .withLock(sessionID)(
-          Effect.gen(function* () {
-            const row = yield* db
-              .select()
-              .from(SessionContextEpochTable)
-              .where(eq(SessionContextEpochTable.session_id, sessionID))
-              .get()
-              .pipe(Effect.orDie)
-            if (!row) return
-            const snapshot = yield* Schema.decodeUnknownEffect(SystemContext.Snapshot)(row.snapshot).pipe(Effect.orDie)
-            const previous = snapshot[key]
-              ? yield* Schema.decodeUnknownEffect(ModelContext.Instructions)(snapshot[key]!.value).pipe(Effect.orDie)
-              : ModelContext.Instructions.make([])
-            // `/init` owns the initial chain. Nested rules already admitted by
-            // read/list stay frozen unless their file no longer exists in this
-            // Location, so an init does not silently hot-reload deeper rules.
-            const nested = yield* Effect.filter(
-              previous.filter((item) => item.origin === "nested-file"),
-              (item) => targetFS.existsSafe(item.source),
-              { concurrency: "unbounded" },
-            )
-            const initial = yield* observe()
-            const known = new Set(initial.map((item) => item.id))
-            const instructions = ModelContext.Instructions.make([
-              ...initial,
-              ...nested.filter((item) => !known.has(item.id)),
-            ])
-            const rendered = yield* SystemContext.initialize(source(Effect.succeed(instructions)))
-            const sources = { ...snapshot, [key]: rendered.snapshot[key]! }
-            const context = yield* registry.load()
-            const replacement = SystemContext.rebaseline(context, sources)
-            if (replacement._tag === "ReplacementBlocked") {
-              yield* Effect.logWarning("instruction context reload blocked", { sessionID })
-              return
-            }
-            yield* events.publish(SessionEvent.ContextGenerationEstablished, {
-              sessionID,
-              timestamp: yield* DateTime.now,
-              context: SessionContextEpoch.materialize(replacement.generation, {
-                generation: row.generation + 1,
-                reason: "init",
-                locationRevision: row.location_revision,
+          prepareReplacement(sessionID, "init", false).pipe(
+            Effect.flatMap((context) =>
+              events.publish(SessionEvent.ContextGenerationEstablished, {
+                sessionID,
+                timestamp: DateTime.makeUnsafe(Date.now()),
+                context,
               }),
-            })
-          }),
+            ),
+          ),
         )
         .pipe(
           Effect.catchCause((cause) => Effect.logWarning("instruction context reload ignored", { sessionID, cause })),
         )
 
-    return Service.of({ extend, reload })
+    const prepareApply = (sessionID: SessionSchema.ID) =>
+      locks.withLock(sessionID)(prepareReplacement(sessionID, "instructions-applied", true))
+
+    return Service.of({ extend, reload, prepareApply })
   }),
 )
 

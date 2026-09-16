@@ -147,6 +147,10 @@ import type {
   GlobalSyncUnassignedResponses,
   GlobalUpgradeErrors,
   GlobalUpgradeResponses,
+  HarnessInstructionBindInput,
+  HarnessInstructionRevisionInput,
+  HarnessInstructionTarget,
+  HarnessInstructionTargetMutationInput,
   InstanceDisposeErrors,
   InstanceDisposeResponses,
   LocationRef,
@@ -360,6 +364,20 @@ import type {
   V2FsListResponses,
   V2FsReadErrors,
   V2FsReadResponses,
+  V2HarnessInstructionsBindErrors,
+  V2HarnessInstructionsBindResponses,
+  V2HarnessInstructionsGlobalErrors,
+  V2HarnessInstructionsGlobalResetErrors,
+  V2HarnessInstructionsGlobalResetResponses,
+  V2HarnessInstructionsGlobalResponses,
+  V2HarnessInstructionsSettingsErrors,
+  V2HarnessInstructionsSettingsResponses,
+  V2HarnessInstructionsTargetErrors,
+  V2HarnessInstructionsTargetResponses,
+  V2HarnessInstructionsTargetUnbindErrors,
+  V2HarnessInstructionsTargetUnbindResponses,
+  V2HarnessInstructionsValidateErrors,
+  V2HarnessInstructionsValidateResponses,
   V2HealthGetErrors,
   V2HealthGetResponses,
   V2IntegrationAttemptCancelErrors,
@@ -432,6 +450,8 @@ import type {
   V2SessionGetResponses,
   V2SessionHistoryErrors,
   V2SessionHistoryResponses,
+  V2SessionInstructionsApplyErrors,
+  V2SessionInstructionsApplyResponses,
   V2SessionInterruptErrors,
   V2SessionInterruptResponses,
   V2SessionListErrors,
@@ -5374,6 +5394,31 @@ export class Revert extends HeyApiClient {
   }
 }
 
+export class Instructions extends HeyApiClient {
+  /**
+   * Apply saved harness instructions to one idle Session
+   *
+   * Rereads instructions and atomically establishes one durable generation without invoking the model or editing project files.
+   */
+  public apply<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).post<
+      V2SessionInstructionsApplyResponses,
+      V2SessionInstructionsApplyErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/instructions/apply",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Permission2 extends HeyApiClient {
   /**
    * List session permission requests
@@ -6110,6 +6155,11 @@ export class Session3 extends HeyApiClient {
   private _revert?: Revert
   get revert(): Revert {
     return (this._revert ??= new Revert({ client: this.client }))
+  }
+
+  private _instructions?: Instructions
+  get instructions(): Instructions {
+    return (this._instructions ??= new Instructions({ client: this.client }))
   }
 
   private _permission?: Permission2
@@ -8183,6 +8233,182 @@ export class TargetBinding extends HeyApiClient {
   }
 }
 
+export class Global2 extends HeyApiClient {
+  /**
+   * Reset controller-global instructions to default discovery
+   */
+  public reset<ThrowOnError extends boolean = false>(
+    parameters: {
+      harnessInstructionRevisionInput: HarnessInstructionRevisionInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ key: "harnessInstructionRevisionInput", map: "body" }] }],
+    )
+    return (options?.client ?? this.client).post<
+      V2HarnessInstructionsGlobalResetResponses,
+      V2HarnessInstructionsGlobalResetErrors,
+      ThrowOnError
+    >({
+      url: "/api/harness/instructions/global/reset",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Target2 extends HeyApiClient {
+  /**
+   * Unbind a target without deleting its shared instruction file
+   */
+  public unbind<ThrowOnError extends boolean = false>(
+    parameters: {
+      harnessInstructionTargetMutationInput: HarnessInstructionTargetMutationInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [{ args: [{ key: "harnessInstructionTargetMutationInput", map: "body" }] }],
+    )
+    return (options?.client ?? this.client).post<
+      V2HarnessInstructionsTargetUnbindResponses,
+      V2HarnessInstructionsTargetUnbindErrors,
+      ThrowOnError
+    >({
+      url: "/api/harness/instructions/target/unbind",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Instructions2 extends HeyApiClient {
+  /**
+   * Read device-local harness instruction settings
+   */
+  public settings<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      V2HarnessInstructionsSettingsResponses,
+      V2HarnessInstructionsSettingsErrors,
+      ThrowOnError
+    >({ url: "/api/harness/instructions", ...options })
+  }
+
+  /**
+   * Inspect the controller-global instruction selection
+   */
+  public global<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      V2HarnessInstructionsGlobalResponses,
+      V2HarnessInstructionsGlobalErrors,
+      ThrowOnError
+    >({ url: "/api/harness/instructions/global", ...options })
+  }
+
+  /**
+   * Inspect one controller-side target instruction selection
+   */
+  public target<ThrowOnError extends boolean = false>(
+    parameters: {
+      target: HarnessInstructionTarget
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "target" }] }])
+    return (options?.client ?? this.client).get<
+      V2HarnessInstructionsTargetResponses,
+      V2HarnessInstructionsTargetErrors,
+      ThrowOnError
+    >({
+      url: "/api/harness/instructions/target/{target}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Validate and preview one controller instruction file
+   */
+  public validate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      reference?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "reference" }] }])
+    return (options?.client ?? this.client).post<
+      V2HarnessInstructionsValidateResponses,
+      V2HarnessInstructionsValidateErrors,
+      ThrowOnError
+    >({
+      url: "/api/harness/instructions/validate",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Bind a global or target instruction file
+   */
+  public bind<ThrowOnError extends boolean = false>(
+    parameters: {
+      harnessInstructionBindInput: HarnessInstructionBindInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "harnessInstructionBindInput", map: "body" }] }])
+    return (options?.client ?? this.client).put<
+      V2HarnessInstructionsBindResponses,
+      V2HarnessInstructionsBindErrors,
+      ThrowOnError
+    >({
+      url: "/api/harness/instructions/binding",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  private _global?: Global2
+  get global2(): Global2 {
+    return (this._global ??= new Global2({ client: this.client }))
+  }
+
+  private _target?: Target2
+  get target2(): Target2 {
+    return (this._target ??= new Target2({ client: this.client }))
+  }
+}
+
+export class Harness extends HeyApiClient {
+  private _instructions?: Instructions2
+  get instructions(): Instructions2 {
+    return (this._instructions ??= new Instructions2({ client: this.client }))
+  }
+}
+
 export class Environment extends HeyApiClient {
   /**
    * List location environment metadata
@@ -8397,6 +8623,11 @@ export class V2 extends HeyApiClient {
   private _targetBinding?: TargetBinding
   get targetBinding(): TargetBinding {
     return (this._targetBinding ??= new TargetBinding({ client: this.client }))
+  }
+
+  private _harness?: Harness
+  get harness(): Harness {
+    return (this._harness ??= new Harness({ client: this.client }))
   }
 
   private _environment?: Environment
