@@ -267,14 +267,14 @@ export function useHarnessManager(input: { readonly openSkills: () => void }) {
     const width = Math.min(28, Math.max("Global rule".length, ...targets.map((target) => target.name.length)))
     return [
       {
-        title: "Global rule".padEnd(width),
-        description: instructionReference(current.settings, current.global),
+        title: `${"Global rule".padEnd(width)}  ${instructionReference(current.settings, current.global)}`,
+        inspectTitle: true,
         value: "global",
         category: "Global",
       },
       ...targets.map((target) => ({
-        title: target.name.padEnd(width),
-        description: instructionReference(current.settings, current.targets[target.id]!),
+        title: `${target.name.padEnd(width)}  ${instructionReference(current.settings, current.targets[target.id]!)}`,
+        inspectTitle: true,
         value: `target:${target.id}`,
         category: "Target",
       })),
