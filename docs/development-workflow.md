@@ -2,7 +2,7 @@
 
 This document defines how this fork turns accepted RFCs into maintainable work when multiple people or Agents develop in parallel. It supplements the root `AGENTS.md` and `CONTRIBUTING.md`; package-local `AGENTS.md` files still apply to files below their directories.
 
-External contributors follow the public [`CONTRIBUTING.md`](../CONTRIBUTING.md). They run relevant checks on supported platforms they can access and disclose gaps. The accepting maintainer owns any missing canonical Mac/WSL2 evidence and the final merge gate; external contributors are not expected to own project hardware.
+External contributors follow the public [`CONTRIBUTING.md`](../CONTRIBUTING.md). They run relevant checks on supported platforms they can access and disclose gaps. The accepting maintainer owns missing evidence for the risk-selected platforms and the final merge gate; Mac is the default controller, and external contributors are not expected to own project hardware.
 
 User-facing README, contribution, security, release and visual documentation follows [the human-facing documentation standard](development/human-documentation.md). Its [Simplified Chinese version](development/human-documentation.zh.md) is maintained alongside the English canonical document.
 
@@ -51,7 +51,7 @@ An implementation issue is **Ready** only when it contains:
 - compatibility and migration requirements;
 - acceptance checks, including failure behavior;
 - the minimum test and manual verification plan;
-- the applicable Mac and `mywindows` real-device scenarios from `docs/testing-workflow.md`;
+- the applicable Mac real-workflow scenarios and any required Windows/WSL2, remote-target, or multi-device scenarios, with selection rationale from `docs/testing-workflow.md`;
 - known security, credential, remote-execution, sync, or data-loss risks;
 - whether generated API/SDK artifacts are expected.
 
@@ -211,7 +211,7 @@ A task is **Done** only when:
 - every acceptance check in the issue is satisfied;
 - relevant package-local tests and `bun typecheck` pass from the correct package directories;
 - compatibility/failure-path tests required by the RFC pass;
-- relevant real-device acceptance passes on both the Mac and `mywindows` under the exact built commit;
+- relevant Mac acceptance and required additional device scenarios pass under the exact built commit, or the maintainer explicitly records a scoped deferral; optional unrun platforms and their rationale are disclosed;
 - generated files were produced by repository scripts and are consistent;
 - UI changes include before/after screenshots or recordings;
 - no secrets, external login state, machine-specific paths or credentials entered the diff, fixtures or logs;
