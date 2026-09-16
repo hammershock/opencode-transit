@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { FileSystem } from "../src/filesystem"
+import { Harness } from "../src/harness"
 import { ModelContext } from "../src/model-context"
 
 describe("schema compatibility", () => {
@@ -31,5 +32,28 @@ describe("schema compatibility", () => {
         content: "target rules",
       }),
     ).toMatchObject({ origin: "target-file", scope: "target" })
+  })
+
+  test("harness instruction settings decode the version 1 shared-reference contract", () => {
+    const decoded = Schema.decodeUnknownSync(Harness.InstructionSettingsSnapshot)({
+      version: 1,
+      path: "/controller/config/harness.jsonc",
+      revision: "0".repeat(64),
+      global: "policies/global.md",
+      targets: [
+        { target: "local", reference: "policies/shared.md" },
+        { target: "11111111-1111-4111-8111-111111111111", reference: "policies/shared.md" },
+      ],
+      diagnostics: [],
+      valid: true,
+    })
+
+    expect(decoded.version).toBe(1)
+    expect(decoded.targets.map((item) => item.reference)).toEqual(["policies/shared.md", "policies/shared.md"])
+    expect(Schema.encodeSync(Harness.InstructionSettingsSnapshot)(decoded)).toMatchObject({
+      version: 1,
+      global: "policies/global.md",
+      targets: [{ target: "local" }, { target: "11111111-1111-4111-8111-111111111111" }],
+    })
   })
 })

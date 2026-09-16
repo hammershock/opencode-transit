@@ -20,7 +20,6 @@ import { EventTable } from "@opencode-ai/core/event/sql"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { SessionContextEpochTable, SessionTable } from "@opencode-ai/core/session/sql"
-import { SessionContextEpoch } from "@opencode-ai/core/session/context-epoch"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { eq } from "drizzle-orm"
 import { Config } from "@opencode-ai/core/config"
@@ -62,7 +61,7 @@ describe("InstructionContext", () => {
           const directory = path.join(project, "packages", "core")
           const outside = path.join(tmp.path, "AGENTS.md")
           const globalFile = path.join(global, "AGENTS.md")
-          const targetFile = path.join(global, "targets", "local", "AGENTS.md")
+          const targetFile = path.join(global, "policies", "local.md")
           const projectFile = path.join(project, "AGENTS.md")
           const packageFile = path.join(directory, "AGENTS.md")
           yield* Effect.promise(async () => {
@@ -72,6 +71,10 @@ describe("InstructionContext", () => {
             await fs.writeFile(outside, "outside")
             await fs.writeFile(globalFile, "global")
             await fs.writeFile(targetFile, "local target")
+            await fs.writeFile(
+              path.join(global, "harness.jsonc"),
+              JSON.stringify({ version: 1, instructions: { targets: { local: "policies/local.md" } } }),
+            )
             await fs.writeFile(projectFile, "project")
             await fs.writeFile(packageFile, "package")
           })
@@ -98,7 +101,7 @@ describe("InstructionContext", () => {
           expect(initialized.baseline).toBe(
             [
               "Instructions from: <user-config>/AGENTS.md\nglobal",
-              "Instructions from: <target-config>/AGENTS.md\nlocal target",
+              "Instructions from: <target-instructions>\nlocal target",
               `Instructions from: ${projectFile}\nproject`,
               `Instructions from: ${packageFile}\npackage`,
             ].join("\n\n"),
@@ -106,7 +109,7 @@ describe("InstructionContext", () => {
           expect(initialized.baseline).not.toContain("outside")
           expect(initialized.snapshot["core/instructions"].value).toMatchObject([
             { origin: "global-file", scope: "global" },
-            { origin: "target-file", scope: "target", source: "<target-config>/AGENTS.md" },
+            { origin: "target-file", scope: "target", source: "<target-instructions>" },
             { origin: "project-file", scope: "project" },
             { origin: "project-file", scope: "project" },
           ])
@@ -126,16 +129,93 @@ describe("InstructionContext", () => {
     ),
   )
 
-  it.live("loads each Rexd sidecar from controller storage without leaking its path or target ID", () =>
+  it.live("uses a custom controller-global rule without falling back and preserves configured global order", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const global = path.join(tmp.path, "controller")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(global, "policies"), { recursive: true })
+            await fs.writeFile(path.join(global, "AGENTS.md"), "default decoy")
+            await fs.writeFile(path.join(global, "policies", "global.md"), "custom global")
+            await fs.writeFile(path.join(global, "configured.md"), "configured global")
+            await fs.writeFile(
+              path.join(global, "harness.jsonc"),
+              JSON.stringify({ version: 1, instructions: { global: "policies/global.md" } }),
+            )
+          })
+          const generation = yield* SystemContextRegistry.Service.pipe(
+            Effect.flatMap((service) => service.load()),
+            Effect.flatMap(SystemContext.initialize),
+            Effect.provide(
+              instructionLayer({
+                config: global,
+                configLayer: Layer.succeed(
+                  Config.Service,
+                  Config.Service.of({
+                    entries: () =>
+                      Effect.succeed([
+                        new Config.Document({
+                          type: "document",
+                          path: path.join(global, "opencode.json"),
+                          scope: "global",
+                          filesystem: "controller",
+                          info: new Config.Info({ instructions: ["configured.md"] }),
+                        }),
+                      ]),
+                  }),
+                ),
+                locationServiceLayer: Layer.succeed(
+                  Location.Service,
+                  Location.Service.of(location({ directory: AbsolutePath.make(tmp.path) })),
+                ),
+              }),
+            ),
+          )
+
+          expect(
+            (generation.snapshot["core/instructions"].value as ModelContext.Instructions).map((item) => [
+              item.source,
+              item.content,
+            ]),
+          ).toEqual([
+            ["<global-instructions>", "custom global"],
+            ["<user-config>/configured.md", "configured global"],
+          ])
+          expect(generation.baseline).not.toContain("default decoy")
+        }),
+      ),
+    ),
+  )
+
+  it.live("loads shared Rexd rules from controller storage and project rules from a distinct Location filesystem", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ).pipe(
       Effect.flatMap((tmp) => {
         const global = path.join(tmp.path, "controller")
-        const project = path.join(tmp.path, "target", "repo")
+        const project = "/remote/repo"
+        const projectFile = `${project}/AGENTS.md`
+        const targetProjectFile = path.join(tmp.path, "target-filesystem", "AGENTS.md")
         const targetA = Location.TargetID.make("11111111-1111-4111-8111-111111111111")
         const targetB = Location.TargetID.make("22222222-2222-4222-8222-222222222222")
+        const reads: string[] = []
+        const targetFS = FSUtil.Service.of({
+          existsSafe: () => Effect.succeed(false),
+          readFileStringSafe: (filepath: string) =>
+            Effect.promise(async () => {
+              reads.push(filepath)
+              return filepath === projectFile ? fs.readFile(targetProjectFile, "utf8") : undefined
+            }),
+          resolve: (filepath: string) => Effect.succeed(filepath),
+          up: () => Effect.succeed([AbsolutePath.make(projectFile)]),
+          glob: () => Effect.succeed([]),
+          globMatch: () => false,
+        } as unknown as FSUtil.Interface)
         const load = (targetID: Location.TargetID) =>
           SystemContextRegistry.Service.pipe(
             Effect.flatMap((service) => service.load()),
@@ -143,6 +223,8 @@ describe("InstructionContext", () => {
             Effect.provide(
               instructionLayer({
                 config: global,
+                filesystemLayer: Layer.succeed(FSUtil.Service, targetFS),
+                configLayer: Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) })),
                 locationServiceLayer: Layer.succeed(
                   Location.Service,
                   Location.Service.of(
@@ -161,13 +243,20 @@ describe("InstructionContext", () => {
           )
         return Effect.gen(function* () {
           yield* Effect.promise(async () => {
-            await fs.mkdir(project, { recursive: true })
-            await fs.mkdir(path.join(global, "targets", targetA), { recursive: true })
-            await fs.mkdir(path.join(global, "targets", targetB), { recursive: true })
+            await fs.mkdir(path.dirname(targetProjectFile), { recursive: true })
+            await fs.mkdir(path.join(global, "policies"), { recursive: true })
             await fs.writeFile(path.join(global, "AGENTS.md"), "controller global")
-            await fs.writeFile(path.join(global, "targets", targetA, "AGENTS.md"), "target A")
-            await fs.writeFile(path.join(global, "targets", targetB, "AGENTS.md"), "target B")
-            await fs.writeFile(path.join(project, "AGENTS.md"), "target project")
+            await fs.writeFile(path.join(global, "policies", "shared.md"), "shared target")
+            await fs.writeFile(
+              path.join(global, "harness.jsonc"),
+              JSON.stringify({
+                version: 1,
+                instructions: {
+                  targets: { [targetA]: "policies/shared.md", [targetB]: "policies/shared.md" },
+                },
+              }),
+            )
+            await fs.writeFile(targetProjectFile, "target project")
             await fs.mkdir(path.join(global, "repo"), { recursive: true })
             await fs.writeFile(path.join(global, "repo", "AGENTS.md"), "controller project decoy")
           })
@@ -178,101 +267,82 @@ describe("InstructionContext", () => {
           const secondInstructions = second.snapshot["core/instructions"].value as ModelContext.Instructions
           expect(firstInstructions.map((item) => [item.scope, item.source, item.content])).toEqual([
             ["global", "<user-config>/AGENTS.md", "controller global"],
-            ["target", "<target-config>/AGENTS.md", "target A"],
-            ["project", path.join(project, "AGENTS.md"), "target project"],
+            ["target", "<target-instructions>", "shared target"],
+            ["project", projectFile, "target project"],
           ])
           expect(secondInstructions.map((item) => [item.scope, item.source, item.content])).toEqual([
             ["global", "<user-config>/AGENTS.md", "controller global"],
-            ["target", "<target-config>/AGENTS.md", "target B"],
-            ["project", path.join(project, "AGENTS.md"), "target project"],
+            ["target", "<target-instructions>", "shared target"],
+            ["project", projectFile, "target project"],
           ])
           expect(firstInstructions[1]?.id).toBe(secondInstructions[1]?.id)
           expect(first.baseline).not.toContain("controller project decoy")
-          const rebound = SessionContextEpoch.materialize(
-            {
-              ...second,
-              snapshot: {
-                ...second.snapshot,
-                "core/environment": {
-                  value: ModelContext.Environment.make({
-                    harness: "OpenCode Transit",
-                    entrypoint: "opencode-transit",
-                    targetKind: "rexd",
-                    targetName: "shared-gpu",
-                    directory: project,
-                    projectRoot: project,
-                    platform: "linux-x64",
-                  }),
-                },
-              },
-            },
-            {
-              generation: 2,
-              reason: "location-rebound",
-              locationRevision: 1,
-            },
-          )
-          expect(rebound.instructions.map((item) => item.content)).toEqual([
-            "controller global",
-            "target B",
-            "target project",
-          ])
-          expect(rebound.baseline).not.toContain("target A")
+          expect(reads).toEqual([projectFile, projectFile])
+          expect(reads).not.toContain(path.join(global, "policies", "shared.md"))
           expect(JSON.stringify(first.snapshot)).not.toContain(targetA)
-          expect(JSON.stringify(rebound)).not.toContain(targetB)
-          expect(JSON.stringify(first.snapshot)).not.toContain(path.join(global, "targets"))
+          expect(JSON.stringify(second.snapshot)).not.toContain(targetB)
+          expect(JSON.stringify(first.snapshot)).not.toContain(path.join(global, "policies"))
         })
       }),
     ),
   )
 
-  it.effect("diagnoses an unreadable target sidecar with a sanitized source", () =>
-    Effect.gen(function* () {
-      const targetFile = path.join("/controller", "targets", "local", "AGENTS.md")
-      const filesystem = FSUtil.Service.of({
-        existsSafe: () => Effect.succeed(false),
-        readFileStringSafe: () => Effect.succeed(undefined),
-        resolve: (filepath: string) => Effect.succeed(filepath),
-        up: () => Effect.succeed([]),
-        glob: () => Effect.succeed([]),
-        globMatch: () => false,
-      } as unknown as FSUtil.Interface)
-      const generation = yield* SystemContextRegistry.Service.pipe(
-        Effect.flatMap((service) => service.load()),
-        Effect.flatMap(SystemContext.initialize),
-        Effect.provide(
-          instructionLayer({
-            config: "/controller",
-            filesystemLayer: Layer.succeed(FSUtil.Service, filesystem),
-            controllerFilesystemLayer: Layer.succeed(
-              ControllerFileSystem.Service,
-              ControllerFileSystem.Service.of({
-                ...filesystem,
-                existsSafe: (filepath) => Effect.succeed(filepath === targetFile),
+  it.live("diagnoses an unreadable configured target file with a sanitized source", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const global = path.join(tmp.path, "controller")
+          const targetFile = path.join(global, "unreadable")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(targetFile, { recursive: true })
+            await fs.writeFile(
+              path.join(global, "harness.jsonc"),
+              JSON.stringify({ version: 1, instructions: { targets: { local: "unreadable" } } }),
+            )
+          })
+          const filesystem = FSUtil.Service.of({
+            existsSafe: () => Effect.succeed(false),
+            readFileStringSafe: () => Effect.succeed(undefined),
+            resolve: (filepath: string) => Effect.succeed(filepath),
+            up: () => Effect.succeed([]),
+            glob: () => Effect.succeed([]),
+            globMatch: () => false,
+          } as unknown as FSUtil.Interface)
+          const generation = yield* SystemContextRegistry.Service.pipe(
+            Effect.flatMap((service) => service.load()),
+            Effect.flatMap(SystemContext.initialize),
+            Effect.provide(
+              instructionLayer({
+                config: global,
+                filesystemLayer: Layer.succeed(FSUtil.Service, filesystem),
+                configLayer: Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) })),
+                locationServiceLayer: Layer.succeed(
+                  Location.Service,
+                  Location.Service.of(location({ directory: AbsolutePath.make("/repo") })),
+                ),
               }),
             ),
-            locationServiceLayer: Layer.succeed(
-              Location.Service,
-              Location.Service.of(location({ directory: AbsolutePath.make("/repo") })),
-            ),
-          }),
-        ),
-      )
+          )
 
-      expect(generation.snapshot["core/instructions"].value).toMatchObject([
-        {
-          origin: "target-file",
-          scope: "target",
-          source: "<target-config>/AGENTS.md",
-          status: "ignored",
-          failureStage: "read",
-        },
-      ])
-      expect(JSON.stringify(generation.snapshot)).not.toContain("/controller/targets")
-    }),
+          expect(generation.snapshot["core/instructions"].value).toMatchObject([
+            {
+              origin: "target-file",
+              scope: "target",
+              source: "<target-instructions>",
+              status: "ignored",
+              failureStage: "read",
+            },
+          ])
+          expect(JSON.stringify(generation.snapshot)).not.toContain(targetFile)
+        }),
+      ),
+    ),
   )
 
-  it.live("keeps an empty AGENTS.md available while an absent target sidecar preserves compatibility", () =>
+  it.live("keeps an empty AGENTS.md available while an absent target binding preserves compatibility", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),

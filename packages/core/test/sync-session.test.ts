@@ -465,7 +465,7 @@ describe("SessionSync", () => {
         id: "target-profile",
         origin: "target-file",
         scope: "target",
-        source: "<target-config>/AGENTS.md",
+        source: "<target-instructions>",
         status: "loaded",
         content: "controller target rules",
         digest: "digest-target",

@@ -11,6 +11,7 @@ import { makeLocationNode } from "./effect/app-node"
 import { Flag } from "./flag/flag"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
+import { HarnessInstructions } from "./harness/instructions"
 import { Location } from "./location"
 import { SystemContext } from "./system-context/index"
 import { SystemContextRegistry } from "./system-context/registry"
@@ -51,6 +52,7 @@ const layer = Layer.effect(
     const controllerFS = yield* ControllerFileSystem.Service
     const config = yield* Config.Service
     const global = yield* Global.Service
+    const harness = yield* HarnessInstructions.Service
     const location = yield* Location.Service
     const registry = yield* SystemContextRegistry.Service
     const { db } = yield* Database.Service
@@ -159,43 +161,57 @@ const layer = Layer.effect(
       })
     })
 
-    const globalFile = Effect.fn("InstructionContext.globalFile")(function* () {
-      const candidates = [
-        { filepath: path.join(global.config, "AGENTS.md"), origin: "global-file" as const },
-        ...(!Flag.OPENCODE_DISABLE_CLAUDE_CODE_PROMPT
-          ? [{ filepath: path.join(global.home, ".claude", "CLAUDE.md"), origin: "global-file" as const }]
-          : []),
-      ]
-      for (const candidate of candidates) {
-        if (!(yield* controllerFS.existsSafe(candidate.filepath))) continue
+    const harnessFile = Effect.fn("InstructionContext.harnessFile")(function* (scope: "global" | "target") {
+      const selected = yield* Effect.tryPromise({
+        try: () =>
+          harness.read(
+            scope === "global"
+              ? { type: "global" }
+              : {
+                  type: "target",
+                  target: location.target.type === "local" ? "local" : location.target.targetID,
+                },
+          ),
+        catch: () => new Error("Harness instruction settings are unavailable"),
+      }).pipe(Effect.exit)
+      const origin = scope === "global" ? ("global-file" as const) : ("target-file" as const)
+      const label = scope === "global" ? "<global-instructions>" : "<target-instructions>"
+      if (Exit.isFailure(selected) || selected.value.mode === "invalid")
         return [
-          yield* read({
-            filesystem: controllerFS,
+          yield* ignored({
             side: "controller",
-            filepath: candidate.filepath,
-            origin: candidate.origin,
-            scope: "global",
+            identity: `${scope}-profile/settings`,
+            origin,
+            scope,
+            source: label,
+            displaySource: label,
+            failureStage: "discovery",
           }),
         ]
-      }
-      return []
-    })
-
-    const targetFile = Effect.fn("InstructionContext.targetFile")(function* () {
-      const target =
-        location.target.type === "local"
-          ? path.join(global.config, "targets", "local", "AGENTS.md")
-          : path.join(global.config, "targets", location.target.targetID, "AGENTS.md")
-      if (!(yield* controllerFS.existsSafe(target))) return []
+      if (!selected.value.source) return []
+      const custom = selected.value.mode === "custom"
+      const source = selected.value.source
+      if (source.status !== "readable")
+        return [
+          yield* ignored({
+            side: "controller",
+            identity: custom ? `${scope}-profile/instructions` : source.resolved,
+            origin,
+            scope,
+            source: source.resolved,
+            displaySource: custom ? label : undefined,
+            failureStage: "read",
+          }),
+        ]
       return [
-        yield* read({
-          filesystem: controllerFS,
+        instruction({
           side: "controller",
-          filepath: target,
-          identity: "target-profile/AGENTS.md",
-          displaySource: "<target-config>/AGENTS.md",
-          origin: "target-file",
-          scope: "target",
+          identity: custom ? `${scope}-profile/instructions` : source.resolved,
+          origin,
+          scope,
+          source: source.resolved,
+          displaySource: custom ? label : undefined,
+          content: source.content,
         }),
       ]
     })
@@ -381,7 +397,7 @@ const layer = Layer.effect(
 
     const observeSources = Effect.fn("InstructionContext.observeSources")(function* () {
       return yield* Effect.all(
-        [globalFile(), configured("global"), targetFile(), projectFiles(), configured("project")],
+        [harnessFile("global"), configured("global"), harnessFile("target"), projectFiles(), configured("project")],
         { concurrency: "unbounded" },
       ).pipe(Effect.map((groups) => Array.dedupeWith(groups.flat(), (left, right) => left.id === right.id)))
     })
@@ -573,6 +589,7 @@ export const node = makeLocationNode({
     EventV2.node,
     FSUtil.locationNode,
     Global.node,
+    HarnessInstructions.node,
     Location.node,
     SystemContextRegistry.node,
   ],

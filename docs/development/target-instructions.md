@@ -1,44 +1,65 @@
-# Target-specific instructions
+# Harness instructions
 
-OpenCode Transit can apply controller-owned rules to every Session that uses one target. This layer is useful for durable
-execution and safety constraints that are broader than a project but should not affect unrelated targets.
+OpenCode Transit can admit controller-owned global and target rules before Location-owned project rules. Target rules are
+useful for durable execution and safety constraints that belong to a machine, cluster, or shared service rather than one
+project. One rule file may be shared by several targets.
 
-## Placement and precedence
+## Device-local settings and precedence
 
-Create the optional file on the controller that runs OpenCode Transit:
+Instruction bindings belong to the controller device in `<user-config>/harness.jsonc`. They are not target-registry fields,
+do not sync between controllers, and are never discovered from target HOME. The version 1 shape is:
 
-- local target: `<user-config>/targets/local/AGENTS.md`
-- Rexd target: `<user-config>/targets/<TargetID>/AGENTS.md`
+```jsonc
+{
+  "version": 1,
+  "instructions": {
+    // Omit to preserve default global AGENTS.md / CLAUDE.md discovery.
+    "global": "policies/global.md",
+    "targets": {
+      "local": "policies/local.md",
+      "00000000-0000-4000-8000-000000000000": "policies/shared-accelerator.md",
+    },
+  },
+}
+```
 
-`<user-config>` is the active OpenCode user configuration directory. `<TargetID>` is the local ID of the target definition,
-not its display name. Do not copy the file to the target user's home directory: target-specific instructions are controller
-configuration and are read only through the controller filesystem.
+Relative references resolve from `<user-config>`. Absolute references and `~/...` references resolve on the controller with
+the controller's HOME. A configured missing or unreadable file is diagnosed explicitly; it never falls back to another rule.
+An unset global binding keeps the existing `<user-config>/AGENTS.md`, then `~/.claude/CLAUDE.md`, fallback. An unset target
+binding means that target has no controller-owned target rule.
 
 Instructions are admitted in this order:
 
-1. controller-global `AGENTS.md` and global configured instructions;
-2. controller-owned target `AGENTS.md`;
-3. Location project and working-directory rules plus project configured instructions, followed by nested rules discovered later.
+1. the default or custom controller-global rule, followed by global configured instructions;
+2. the controller-owned rule bound to the current target, when set;
+3. Location project and working-directory rules, followed by project configured instructions and nested rules discovered
+   later.
 
-The model context and `/context` inspector identify the middle layer as `<target-config>/AGENTS.md`. The durable context does
-not contain the controller path or TargetID.
+The settings service uses revision-checked atomic writes so concurrent managers cannot silently overwrite each other. It can
+list settings, inspect and validate references, reset global discovery, and bind or unbind targets without deleting a shared
+rule file. Runtime and durable context identify custom files as `<global-instructions>` and `<target-instructions>`; controller
+absolute paths, target IDs, and device-local sharing details are not persisted into portable Session context.
 
 ## Standing constraints and Skills
 
-Use target instructions for constraints that should remain true throughout work on the target: ownership boundaries, shared
-node etiquette, resource inspection requirements, cache/output policy, and authorization boundaries. Keep step-by-step
-procedures, reusable diagnostics, and task-specific workflows in Skills. Skill visibility and activation are independent of
-target instructions.
+Use harness instructions for constraints that should remain true throughout work on the target: owned-path-only operations on
+shared nodes, shared-state authorization boundaries, local identity selection, live GPU and storage inspection before
+expensive work, cache/output placement, and bounded or background jobs. Keep reusable procedures, task sequences, and
+diagnostic playbooks in Skills. Skill visibility and activation remain independent of instruction bindings.
 
-The [generic shared accelerator template](../examples/huawei-target-AGENTS.md) is a sanitized starting point. Adapt only the
-stable policy; keep current host inventory, personal paths, secret locations, account names, and endpoints out of the file.
+The [generic shared accelerator template](../examples/huawei-target-AGENTS.md) is a sanitized public starting point. Public
+examples must omit volatile inventory, personal paths, secret locations, account names, and endpoints. A private target policy
+may contain stable paths, local identity conventions, and account-selection rules that its owner intentionally needs; secret
+values still never belong in instruction files.
 
-## Applying changes
+## Lifecycle
 
-Target instructions use the existing model-context lifecycle. A new Session admits the current file. An existing Session keeps
-its frozen copy across ordinary turns, process restart, Session re-entry, transparent reconnect, and Skill activation. Apply an
-intentional edit through an existing successful `/init` refresh or Location rebind boundary. The replacement is durable and
-syncs as part of the Session context; a receiving device uses the accepted body instead of reading its own target sidecar.
+A new Session admits the files resolved at context initialization. Saving a binding or editing a referenced file affects
+future admission only: an existing Session keeps its frozen copy across ordinary turns, process restart, Session re-entry,
+transparent reconnect, and Skill activation. Existing successful context refresh and Location rebind boundaries reread the
+current bindings and establish one replacement durable generation. Location rebind also reevaluates the target binding for the
+new Location.
 
-If the optional file is absent, behavior is unchanged. If it exists but cannot be read, context establishment continues and
-`/context` reports a sanitized ignored-source diagnostic. There is no fallback to target HOME or the Location filesystem.
+The admitted instruction bodies sync as part of Session context. A receiving device uses that accepted generation instead of
+consulting its own device-local bindings. `/context` displays the admitted state and sanitized diagnostics; it does not expose
+controller paths or reconfigure bindings.
