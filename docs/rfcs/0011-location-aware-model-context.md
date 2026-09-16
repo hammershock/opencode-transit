@@ -21,7 +21,7 @@ superseded-by: []
 
 OpenCode Transit 必须根据 Session 的实际 Location 构造模型所见的工作环境，而不能从运行 OpenCode 的控制设备隐式读取 cwd、项目根、平台或项目规则。远程 Session 的 `AGENTS.md`、兼容规则文件和项目级 `instructions` 必须从 target 文件系统发现和读取；控制端用户级规则仍代表启动 OpenCode 的用户要求。
 
-Location 派生的环境身份和工作规则形成 Session 持久化的 `ModelContextSnapshot`。它是隐藏的系统状态，不显示成普通聊天消息，但与完整 Session 一起同步。普通 turn 不热重载已经接纳的规则；Location rebind、成功的 `/init`、显式 Apply instructions 和旧 Session 首次迁移可以产生新的上下文代际。Agent 首次进入更深目录时仍保留 OpenCode 按需追加嵌套规则的能力。
+Location 派生的环境身份和工作规则形成 Session 持久化的 `ModelContextSnapshot`。它是隐藏的系统状态，不显示成普通聊天消息，但与完整 Session 一起同步。普通 turn 不热重载已经接纳的规则；Location rebind、成功的 `/init`、用户在 `/context` 显式刷新 instructions 和旧 Session 首次迁移可以产生新的上下文代际。Agent 首次进入更深目录时仍保留 OpenCode 按需追加嵌套规则的能力。
 
 legacy TUI prompt 链与 Core V2 必须消费同一个 Location-scoped context assembler 和同一套 durable context epoch，不得继续维护两个语义不同的注入实现。
 
@@ -114,20 +114,21 @@ Snapshot 属于 Session 隐藏系统状态。它不作为普通 user/assistant m
 - `legacy-backfill`：没有 canonical snapshot 的旧 Session 第一次继续前建立；
 - `location-rebound`：RFC-0009 成功提交新 Location 后建立；
 - `init`：OpenCode `/init` 成功创建或更新规则后建立。
-- `instructions-applied`：用户在 `/harness instructions` 中把当前 controller settings 显式应用到一个 idle Session 后建立。
+- `instructions-applied`：用户在 `/context` 中把当前 controller settings 显式刷新到一个 idle Session 后建立。
 
-普通 prompt、TUI 切换、进程重启、冷恢复、compaction、Skill activation 和透明 SSH/Rexd 重连不产生 instruction 代际，也不重新读取已接纳规则。rebind、成功的 `/init` 与显式 Apply instructions 是运行中的 replacement 边界；保存 harness settings 本身只影响未来 admission。
+普通 prompt、TUI 切换、进程重启、冷恢复、compaction、Skill activation 和透明 SSH/Rexd 重连不产生 instruction 代际，也不重新读取已接纳规则。rebind、成功的 `/init` 与 `/context` 中显式 Refresh instructions 是运行中的 replacement 边界；保存 harness settings 本身只影响未来 admission。
 
-### 2026-09-16 accepted amendment: `/harness` 与显式 application
+### 2026-09-16 accepted amendment: `/harness` 配置与 `/context` 显式刷新
 
-维护者于 2026-09-16 明确授权独立于 `/context` 的 `/harness` 配置入口以及 save/apply 分离：
+维护者于 2026-09-16 明确授权 `/harness` 与 `/context` 的职责分离：
 
 1. `/harness` 提供 Instructions 与既有 Skills manager；`/harness instructions`、`/harness skills` 深链到同一 workflow，既有 `/skills` 保持不变；
-2. Instructions manager 只管理 controller-owned global/target bindings，controller-side browser 在 remote Session 中也必须明确标注；它显示文件状态、有界预览、共享该文件的 targets，以及 saved 与当前 Session admitted generation 的差异；
-3. 保存配置不改变任何已有 Session。用户可对当前 Session 选择 Apply；该操作不得调用 `/init`、模型、Skill activation 或项目文件 mutation；
-4. Apply 只在该 Session 的 idle exclusive boundary 执行，重新读取 initial instruction chain，保留其他 context sources、Location revision、Session history 与其他 Session generation，并以一个 durable `instructions-applied` generation 原子提交；
-5. unresolved/busy 状态必须明确拒绝。读取或组装失败不得发布半成品 generation，之前接纳的 generation 保持不变；
-6. `/context` 继续只读展示 admitted state，不承担配置 mutation。Skill visibility、target scope、sync 与 activation 仍完全服从 RFC-0012，不因 `/harness` 改变。
+2. Instructions manager 只管理 controller-owned global/target path bindings。默认视图仅按 Global 与 Target 两组显示 scope identity 和路径；remote Session 中的路径选择器继续明确标注 Controller；
+3. Global 未配置 override 时显示默认 OpenCode 全局规则路径。Enter 编辑选中路径，Backspace 只清除 binding 或恢复 Global 默认，不删除文件，`Ctrl+P` 预览选中的有效文档，Escape 回退一个弹窗层级；
+4. 保存配置不改变任何已有 Session，也不在 `/harness` 中显示或执行 Session Apply。用户在 `/context` 中可显式选择 Refresh instructions；该操作不得调用 `/init`、模型、Skill activation 或项目文件 mutation；
+5. Refresh 只在该 Session 的 idle exclusive boundary 执行，重新读取 initial instruction chain，保留其他 context sources、Location revision、Session history 与其他 Session generation，并以一个 durable `instructions-applied` generation 原子提交；
+6. unresolved/busy 状态必须明确拒绝。读取或组装失败不得发布半成品 generation，之前接纳的 generation 保持不变；
+7. 打开 `/context` 与预览 source 继续是只读 inspector；只有独立、显式的 Refresh instructions action 才修改 generation。Skill visibility、target scope、sync 与 activation 仍完全服从 RFC-0012。
 
 ## Location 与项目边界
 
@@ -252,7 +253,7 @@ Location 无法解析或 target 不可用时沿用 RFC-0002/0009，不允许模�
 
 ## `/context` 检查入口
 
-新增可信 Core command `/context`，使用 RFC-0003 command toolkit 注册。它是 control-plane inspector：不触发模型、不进入 Session transcript 或模型上下文，也不修改 generation。
+新增可信 Core command `/context`，使用 RFC-0003 command toolkit 注册。打开命令是被动的 control-plane inspector：不触发模型、不进入 Session transcript 或模型上下文，也不修改 generation。
 
 TUI 面板使用本 fork 的视觉规范，默认展示：
 
@@ -262,19 +263,24 @@ TUI 面板使用本 fork 的视觉规范，默认展示：
 - 每项的 origin、scope、显示路径/URL、digest 摘要和 loaded/ignored 状态；
 - ignored source 的脱敏失败阶段。
 
-用户聚焦 source 后按 Enter 预览 Session 中冻结的准确正文。面板不展示 provider/agent 基础 prompt，不自动连接 target，不重新抓取 URL，不提供编辑或 refresh。长路径和错误使用聚焦详情，不破坏列表布局。
+用户聚焦 source 后按 Enter 预览 Session 中冻结的准确正文。面板不展示 provider/agent 基础 prompt，不自动连接 target，不重新抓取 URL，也不提供 source 编辑。长路径和错误使用聚焦详情，不破坏列表布局。
+
+面板另提供显式 Refresh instructions action。只有用户触发该 action 后，才可以读取当前 initial instruction chain 并按下述 replacement boundary 更新当前 Session；打开面板、搜索、移动选择和正文预览都不得产生 generation。read-only、unresolved、busy 或 source invalid 时拒绝刷新并保留当前 snapshot。
 
 ## `/harness` 配置入口
 
-`/harness` 是 controller device-local configuration manager，不是任意 system prompt editor。顶层只有 Instructions 与
-Skills；Skills 直接复用 RFC-0012 manager。Instructions 选择 global 或 target binding，路径选择器始终使用 controller
-filesystem，并在 remote Session 中继续显示 `Controller` 标识。普通行只显示 reference、readable/missing 状态与
-saved/admitted 摘要；完整 resolved path、诊断、共享 targets 与截断后的正文预览放在聚焦详情或 preview。
+`/harness` 是 controller device-local configuration manager，不是任意 system prompt editor。顶层只有无描述副行的
+Instructions 与 Skills；Skills 直接复用 RFC-0012 manager。Instructions 默认视图只有 Global 与 Target 两组，按列显示
+scope identity 和对应 AGENTS 文档路径。Global 未设置 override 时显示默认 OpenCode 全局规则路径；target 未设置时显示
+`unset`。路径选择器始终使用 controller filesystem，并在 remote Session 中继续显示 `Controller` 标识。
 
-保存与 Apply 是两个动作。保存通过 revision-aware settings API 完成并明确提示只影响 future admission。Apply 仅在当前
-Session 可解析且 idle 时可用；Server/Core 在 Session activity exclusive gate 内重新组装 instructions，确认没有 ignored
-initial source 后才发布一个 durable replacement event。整个过程不调用 provider、不写项目文件、不改变 Location
-revision、Skill catalog 或其他 context source。失败只返回脱敏诊断，不修改原 generation。
+Enter 编辑选中 binding；Backspace 清除 target binding 或恢复 Global 默认；`Ctrl+P` 预览选中路径；Escape 逐级返回。
+界面不显示 Apply、generation 差异、readiness、共享 target 说明或 precedence 解释。保存继续使用 revision-aware settings
+API，只改变 future admission；当前 Session 是否刷新完全由 `/context` 的显式 action 管理。
+
+Refresh 仅在当前 Session 可解析且 idle 时可用；Server/Core 在 Session activity exclusive gate 内重新组装 instructions，
+确认没有 ignored initial source 后才发布一个 durable replacement event。整个过程不调用 provider、不写项目文件、不改变
+Location revision、Skill catalog 或其他 context source。失败只返回脱敏诊断，不修改原 generation。
 
 ## 远程性能与状态栏
 
@@ -318,16 +324,16 @@ revision、Skill catalog 或其他 context source。失败只返回脱敏诊断�
 4. 全局规则、controller-owned target `AGENTS.md`、项目 `AGENTS.md`、OpenCode fallback、全局/项目
    `instructions`、glob 和 URL 的来源及顺序有测试。
 5. 初始链和按需嵌套链都按根到具体目录排序；重复 read/list 不重复追加。
-6. new、legacy-backfill、rebind、`/init` 与显式 instructions apply generation 均 durable，并在 prompt admission 前完成；普通 turn、重启和透明重连不读取规则。
+6. new、legacy-backfill、rebind、`/init` 与 `/context` 显式 instructions refresh generation 均 durable，并在 prompt admission 前完成；普通 turn、重启和透明重连不读取规则。
 7. context baseline、replacement 和 extension 可以通过 RFC-0010 在 Mac 与 `mywindows` 双向同步，另一设备构造的模型请求使用相同正文、顺序和 digest。
-8. `/context` 展示实际 snapshot 与 ignored diagnostics，正文预览准确，且命令不触发模型、网络、target 连接或 Session transcript。
+8. `/context` 展示实际 snapshot 与 ignored diagnostics，正文预览准确；打开、浏览和预览不触发模型、网络、target 连接、Session transcript 或 generation。只有显式 Refresh instructions action 可以推进 generation。
 9. 文件、glob 和 URL 失败不会阻止模型调用，不会跨 filesystem fallback，状态栏和日志提供脱敏原因。
 10. target identity 只包含允许字段；SSH 连接信息、credential、`.env` 和控制端设备身份不进入模型上下文或同步 payload。
 11. 控制端日期与 IANA timezone 每轮可用，跨日只产生 time context update，不触发规则重载；target timezone 不注入。
 12. Rexd contract test 证明 initial discovery 复用现有 lease，ancestor/read 请求并发且没有逐文件 SSH handshake。
 13. package-local typecheck、unit/contract/integration tests 通过；Mac 和 `mywindows` 使用同一提交构建的 `opencode-transit` 完成 local、Mac→Linux target、mywindows→Mac target 和跨设备 resume 实测。
-14. `/harness`、两个 subcommand 与既有 `/skills` 复用一个 workflow；controller file browser、共享 target、bounded preview 与 saved/admitted 状态准确。
-15. save 不改变已有 Session；Apply 只推进当前 idle Session 一次，不调用模型、不写项目文件、不改变 Location revision 或其他 source。失败、busy 与 unresolved 均保留旧 generation。
+14. `/harness`、两个 subcommand 与既有 `/skills` 复用一个 workflow；首页无描述副行，Instructions 仅显示 Global/Target 路径列，Enter 编辑、Backspace unset、`Ctrl+P` 预览且 Escape 逐级返回。
+15. save 不改变已有 Session；`/context` 的显式 Refresh 只推进当前 idle Session 一次，不调用模型、不写项目文件、不改变 Location revision 或其他 source。失败、busy 与 unresolved 均保留旧 generation。
 
 ## 参考
 
