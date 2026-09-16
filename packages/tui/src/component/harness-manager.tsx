@@ -283,7 +283,12 @@ export function useHarnessManager(input: { readonly sessionID?: string; readonly
                 cursor,
                 cwd: configDirectory,
                 kind: "file",
-              }).catch((error) => ({ value, cursor, candidates: [], error: errorMessage(error) }))
+              }).catch((error) => ({
+                value,
+                cursor,
+                candidates: [],
+                error: `Cannot browse the controller folder. Check its path and read access, then press Tab to retry. ${errorMessage(error)}`,
+              }))
             }}
             onConfirm={(value) => finish(value)}
             onCancel={() => finish(null)}
@@ -381,7 +386,7 @@ export function useHarnessManager(input: { readonly sessionID?: string; readonly
     dialog.push(() => (
       <DialogSelect
         title={`${title} · Controller file`}
-        footer={<text>Precedence: Global → this target → Location project</text>}
+        footer={<text>Precedence: Global → target → Location project</text>}
         options={[
           {
             title: "Back to Instructions",
