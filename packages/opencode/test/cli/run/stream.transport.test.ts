@@ -1361,6 +1361,7 @@ describe("run stream transport", () => {
       expect(selected.details).toEqual({
         "child-1": {
           sessionID: "child-1",
+          unscoped: true,
           commits: [
             expect.objectContaining({
               kind: "tool",
@@ -1467,6 +1468,7 @@ describe("run stream transport", () => {
         }),
       ).toEqual({
         sessionID: "child-1",
+        unscoped: true,
         commits: [
           expect.objectContaining({
             kind: "assistant",
@@ -1638,6 +1640,7 @@ describe("run stream transport", () => {
 
       expect(detail).toEqual({
         sessionID: "child-1",
+        unscoped: true,
         commits: expect.arrayContaining([
           expect.objectContaining({
             kind: "error",
@@ -1726,6 +1729,7 @@ describe("run stream transport", () => {
         }),
       ).toEqual({
         sessionID: "child-1",
+        unscoped: true,
         commits: [
           expect.objectContaining({
             kind: "assistant",
@@ -1746,6 +1750,7 @@ describe("run stream transport", () => {
         }, 2_000),
       ).toEqual({
         sessionID: "child-1",
+        unscoped: true,
         commits: [
           expect.objectContaining({
             kind: "assistant",

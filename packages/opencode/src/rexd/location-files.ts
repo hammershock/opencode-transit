@@ -102,24 +102,32 @@ export class RexdFiles {
     return { content, mtime: result.mtime, size: result.size, truncated: result.truncated }
   }
 
-  async list(value: string, cwd: string, recursive = false) {
+  async list(value: string, cwd: string, recursive = false, signal?: AbortSignal) {
     return Schema.decodeUnknownSync(List)(
-      await this.lease.client.request("fs.list", {
-        session_id: this.lease.handshake.sessionID,
-        path: this.resolve(value, cwd),
-        recursive,
-        max_entries: 100_000,
-      }),
+      await this.lease.client.request(
+        "fs.list",
+        {
+          session_id: this.lease.handshake.sessionID,
+          path: this.resolve(value, cwd),
+          recursive,
+          max_entries: 100_000,
+        },
+        { signal },
+      ),
     ).entries
   }
 
-  async glob(pattern: string, cwd: string) {
+  async glob(pattern: string, cwd: string, signal?: AbortSignal) {
     return Schema.decodeUnknownSync(Glob)(
-      await this.lease.client.request("fs.glob", {
-        session_id: this.lease.handshake.sessionID,
-        pattern,
-        cwd: this.resolve(cwd, cwd),
-      }),
+      await this.lease.client.request(
+        "fs.glob",
+        {
+          session_id: this.lease.handshake.sessionID,
+          pattern,
+          cwd: this.resolve(cwd, cwd),
+        },
+        { signal },
+      ),
     ).matches
   }
 

@@ -29,14 +29,16 @@ export function rexdFilesystemNodes(
     const lease = yield* RexdLocationSession
     const search = FileSystemSearch.Service.of({
       find: (input) =>
-        Effect.promise(async () => {
-          const entries = (await files.list(".", directory, true)).map(entry).filter((item) => item !== undefined)
+        Effect.promise(async (signal) => {
+          const entries = (await files.list(".", directory, true, signal))
+            .map(entry)
+            .filter((item) => item !== undefined)
           const selected = input.type ? entries.filter((item) => item.type === input.type) : entries
           return fuzzysort.go(input.query, selected, { key: "path", limit: input.limit ?? 50 }).map((item) => item.obj)
         }),
       glob: (input) =>
-        Effect.promise(async () =>
-          (await files.glob(input.pattern, path.posix.resolve(directory, input.path ?? "."))).map((item) =>
+        Effect.promise(async (signal) =>
+          (await files.glob(input.pattern, path.posix.resolve(directory, input.path ?? "."), signal)).map((item) =>
             FileSystem.Entry.make({ path: relative(files.resolve(item, directory)), type: "file" }),
           ),
         ),
@@ -49,21 +51,23 @@ export function rexdFilesystemNodes(
         glob: search.glob,
         grep: search.grep,
         read: (input) =>
-          Effect.promise(async () => ({
-            content: (await files.read(input.path, directory)).content,
+          Effect.promise(async (signal) => ({
+            content: (await files.read(input.path, directory, signal)).content,
             mime: FSUtil.mimeType(input.path),
           })),
         list: (input = {}) =>
-          Effect.promise(async () =>
-            (await files.list(input.path ?? ".", directory)).map(entry).filter((item) => item !== undefined),
+          Effect.promise(async (signal) =>
+            (await files.list(input.path ?? ".", directory, false, signal))
+              .map(entry)
+              .filter((item) => item !== undefined),
           ),
         directoryStatus: (input) =>
-          Effect.promise(async () => {
-            const result = await files.directoryStatus(input, directory)
+          Effect.promise(async (signal) => {
+            const result = await files.directoryStatus(input, directory, signal)
             return { status: result.status, path: result.path }
           }),
         ensureDirectory: (input) =>
-          Effect.promise(async () => {
+          Effect.promise(async (signal) => {
             const target = files.resolve(input, directory)
             await runRexdProcess(lease, {
               argv: ["mkdir", "-p", "--", target],
@@ -71,6 +75,7 @@ export function rexdFilesystemNodes(
               cwd: directory,
               timeout: "30 seconds",
               maxOutputBytes: 64 * 1024,
+              signal,
             }).then((result) => {
               if (result.exitCode !== 0) throw new Error(result.stderr.toString("utf8"))
             })
@@ -97,8 +102,8 @@ export function rexdFilesystemNodes(
             Effect.die(new Error(`Remote filesystem operation is not supported: ${method}`))
         const absolute = (value: string) => files.resolve(value, directory)
         const stat = (value: string) =>
-          Effect.promise(async () => {
-            const item = await files.statFollowing(value, directory)
+          Effect.promise(async (signal) => {
+            const item = await files.statFollowing(value, directory, signal)
             if (!item.exists) throw new Error(`Remote path does not exist: ${absolute(value)}`)
             return {
               type:
@@ -123,7 +128,7 @@ export function rexdFilesystemNodes(
             }
           })
         const entries = (value: string) =>
-          Effect.promise(() => files.list(value, directory)).pipe(
+          Effect.promise((signal) => files.list(value, directory, false, signal)).pipe(
             Effect.map((items) =>
               items.map((item) => ({
                 name: item.name,
@@ -140,7 +145,7 @@ export function rexdFilesystemNodes(
           )
         const read = (value: string) =>
           Effect.tryPromise({
-            try: () => files.read(value, directory),
+            try: (signal) => files.read(value, directory, signal),
             catch: (cause) =>
               PlatformError.systemError({
                 _tag: cause instanceof Error && cause.message.includes("no such file") ? "NotFound" : "Unknown",
@@ -153,13 +158,14 @@ export function rexdFilesystemNodes(
         const write = (value: string, content: Uint8Array) =>
           Effect.promise(() => files.write(value, directory, content))
         const ensure = (value: string) =>
-          Effect.promise(() =>
+          Effect.promise((signal) =>
             runRexdProcess(lease, {
               argv: ["mkdir", "-p", "--", absolute(value)],
               shell: false,
               cwd: directory,
               timeout: "30 seconds",
               maxOutputBytes: 64 * 1024,
+              signal,
             }).then((result) => {
               if (result.exitCode !== 0) throw new Error(result.stderr.toString("utf8"))
             }),
@@ -168,19 +174,19 @@ export function rexdFilesystemNodes(
           resolve: (value) => Effect.succeed(absolute(value)),
           realPath: (value) => stat(value).pipe(Effect.as(absolute(value))),
           exists: (value) =>
-            Effect.promise(() => files.statFollowing(value, directory)).pipe(Effect.map((x) => x.exists)),
+            Effect.promise((signal) => files.statFollowing(value, directory, signal)).pipe(Effect.map((x) => x.exists)),
           existsSafe: (value) =>
-            Effect.promise(() => files.statFollowing(value, directory)).pipe(
+            Effect.promise((signal) => files.statFollowing(value, directory, signal)).pipe(
               Effect.map((x) => x.exists),
               Effect.orElseSucceed(() => false),
             ),
           isDir: (value) =>
-            Effect.promise(() => files.directoryStatus(value, directory)).pipe(
+            Effect.promise((signal) => files.directoryStatus(value, directory, signal)).pipe(
               Effect.map((x) => x.status === "directory"),
               Effect.orElseSucceed(() => false),
             ),
           isFile: (value) =>
-            Effect.promise(() => files.statFollowing(value, directory)).pipe(
+            Effect.promise((signal) => files.statFollowing(value, directory, signal)).pipe(
               Effect.map((x) => x.type === "file"),
               Effect.orElseSucceed(() => false),
             ),
@@ -200,7 +206,7 @@ export function rexdFilesystemNodes(
           readDirectory: (value) => entries(value).pipe(Effect.map((items) => items.map((item) => item.name))),
           readDirectoryEntries: entries,
           glob: (pattern, options) =>
-            Effect.promise(() => files.glob(pattern, options?.cwd ?? directory).then((x) => [...x])),
+            Effect.promise((signal) => files.glob(pattern, options?.cwd ?? directory, signal).then((x) => [...x])),
           globMatch: (pattern, value) => new Bun.Glob(pattern).match(value),
           findUp: (target, start, stop) => upward(files, target, start, stop),
           globUp: (pattern, start, stop) => upwardGlob(files, pattern, start, stop),
@@ -229,25 +235,27 @@ export function rexdFilesystemNodes(
 }
 
 export function upward(files: RexdFiles, target: string, start: string, stop?: string) {
-  return Effect.promise(async () => {
+  return Effect.promise(async (signal) => {
     const candidates = ancestors(files, start, stop).map((current) => path.posix.join(current, target))
-    const status = await Promise.all(candidates.map((candidate) => files.stat(candidate, "/")))
+    const status = await Promise.all(candidates.map((candidate) => files.stat(candidate, "/", signal)))
     return candidates.filter((_candidate, index) => status[index]!.exists)
   })
 }
 
 export function upwardMany(files: RexdFiles, targets: readonly string[], start: string, stop?: string) {
-  return Effect.promise(async () => {
+  return Effect.promise(async (signal) => {
     const directories = ancestors(files, start, stop)
     const candidates = targets.flatMap((target) => directories.map((current) => path.posix.join(current, target)))
-    const status = await Promise.all(candidates.map((candidate) => files.stat(candidate, "/")))
+    const status = await Promise.all(candidates.map((candidate) => files.stat(candidate, "/", signal)))
     return candidates.filter((_candidate, index) => status[index]!.exists)
   })
 }
 
 export function upwardGlob(files: RexdFiles, pattern: string, start: string, stop?: string) {
-  return Effect.promise(async () => {
-    const matches = await Promise.all(ancestors(files, start, stop).map((current) => files.glob(pattern, current)))
+  return Effect.promise(async (signal) => {
+    const matches = await Promise.all(
+      ancestors(files, start, stop).map((current) => files.glob(pattern, current, signal)),
+    )
     return matches.flat()
   })
 }
@@ -270,9 +278,9 @@ export function remoteGrep(
   directory: string,
   input: FileSystem.GrepInput,
 ) {
-  return Effect.promise(async () => {
+  return Effect.promise(async (signal) => {
     const root = files.resolve(input.path ?? ".", directory)
-    const stat = await files.stat(root, directory)
+    const stat = await files.stat(root, directory, signal)
     const cwd = stat.type === "file" ? path.posix.dirname(root) : root
     const target = stat.type === "file" ? path.posix.basename(root) : "."
     // rexd/1 has no structured grep method. Keep this compatibility adapter
@@ -295,6 +303,7 @@ export function remoteGrep(
       cwd,
       timeout: "2 minutes",
       maxOutputBytes: 8 * 1024 * 1024,
+      signal,
     })
     if (result.exitCode !== 0 && result.exitCode !== 1)
       throw new Error(result.stderr.toString("utf8") || `Remote grep exited with ${result.exitCode}`)

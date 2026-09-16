@@ -96,13 +96,13 @@ const layer = Layer.effect(
       yield* Effect.logInfo("asking", { id, permission: info.permission, patterns: info.patterns })
 
       const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
-      pending.set(id, { info, deferred })
-      yield* events.publish(Event.Asked, info)
-      return yield* Effect.ensuring(
-        Deferred.await(deferred),
-        Effect.sync(() => {
-          pending.delete(id)
-        }),
+      return yield* Effect.acquireUseRelease(
+        Effect.sync(() => pending.set(id, { info, deferred })),
+        () => events.publish(Event.Asked, info).pipe(Effect.andThen(Deferred.await(deferred))),
+        () =>
+          Effect.sync(() => {
+            pending.delete(id)
+          }),
       )
     })
 

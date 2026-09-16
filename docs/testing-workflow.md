@@ -2,16 +2,32 @@
 
 Every functional change in this fork must pass automated verification and real-device acceptance. Unit tests alone are insufficient because Location, SSH/Rexd, TUI input, secure storage, provider authentication and multi-device synchronization depend on real operating-system behavior. Fork-owned TUI checks also follow [`ui-design-guidelines.md`](ui-design-guidelines.md).
 
-## Contributor and maintainer responsibility
+## Platform selection: Mac by default
+
+For routine platform-neutral logic, tool lifecycle, and TUI changes, require a clean Mac candidate build, focused automated checks, and the affected real workflow through `opencode-transit`. Windows/WSL2 is not a mandatory second device for every task. Its temporary unavailability alone does not block a platform-neutral change, and a Mac pass must never be reported as Windows evidence.
+
+Add coverage according to the changed boundary:
+
+- Cross-device synchronization, deletion propagation, conflict resolution and device identity require actual multi-device scenarios, including bidirectional checks where specified below.
+- Windows/WSL-specific paths, case handling, shell/PTY/interop, credential stores, packaging and native dependencies require that platform's evidence.
+- Shared platform-dependent changes require extra-platform checks when Mac evidence and deterministic contract tests cannot resolve the compatibility risk. Generic asynchronous logic is not automatically Windows-specific.
+- Remote-target checks are selected independently of Windows availability. Changed transport, handshake, installation or target-side behavior needs relevant real-target evidence when controlled adapter tests cannot establish correctness. Explain when a controller-only fix is sufficiently covered by Mac execution and adapter regressions.
+- A release qualifies each platform artifact it actually ships; do not infer a Windows release result from a Mac build.
+
+Record required and optional scenarios in the issue/PR. A known failure on an affected platform does not become optional because a device is unavailable. Any maintainer-approved deferral of a required scenario must explicitly name the risk and follow-up; it is not a passing test or release qualification.
+
+This policy supersedes older blanket two-device wording in maintenance checklists and RFC verification boilerplate. Genuine synchronization and platform-specific acceptance contracts remain required. Broaden regression testing for affected milestones or new evidence of risk, not for every unrelated maintenance change.
+
+### Contributor and maintainer responsibility
 
 The verification gate belongs to the project, not to an external contributor's hardware inventory.
 
 - External contributors run the relevant automated checks and real workflow on every supported controller they can access. Their pull request lists exact results and every platform or scenario not run.
 - Missing access to Mac Apple Silicon or `mywindows`/WSL2 does not block opening or reviewing an external pull request.
-- Before a functional change merges, the accepting maintainer builds the exact candidate commit and completes any missing canonical-device rows. Maintainer evidence is added to the same pull request.
+- Before a functional change merges, the accepting maintainer builds the exact candidate commit and completes missing risk-selected required rows or records an explicit scoped deferral. Evidence is added to the same pull request.
 - Documentation-only and template-only changes normally use rendering, link, schema, and formatting checks instead of runtime device acceptance.
 
-This division of responsibility is not a waiver: a functional change still cannot merge until all applicable project-level checks below pass.
+Optional unrun Windows coverage is not an outstanding mandatory gate for an otherwise verified platform-neutral change. Required checks and explicit maintainer dispositions remain visible in the PR.
 
 ## Required test ladder
 
@@ -21,10 +37,10 @@ Run tests in this order:
 2. **Unit tests:** parsers, state transitions, reducers, cryptographic envelopes, conflict rules and failure classification.
 3. **Contract tests:** boundaries between Core, Location providers, Rexd protocol, command toolkit, provider adapters and sync adapters.
 4. **Integration tests:** real process/database/filesystem behavior in temporary isolated state, including cancellation, crash recovery and retries.
-5. **Real-device acceptance:** execute the built `opencode-transit` on both the Mac and `mywindows`/WSL2 and exercise the scenarios affected by the task.
-6. **Milestone regression:** before merging a complete RFC milestone, run the full cross-device matrix rather than only the task-specific rows.
+5. **Real-device acceptance:** execute the built `opencode-transit` on Mac and any additional risk-selected devices.
+6. **Milestone regression:** run the relevant wider matrix for the affected milestone and platform artifacts, including cross-device cases when applicable.
 
-A lower layer cannot waive a higher layer. When a scenario is genuinely platform-specific, the issue and PR must explain why one device is not applicable and add an equivalent negative or compatibility check on that device. Convenience or temporary device unavailability is not a waiver; the task remains incomplete until the required device run succeeds.
+A lower test layer does not automatically replace a required real workflow. A Mac-only task does not owe a synthetic Windows check merely to mark Windows optional. A Windows or synchronization defect still requires corresponding evidence or a documented maintainer disposition.
 
 ## Canonical devices and entrypoint
 
@@ -43,7 +59,9 @@ Canonical environments:
 | Mac         | macOS on Apple Silicon                    | Run the locally built/installed `opencode-transit` directly                                                                                                                       |
 | `mywindows` | WSL2 distribution `Ubuntu`, user `hammer` | Connect with `ssh mywindows`, then explicitly invoke `wsl.exe -d Ubuntu -u hammer`; set a Linux HOME/cwd explicitly and never inherit `/mnt/c/Users/Mickey` as the test workspace |
 
-Record the actual hostname, OS/architecture, Git commit, executable path, `--version` output and executable hash for every real-device run. Both devices must test binaries built from the same accepted commit; platform-specific build artifacts may differ.
+Record the actual hostname, OS/architecture, Git commit, executable path, `--version` output and executable hash for every real-device run. When several devices are selected, they must test the same candidate commit; platform artifacts may differ.
+
+For Mac-only acceptance, prepare an isolated clean checkout at the exact PR head and run `bun run script/transit-build.ts --single --skip-install` from `packages/opencode`. Verify the manifest and use the transactional installer in [`development/opencode-transit.md`](development/opencode-transit.md). Record post-merge integration builds separately from PR-head evidence. For required paired builds use `opencode-transit-dual-build --pr <number-or-url>`; without arguments it builds latest `origin/dev`. Failure preparing an optional WSL device does not prevent native Mac-only qualification.
 
 ## Isolation and data safety
 
@@ -57,7 +75,7 @@ Record the actual hostname, OS/architecture, Git commit, executable path, `--ver
 
 ## Task-level real-device gate
 
-Every functional task issue names the relevant rows below. After automated checks pass, its owner or accepting maintainer installs the exact candidate build as `opencode-transit` on both devices and records combined evidence in the PR.
+Every functional task names the relevant rows and platform-selection rationale. After automated checks pass, run the exact candidate through `opencode-transit` on Mac and required additional devices. Isolated candidate acceptance need not overwrite a production installation; record final installation separately.
 
 Minimum evidence:
 
@@ -66,6 +84,12 @@ Minimum evidence:
 
 Commit:
 Build/version/hash:
+
+### Platform selection
+
+- Changed platform/transport boundaries:
+- Required devices and scenarios:
+- Optional/not-run platforms and rationale:
 
 ### Mac
 
@@ -76,6 +100,7 @@ Build/version/hash:
 
 ### mywindows / WSL2
 
+- Required or optional for this change:
 - Environment and target:
 - Scenarios:
 - Result:
@@ -94,7 +119,7 @@ Screenshots or recordings are mandatory for TUI-visible behavior. Logs are manda
 
 ### A. Local Location
 
-Run on both Mac and WSL2:
+Run on Mac by default; add WSL2 when selected for the affected behavior:
 
 - QuickStart selects local and an explicit working directory rather than inheriting the launcher cwd.
 - Agent filesystem/process tools, User Shell and Terminal resolve the same Session Location.
@@ -104,7 +129,7 @@ Run on both Mac and WSL2:
 
 ### B. Rexd remote Location
 
-At minimum run Mac to a configured Linux Rexd target and exercise `mywindows` as a target when the task affects Windows/WSL bridging:
+For required real-target cases, run Mac to a configured Linux Rexd target. Add `mywindows` when Windows/WSL bridging is affected, not solely because a feature supports remote targets:
 
 - target wizard/import, validation and directory completion operate on the target;
 - managed daemon installation and protocol/capability handshake report each failure phase;
@@ -205,8 +230,8 @@ In particular, preserve regression coverage for the legacy sync resurrection fai
 
 ## Merge and release rules
 
-- A PR cannot be marked Done until its relevant Mac and `mywindows` evidence is present.
-- A task that passes locally but fails on one canonical device remains open.
+- A PR cannot be marked Done until Mac evidence and required extra-device evidence or explicit scoped maintainer dispositions are recorded.
+- A known failure on an affected platform remains unresolved even if Mac passes; optional unrun Windows coverage is not itself a failure.
 - Flaky real-device behavior is a defect to diagnose, not a passing retry.
-- A milestone release requires the complete matrix for all RFCs included in that milestone.
-- The tester records cleanup and confirms `opencode-transit` still points to the intended build on both devices.
+- A milestone release requires the relevant matrix for included behavior and shipped artifacts; synchronization milestones retain bidirectional tests.
+- Record cleanup and the intended installed build on every device actually updated. An untouched Windows installation must not be reported updated.

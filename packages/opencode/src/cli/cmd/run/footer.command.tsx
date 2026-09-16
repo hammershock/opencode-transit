@@ -41,7 +41,7 @@ type SkillEntry = PanelEntry & {
 }
 
 type SubagentEntry = PanelEntry & {
-  sessionID: string
+  key: string
   current: boolean
 }
 
@@ -688,8 +688,8 @@ export function RunSubagentSelectBody(props: {
         description: title === item.label ? undefined : item.label,
         footer: subagentStatusLabel(item.status),
         keywords: `${item.label} ${item.description} ${item.title ?? ""} ${item.status}`,
-        sessionID: item.sessionID,
-        current: props.current() === item.sessionID,
+        key: item.key ?? item.sessionID,
+        current: props.current() === (item.key ?? item.sessionID),
       }
     }),
   )
@@ -701,7 +701,7 @@ export function RunSubagentSelectBody(props: {
       return
     }
 
-    props.onSelect(item.sessionID)
+    props.onSelect(item.key)
   }
 
   createEffect(() => {

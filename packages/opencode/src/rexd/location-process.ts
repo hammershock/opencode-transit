@@ -19,7 +19,7 @@ export function rexdProcessNode(session: ReturnType<typeof import("./location-se
         return LocationProcess.Service.of({
           runShell: (command, options) => {
             const run = Effect.tryPromise({
-              try: () =>
+              try: (signal) =>
                 runRexdProcess(lease, {
                   command,
                   shell: true,
@@ -27,7 +27,7 @@ export function rexdProcessNode(session: ReturnType<typeof import("./location-se
                   env: options.env,
                   timeout: options.timeout,
                   maxOutputBytes: options.maxOutputBytes,
-                  signal: options.signal,
+                  signal: options.signal ? AbortSignal.any([signal, options.signal]) : signal,
                   onOutput: options.onOutput,
                 }),
               catch: (cause) => new AppProcess.AppProcessError({ command, cause }),

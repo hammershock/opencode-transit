@@ -97,7 +97,7 @@ The detailed test ladder and acceptance rows live in [`docs/testing-workflow.md`
 
 External contributors are not expected to own both canonical project devices. Run the relevant workflow on the supported platform you can access and list, without guessing, every platform or scenario you did not run. Missing device coverage does not prevent you from opening a pull request.
 
-For a functional change, maintainers complete the required Mac Apple Silicon and `mywindows`/WSL2 acceptance on the exact candidate commit before merge. This is a project merge gate, not a requirement that contributors buy, borrow, or administer project hardware. Documentation-only changes normally do not require runtime device acceptance.
+For functional changes, Mac Apple Silicon builds, focused checks, and relevant real-workflow acceptance are the default. Add Windows/WSL2 or multi-device evidence when Windows-specific behavior, platform-dependent changes, synchronization, or another identified compatibility risk requires it. An optional unavailable Windows device does not block a platform-neutral change, and a Mac pass is not a Windows test result. Record required coverage and any explicit maintainer deferrals for the exact candidate commit. Contributors need not buy, borrow, or administer project hardware. Documentation-only changes normally do not require runtime device acceptance.
 
 ## Open the pull request
 
@@ -118,7 +118,7 @@ Review may request a smaller scope, new regression coverage, an RFC decision, ge
 
 - its issue and acceptance checks are satisfied;
 - relevant automated checks pass;
-- contributor and maintainer verification gaps are resolved or explicitly not applicable;
+- required verification gaps are resolved or have an explicit scoped maintainer disposition, and optional unrun platforms are identified;
 - generated files are current;
 - no secrets or private machine data appear in the diff or evidence;
 - user-facing English and Simplified Chinese documents remain in semantic sync.

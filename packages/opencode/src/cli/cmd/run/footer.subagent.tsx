@@ -59,7 +59,22 @@ export function RunFooterSubagentBody(props: {
   const theme = createMemo(() => props.theme())
   const footer = createMemo(() => theme().footer)
   const tab = createMemo(() => props.tab())
-  const commits = createMemo(() => props.detail()?.commits ?? [])
+  const commits = createMemo(() => {
+    const detail = props.detail()
+    if (!detail) return []
+    const separator = (text: string): import("./types").StreamCommit => ({
+      kind: "system",
+      text,
+      phase: "final",
+      source: "system",
+    })
+    if (detail.unscoped) return [separator("History · invocation unknown"), ...detail.commits]
+    return [
+      ...(detail.history?.length ? [separator("Session history · other / unscoped calls"), ...detail.history] : []),
+      separator("Selected invocation"),
+      ...detail.commits,
+    ]
+  })
   const opts = createMemo(() => ({ diffStyle: props.diffStyle }))
   const scrollbar = createMemo(() => ({
     trackOptions: {

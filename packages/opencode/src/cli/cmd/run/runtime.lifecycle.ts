@@ -88,7 +88,7 @@ export type LifecycleInput = {
   onVariantSelect?: (variant: string | undefined) => CycleResult | void | Promise<CycleResult | void>
   onInterrupt?: () => void
   onBackground?: () => void
-  onSubagentSelect?: (sessionID: string | undefined) => void
+  onSubagentSelect?: (key: string | undefined) => void
 }
 
 export type Lifecycle = {

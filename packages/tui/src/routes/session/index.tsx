@@ -1,3 +1,4 @@
+import { TaskInvocation } from "@opencode-ai/core/v1/task-invocation"
 import {
   batch,
   createContext,
@@ -493,7 +494,10 @@ export function Session() {
         setLocationAccessReady(true)
       }
       await sync.session.sync(sessionID)
-      if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
+      if (route.sessionID === sessionID && scroll) {
+        if (route.messageID) scroll.scrollChildIntoView(route.messageID)
+        else scroll.scrollBy(100_000)
+      }
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
       toast.show({
@@ -1609,7 +1613,21 @@ export function Session() {
   })
 
   // snap to bottom when session changes
-  createEffect(on(() => route.sessionID, toBottom))
+  createEffect(
+    on(
+      () => [route.sessionID, route.messageID] as const,
+      () => {
+        if (!route.messageID) return toBottom()
+        const sessionID = route.sessionID
+        const messageID = route.messageID
+        const timer = setTimeout(() => {
+          if (route.sessionID === sessionID && route.messageID === messageID && scroll && !scroll.isDestroyed)
+            scroll.scrollChildIntoView(messageID)
+        }, 50)
+        onCleanup(() => clearTimeout(timer))
+      },
+    ),
+  )
 
   return (
     <LocationProvider location={location()}>
@@ -1634,6 +1652,9 @@ export function Session() {
       >
         <box flexDirection="row" flexGrow={1} minHeight={0}>
           <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
+            <Show when={route.taskDescription}>
+              <text fg={theme.textMuted}>Task invocation: {route.taskDescription}</text>
+            </Show>
             <Show when={session()}>
               <scrollbox
                 ref={(r) => (scroll = r)}
@@ -2425,7 +2446,7 @@ function InlineTool(props: {
       failed={failed()}
       denied={Boolean(denied())}
       error={error()}
-      errorExpanded={errorExpanded()}
+      errorExpanded={errorExpanded() || (failed() && props.part.tool === "task")}
       complete={props.complete}
       pending={props.pending}
       failure={props.failure}
@@ -2435,7 +2456,8 @@ function InlineTool(props: {
       onMouseOut={() => setHover(false)}
       onMouseUp={() => {
         if (renderer.getSelection()?.getSelectedText()) return
-        if (failed()) {
+        // Task failures keep their child navigation; show the error inline instead.
+        if (failed() && props.part.tool !== "task") {
           setErrorExpanded((value) => !value)
           return
         }
@@ -2762,7 +2784,12 @@ function Task(props: ToolProps) {
   })
 
   const sessionID = createMemo(() => stringValue(props.metadata.sessionId))
-  const messages = createMemo(() => sync.data.message[sessionID() ?? ""] ?? [])
+  const invocation = createMemo(() => TaskInvocation.read(props.metadata.invocation))
+  const history = createMemo(() => sync.data.message[sessionID() ?? ""] ?? [])
+  const messages = createMemo(() => {
+    const boundary = invocation()
+    return boundary ? history().filter((message) => TaskInvocation.includes(boundary, message)) : []
+  })
 
   const tools = createMemo(() => {
     return messages().flatMap((msg) =>
@@ -2781,10 +2808,16 @@ function Task(props: ToolProps) {
     const value = status()
     return (
       props.part.state.status === "running" ||
-      (props.metadata.background === true && value !== undefined && value.type !== "idle")
+      (props.metadata.background === true &&
+        value !== undefined &&
+        value.type !== "idle" &&
+        invocation() !== undefined &&
+        (!history().some((message) => message.id === invocation()!.childMessageID) ||
+          history().findLast((message) => message.role === "user")?.id === invocation()!.childMessageID))
     )
   })
   const retry = createMemo(() => {
+    if (!isRunning()) return
     const value = status()
     if (value?.type !== "retry") return
     return value
@@ -2807,6 +2840,8 @@ function Task(props: ToolProps) {
         props.metadata.background === true,
       ),
     ]
+
+    if (!invocation()) content.push("↳ History · invocation unknown")
 
     const retrying = retry()
     if (isRunning() && retrying) {
@@ -2837,7 +2872,12 @@ function Task(props: ToolProps) {
       part={props.part}
       onClick={() => {
         if (sessionID()) {
-          navigate({ type: "session", sessionID: sessionID()! })
+          navigate({
+            type: "session",
+            sessionID: sessionID()!,
+            messageID: invocation()?.childMessageID,
+            taskDescription: stringValue(props.input.description),
+          })
         }
         const status = retry()
         if (status) void DialogAlert.show(dialog, "Retry Error", status.message)
