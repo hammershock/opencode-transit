@@ -209,6 +209,7 @@ describe("SessionV2.create", () => {
           const firstBefore = yield* session.modelContext(first.id)
           const secondBefore = yield* session.modelContext(second.id)
           const skillBefore = yield* session.skillView(first.id)
+          expect(yield* session.instructionApplyStatus(first.id)).toEqual({ status: "ready", blockers: [] })
 
           rebindHarnessState.content = "target B policy"
           const applied = yield* session.applyInstructions(first.id)
@@ -279,6 +280,10 @@ describe("SessionV2.create", () => {
           })
           const busyBefore = yield* session.modelContext(busy.id)
           yield* session.prompt({ sessionID: busy.id, prompt: Prompt.make({ text: "queued" }), resume: false })
+          expect(yield* session.instructionApplyStatus(busy.id)).toMatchObject({
+            status: "busy",
+            blockers: ["queued_turn"],
+          })
           expect(yield* session.applyInstructions(busy.id).pipe(Effect.flip)).toMatchObject({
             _tag: "Session.InstructionApplyBusyError",
             blockers: ["queued_turn"],
@@ -297,6 +302,10 @@ describe("SessionV2.create", () => {
           expect(yield* session.applyInstructions(unresolved.id).pipe(Effect.flip)).toMatchObject({
             _tag: "Session.OperationUnavailableError",
             operation: "location",
+          })
+          expect(yield* session.instructionApplyStatus(unresolved.id)).toEqual({
+            status: "unresolved",
+            blockers: ["location_unresolved"],
           })
         }),
       ),

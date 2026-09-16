@@ -186,29 +186,34 @@ type Endpoint3_14Input = { readonly sessionID: Endpoint3_14Request["params"]["se
 const Endpoint3_14 = (raw: RawClient["server.session"]) => (input: Endpoint3_14Input) =>
   raw["session.modelContext"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint3_15Request = Parameters<RawClient["server.session"]["session.instructionsApply"]>[0]
+type Endpoint3_15Request = Parameters<RawClient["server.session"]["session.instructionsStatus"]>[0]
 type Endpoint3_15Input = { readonly sessionID: Endpoint3_15Request["params"]["sessionID"] }
 const Endpoint3_15 = (raw: RawClient["server.session"]) => (input: Endpoint3_15Input) =>
+  raw["session.instructionsStatus"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint3_16Request = Parameters<RawClient["server.session"]["session.instructionsApply"]>[0]
+type Endpoint3_16Input = { readonly sessionID: Endpoint3_16Request["params"]["sessionID"] }
+const Endpoint3_16 = (raw: RawClient["server.session"]) => (input: Endpoint3_16Input) =>
   raw["session.instructionsApply"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint3_16Request = Parameters<RawClient["server.session"]["session.history"]>[0]
-type Endpoint3_16Input = {
-  readonly sessionID: Endpoint3_16Request["params"]["sessionID"]
-  readonly limit?: Endpoint3_16Request["query"]["limit"]
-  readonly after?: Endpoint3_16Request["query"]["after"]
+type Endpoint3_17Request = Parameters<RawClient["server.session"]["session.history"]>[0]
+type Endpoint3_17Input = {
+  readonly sessionID: Endpoint3_17Request["params"]["sessionID"]
+  readonly limit?: Endpoint3_17Request["query"]["limit"]
+  readonly after?: Endpoint3_17Request["query"]["after"]
 }
-const Endpoint3_16 = (raw: RawClient["server.session"]) => (input: Endpoint3_16Input) =>
+const Endpoint3_17 = (raw: RawClient["server.session"]) => (input: Endpoint3_17Input) =>
   raw["session.history"]({
     params: { sessionID: input["sessionID"] },
     query: { limit: input["limit"], after: input["after"] },
   }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint3_17Request = Parameters<RawClient["server.session"]["session.events"]>[0]
-type Endpoint3_17Input = {
-  readonly sessionID: Endpoint3_17Request["params"]["sessionID"]
-  readonly after?: Endpoint3_17Request["query"]["after"]
+type Endpoint3_18Request = Parameters<RawClient["server.session"]["session.events"]>[0]
+type Endpoint3_18Input = {
+  readonly sessionID: Endpoint3_18Request["params"]["sessionID"]
+  readonly after?: Endpoint3_18Request["query"]["after"]
 }
-const Endpoint3_17 = (raw: RawClient["server.session"]) => (input: Endpoint3_17Input) =>
+const Endpoint3_18 = (raw: RawClient["server.session"]) => (input: Endpoint3_18Input) =>
   Stream.unwrap(
     raw["session.events"]({ params: { sessionID: input["sessionID"] }, query: { after: input["after"] } }).pipe(
       Effect.mapError(mapClientError),
@@ -216,17 +221,17 @@ const Endpoint3_17 = (raw: RawClient["server.session"]) => (input: Endpoint3_17I
     ),
   )
 
-type Endpoint3_18Request = Parameters<RawClient["server.session"]["session.interrupt"]>[0]
-type Endpoint3_18Input = { readonly sessionID: Endpoint3_18Request["params"]["sessionID"] }
-const Endpoint3_18 = (raw: RawClient["server.session"]) => (input: Endpoint3_18Input) =>
+type Endpoint3_19Request = Parameters<RawClient["server.session"]["session.interrupt"]>[0]
+type Endpoint3_19Input = { readonly sessionID: Endpoint3_19Request["params"]["sessionID"] }
+const Endpoint3_19 = (raw: RawClient["server.session"]) => (input: Endpoint3_19Input) =>
   raw["session.interrupt"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint3_19Request = Parameters<RawClient["server.session"]["session.message"]>[0]
-type Endpoint3_19Input = {
-  readonly sessionID: Endpoint3_19Request["params"]["sessionID"]
-  readonly messageID: Endpoint3_19Request["params"]["messageID"]
+type Endpoint3_20Request = Parameters<RawClient["server.session"]["session.message"]>[0]
+type Endpoint3_20Input = {
+  readonly sessionID: Endpoint3_20Request["params"]["sessionID"]
+  readonly messageID: Endpoint3_20Request["params"]["messageID"]
 }
-const Endpoint3_19 = (raw: RawClient["server.session"]) => (input: Endpoint3_19Input) =>
+const Endpoint3_20 = (raw: RawClient["server.session"]) => (input: Endpoint3_20Input) =>
   raw["session.message"]({ params: { sessionID: input["sessionID"], messageID: input["messageID"] } }).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
@@ -248,11 +253,12 @@ const adaptGroup3 = (raw: RawClient["server.session"]) => ({
   commit: Endpoint3_12(raw),
   context: Endpoint3_13(raw),
   modelContext: Endpoint3_14(raw),
-  instructionsApply: Endpoint3_15(raw),
-  history: Endpoint3_16(raw),
-  events: Endpoint3_17(raw),
-  interrupt: Endpoint3_18(raw),
-  message: Endpoint3_19(raw),
+  instructionsStatus: Endpoint3_15(raw),
+  instructionsApply: Endpoint3_16(raw),
+  history: Endpoint3_17(raw),
+  events: Endpoint3_18(raw),
+  interrupt: Endpoint3_19(raw),
+  message: Endpoint3_20(raw),
 })
 
 type Endpoint4_0Request = Parameters<RawClient["server.message"]["session.messages"]>[0]

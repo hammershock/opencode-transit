@@ -655,6 +655,46 @@ withSessionActivation.instance("legacy loop receives Skill guidance changed by S
   }),
 )
 
+withSessionActivation.instance("legacy provider turns block explicit instruction application", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* SessionV2.Service
+    const chat = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    expect(yield* session.activate(chat.id)).toMatchObject({ status: "initialized" })
+    const before = yield* session.modelContext(chat.id)
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "keep this turn active" }],
+    })
+    yield* llm.hang
+
+    const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+    yield* llm.wait(1)
+    yield* waitForBusy(chat.id)
+
+    expect(yield* session.instructionApplyStatus(chat.id)).toMatchObject({
+      status: "busy",
+      blockers: ["process_execution"],
+    })
+    expect(yield* session.applyInstructions(chat.id).pipe(Effect.flip)).toMatchObject({
+      _tag: "Session.InstructionApplyBusyError",
+      blockers: ["process_execution"],
+    })
+    expect(yield* session.modelContext(chat.id)).toEqual(before)
+
+    yield* prompt.cancel(chat.id)
+    yield* Fiber.await(fiber)
+    expect(yield* session.instructionApplyStatus(chat.id)).toEqual({ status: "ready", blockers: [] })
+  }),
+)
+
 withSessionActivation.instance("QuickStart creation injects Skill guidance into the first legacy prompt", () =>
   Effect.gen(function* () {
     const { dir, llm } = yield* useServerConfig((url) => ({

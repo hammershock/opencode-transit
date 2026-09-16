@@ -13,12 +13,14 @@ describe("HarnessHandler", () => {
       status: "readable",
       content,
       size: content.length,
+      digest: "full-content-digest",
       sharedTargets: ["local"],
     }
 
     expect(boundedSource(source)).toMatchObject({
       content: "x".repeat(16_384),
       size: 20_000,
+      digest: "full-content-digest",
       truncated: true,
     })
     expect(boundedSource({ ...source, content: "short", size: 5 })).toEqual({

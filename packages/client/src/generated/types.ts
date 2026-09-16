@@ -1001,6 +1001,13 @@ export type SessionsModelContextOutput = {
   } | null
 }
 
+export type SessionsInstructionsStatusInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionsInstructionsStatusOutput = {
+  readonly status: "ready" | "busy" | "unresolved"
+  readonly blockers: ReadonlyArray<string>
+}
+
 export type SessionsInstructionsApplyInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionsInstructionsApplyOutput = {
@@ -5646,6 +5653,7 @@ export type TargetsImportLegacyOutput = {
 export type ServerHarnessSettingsOutput = {
   readonly version: 1
   readonly path: string
+  readonly home?: string
   readonly revision: string
   readonly global?: string
   readonly targets: ReadonlyArray<{ readonly target: "local" | string; readonly reference: string }>
@@ -5666,6 +5674,7 @@ export type ServerHarnessGlobalOutput = {
     readonly status: "readable" | "missing" | "unreadable"
     readonly content?: string
     readonly size?: number
+    readonly digest?: string
     readonly truncated?: boolean
     readonly diagnostic?: string
     readonly sharedTargets: ReadonlyArray<"local" | string>
@@ -5688,6 +5697,7 @@ export type ServerHarnessTargetOutput = {
     readonly status: "readable" | "missing" | "unreadable"
     readonly content?: string
     readonly size?: number
+    readonly digest?: string
     readonly truncated?: boolean
     readonly diagnostic?: string
     readonly sharedTargets: ReadonlyArray<"local" | string>
@@ -5707,6 +5717,7 @@ export type ServerHarnessValidateOutput = {
   readonly status: "readable" | "missing" | "unreadable"
   readonly content?: string
   readonly size?: number
+  readonly digest?: string
   readonly truncated?: boolean
   readonly diagnostic?: string
   readonly sharedTargets: ReadonlyArray<"local" | string>
@@ -5733,6 +5744,7 @@ export type ServerHarnessBindInput = {
 export type ServerHarnessBindOutput = {
   readonly version: 1
   readonly path: string
+  readonly home?: string
   readonly revision: string
   readonly global?: string
   readonly targets: ReadonlyArray<{ readonly target: "local" | string; readonly reference: string }>
@@ -5751,6 +5763,7 @@ export type ServerHarnessResetGlobalInput = {
 export type ServerHarnessResetGlobalOutput = {
   readonly version: 1
   readonly path: string
+  readonly home?: string
   readonly revision: string
   readonly global?: string
   readonly targets: ReadonlyArray<{ readonly target: "local" | string; readonly reference: string }>
@@ -5773,6 +5786,7 @@ export type ServerHarnessUnbindInput = {
 export type ServerHarnessUnbindOutput = {
   readonly version: 1
   readonly path: string
+  readonly home?: string
   readonly revision: string
   readonly global?: string
   readonly targets: ReadonlyArray<{ readonly target: "local" | string; readonly reference: string }>

@@ -2995,6 +2995,11 @@ export type UnknownError1 = {
   ref?: string
 }
 
+export type SessionInstructionApplyStatus = {
+  status: "ready" | "busy" | "unresolved"
+  blockers: Array<string>
+}
+
 export type SessionDurableEvent =
   | SessionNextAgentSwitched
   | SessionNextModelSwitched
@@ -7160,6 +7165,7 @@ export type HarnessInstructionSettingsDiagnostic = {
 export type HarnessInstructionSettingsSnapshot = {
   version: 1
   path: string
+  home?: string
   revision: string
   global?: string
   targets: Array<HarnessInstructionBinding>
@@ -7182,6 +7188,7 @@ export type HarnessInstructionSource = {
   status: "readable" | "missing" | "unreadable"
   content?: string
   size?: number
+  digest?: string
   truncated?: boolean
   diagnostic?: string
   sharedTargets: Array<HarnessInstructionTarget>
@@ -14694,6 +14701,43 @@ export type V2SessionModelContextResponses = {
 }
 
 export type V2SessionModelContextResponse = V2SessionModelContextResponses[keyof V2SessionModelContextResponses]
+
+export type V2SessionInstructionsStatusData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/instructions/status"
+}
+
+export type V2SessionInstructionsStatusErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionInstructionsStatusError =
+  V2SessionInstructionsStatusErrors[keyof V2SessionInstructionsStatusErrors]
+
+export type V2SessionInstructionsStatusResponses = {
+  /**
+   * SessionInstructionApplyStatus
+   */
+  200: SessionInstructionApplyStatus
+}
+
+export type V2SessionInstructionsStatusResponse =
+  V2SessionInstructionsStatusResponses[keyof V2SessionInstructionsStatusResponses]
 
 export type V2SessionInstructionsApplyData = {
   body?: never

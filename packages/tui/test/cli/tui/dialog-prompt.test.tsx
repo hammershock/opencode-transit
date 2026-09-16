@@ -23,6 +23,15 @@ async function mountPrompt(input: {
   root: string
   keybinds: Partial<TuiKeybind.Keybinds>
   onConfirm: (value: string) => void
+  complete?: (
+    value: string,
+    cursor: number,
+  ) => Promise<{
+    value: string
+    cursor: number
+    candidates: string[]
+    error?: string
+  }>
 }) {
   const state = path.join(input.root, "state")
   await mkdir(state, { recursive: true })
@@ -71,7 +80,12 @@ async function mountPrompt(input: {
               <ThemeProvider mode="dark">
                 <ToastProvider>
                   <DialogProvider>
-                    <DialogPrompt title="Rename Session" value="draft" onConfirm={input.onConfirm} />
+                    <DialogPrompt
+                      title="Rename Session"
+                      value="draft"
+                      complete={input.complete}
+                      onConfirm={input.onConfirm}
+                    />
                   </DialogProvider>
                 </ToastProvider>
               </ThemeProvider>
@@ -141,6 +155,63 @@ test("dialog prompt submit can be rebound separately from input submit", async (
     prompt.app.mockInput.pressKey("y", { ctrl: true })
 
     expect(confirmed).toEqual(["draft"])
+  } finally {
+    await prompt.cleanup()
+  }
+})
+
+test("dialog prompt keeps input and shows path completion failures", async () => {
+  await using tmp = await tmpdir()
+  const prompt = await mountPrompt({
+    root: tmp.path,
+    keybinds: {},
+    onConfirm: () => undefined,
+    complete: async () => {
+      throw new Error("Controller directory is unavailable")
+    },
+  })
+
+  try {
+    await wait(() => prompt.app.renderer.currentFocusedEditor instanceof TextareaRenderable)
+    const textarea = prompt.app.renderer.currentFocusedEditor
+    if (!(textarea instanceof TextareaRenderable)) throw new Error("expected focused dialog textarea")
+
+    prompt.app.mockInput.pressTab()
+    await wait(() => prompt.app.captureCharFrame().includes("Controller directory is unavailable"))
+
+    expect(textarea.plainText).toBe("draft")
+    expect(prompt.app.captureCharFrame()).toContain("Controller directory is unavailable")
+  } finally {
+    await prompt.cleanup()
+  }
+})
+
+test("dialog prompt ignores completion results superseded by newer input", async () => {
+  await using tmp = await tmpdir()
+  let resolve!: (value: { value: string; cursor: number; candidates: string[] }) => void
+  const completion = new Promise<{ value: string; cursor: number; candidates: string[] }>((done) => {
+    resolve = done
+  })
+  const prompt = await mountPrompt({
+    root: tmp.path,
+    keybinds: {},
+    onConfirm: () => undefined,
+    complete: () => completion,
+  })
+
+  try {
+    await wait(() => prompt.app.renderer.currentFocusedEditor instanceof TextareaRenderable)
+    const textarea = prompt.app.renderer.currentFocusedEditor
+    if (!(textarea instanceof TextareaRenderable)) throw new Error("expected focused dialog textarea")
+
+    prompt.app.mockInput.pressTab()
+    prompt.app.mockInput.pressKey("x")
+    await wait(() => textarea.plainText === "draftx")
+    resolve({ value: "/stale", cursor: 6, candidates: ["/stale"] })
+    await Bun.sleep(20)
+
+    expect(textarea.plainText).toBe("draftx")
+    expect(prompt.app.captureCharFrame()).not.toContain("/stale")
   } finally {
     await prompt.cleanup()
   }

@@ -144,6 +144,9 @@ export class InstructionApplyBusyError extends Schema.TaggedErrorClass<Instructi
   "Session.InstructionApplyBusyError",
   { blockers: Schema.Array(Schema.String) },
 ) {}
+export type InstructionApplyStatus =
+  | { readonly status: "ready"; readonly blockers: readonly [] }
+  | { readonly status: "busy" | "unresolved"; readonly blockers: readonly string[] }
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 
@@ -184,6 +187,7 @@ export interface Interface {
     ModelContext.Generation,
     NotFoundError | OperationUnavailableError | InstructionApplyBusyError | InstructionContext.ApplyError
   >
+  readonly instructionApplyStatus: (sessionID: SessionSchema.ID) => Effect.Effect<InstructionApplyStatus, NotFoundError>
   /** Inspect the atomic controller-local Skill view appended to the next provider request. */
   readonly skillView: (
     sessionID: SessionSchema.ID,
@@ -888,6 +892,23 @@ const layer = Layer.effect(
           }),
         ),
       ),
+      instructionApplyStatus: Effect.fn("V2Session.instructionApplyStatus")(function* (sessionID) {
+        if (!(yield* store.get(sessionID))) return yield* new NotFoundError({ sessionID })
+        const resolution = yield* locationAccess.resolve(sessionID).pipe(
+          Effect.catchTag("SessionLocationAccess.NotFoundError", () => new NotFoundError({ sessionID })),
+          Effect.catchTag("SessionLocationAccess.UnresolvedError", () =>
+            Effect.succeed({ status: "resolution_failed" as const, message: "Session Location resolution failed" }),
+          ),
+        )
+        if (resolution.status !== "resolved")
+          return { status: "unresolved" as const, blockers: ["location_unresolved"] }
+        const blockers = [
+          ...(yield* runtimeBlockers(sessionID)),
+          ...(yield* locationScopedBlockers(sessionID, resolution.location)),
+        ]
+        if (blockers.length) return { status: "busy" as const, blockers }
+        return { status: "ready" as const, blockers: [] }
+      }),
       skillView: Effect.fn("V2Session.skillView")(function* (sessionID) {
         yield* result.get(sessionID)
         return yield* SessionSkillCatalog.view(db, sessionID)

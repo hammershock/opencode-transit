@@ -32,6 +32,20 @@ async function waitForFrame(setup: Awaited<ReturnType<typeof createTestRenderer>
   throw new Error(`Timed out waiting for ${text}\n${setup.captureCharFrame()}`)
 }
 
+async function waitForFrameWithout(
+  setup: Awaited<ReturnType<typeof createTestRenderer>>,
+  text: string,
+  timeout = 2_000,
+) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    await setup.renderOnce()
+    if (!setup.captureCharFrame().includes(text)) return
+    await Bun.sleep(10)
+  }
+  throw new Error(`Timed out waiting to hide ${text}\n${setup.captureCharFrame()}`)
+}
+
 async function waitForEditor(setup: Awaited<ReturnType<typeof createTestRenderer>>, timeout = 2_000) {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
@@ -516,6 +530,22 @@ test("the Harness command opens its keyboard-navigable controller instruction ma
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   const events = createEventSource()
+  const orphan = "22222222-2222-4222-8222-222222222222"
+  const settings = {
+    version: 1,
+    path: "/tmp/opencode/harness.jsonc",
+    home: "/tmp/controller-home",
+    revision: "0".repeat(64),
+    global: "policies/shared.md",
+    targets: [
+      { target: "local", reference: "policies/local.md" },
+      { target: orphan, reference: "policies/shared.md" },
+    ],
+    diagnostics: [],
+    valid: true,
+  }
+  let delaySettings = false
+  let releaseSettings: (() => void) | undefined
   const calls = createFetch((url) => {
     if (url.pathname === "/api/target")
       return json({
@@ -525,17 +555,27 @@ test("the Harness command opens its keyboard-navigable controller instruction ma
         diagnostics: [],
         valid: true,
       })
-    if (url.pathname === "/api/harness/instructions")
-      return json({
-        version: 1,
-        path: "/tmp/opencode/harness.jsonc",
-        revision: "0".repeat(64),
-        targets: [{ target: "local", reference: "policies/local.md" }],
-        diagnostics: [],
-        valid: true,
+    if (url.pathname === "/api/harness/instructions") {
+      if (!delaySettings) return json(settings)
+      return new Promise<Response>((resolve) => {
+        releaseSettings = () => resolve(json(settings))
       })
+    }
     if (url.pathname === "/api/harness/instructions/global")
-      return json({ scope: { type: "global" }, mode: "default", diagnostics: [] })
+      return json({
+        scope: { type: "global" },
+        mode: "custom",
+        source: {
+          reference: "policies/shared.md",
+          resolved: "/tmp/opencode/policies/shared.md",
+          status: "readable",
+          content: "shared policy",
+          size: 13,
+          digest: "shared-digest",
+          sharedTargets: [orphan],
+        },
+        diagnostics: [],
+      })
     if (url.pathname === "/api/harness/instructions/target/local")
       return json({
         scope: { type: "target", target: "local" },
@@ -546,7 +586,23 @@ test("the Harness command opens its keyboard-navigable controller instruction ma
           status: "readable",
           content: "local policy",
           size: 12,
+          digest: "local-digest",
           sharedTargets: ["local"],
+        },
+        diagnostics: [],
+      })
+    if (url.pathname === `/api/harness/instructions/target/${orphan}`)
+      return json({
+        scope: { type: "target", target: orphan },
+        mode: "custom",
+        source: {
+          reference: "policies/shared.md",
+          resolved: "/tmp/opencode/policies/shared.md",
+          status: "readable",
+          content: "shared policy",
+          size: 13,
+          digest: "shared-digest",
+          sharedTargets: [orphan],
         },
         diagnostics: [],
       })
@@ -590,15 +646,55 @@ test("the Harness command opens its keyboard-navigable controller instruction ma
     expect(setup.captureCharFrame()).toContain("Instructions")
     expect(setup.captureCharFrame()).toContain("Skills")
     setup.mockInput.pressEnter()
-    await waitForFrame(setup, "Harness instructions · Controller filesystem")
+    await waitForFrame(setup, "Harness instructions · Controller")
     await waitForFrame(setup, "policies/local.md")
     const frame = setup.captureCharFrame()
+    expect(frame).toContain("Back to Harness")
     expect(frame).toContain("Global")
-    expect(frame).toContain("Default AGENTS.md / CLAUDE.md discovery")
+    expect(frame).toContain("policies/shared.md")
     expect(frame).toContain("local")
     expect(frame).toContain("policies/local.md")
-    expect(frame).toContain("Save affects future admission")
+    expect(frame).toContain("Removed target 22222222")
+    expect(frame).toContain("Save ≠ Apply")
     expect(calls.session).toHaveLength(sessionRequests)
+
+    setup.mockInput.pressArrow("down")
+    setup.mockInput.pressArrow("down")
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "local · Controller file")
+    expect(setup.captureCharFrame()).toContain("Back to Instructions")
+    expect(setup.captureCharFrame()).toContain("Reuse bound file…")
+    setup.mockInput.pressArrow("down")
+    setup.mockInput.pressArrow("down")
+    setup.mockInput.pressArrow("down")
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "Reuse controller instruction file")
+    expect(setup.captureCharFrame()).toContain("policies/shared.md")
+    setup.mockInput.pressEscape()
+    await waitForFrame(setup, "local · Controller file")
+    setup.mockInput.pressEscape()
+    await waitForFrame(setup, "Harness instructions · Controller")
+    setup.mockInput.pressEscape()
+    await waitForFrame(setup, "Skills Existing discovery and target access manager")
+
+    setup.mockInput.pressEscape()
+    await waitForFrameWithout(setup, "Harness")
+    delaySettings = true
+    await Bun.sleep(20)
+    api!.keymap.dispatchCommand("fork.harness.manage")
+    await waitForFrame(setup, "Harness")
+    await setup.waitForVisualIdle()
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "Harness instructions · Controller")
+    while (!releaseSettings) await Bun.sleep(10)
+    setup.mockInput.pressEscape()
+    await waitForFrame(setup, "Skills Existing discovery and target access manager")
+    setup.mockInput.pressEscape()
+    await waitForFrameWithout(setup, "Harness")
+    releaseSettings()
+    await Bun.sleep(50)
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).not.toContain("Harness instructions · Controller")
 
     process.emit("SIGHUP")
     await task

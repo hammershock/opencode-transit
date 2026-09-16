@@ -57,7 +57,10 @@ values still never belong in instruction files.
 A new Session admits the files resolved at context initialization. Use `/harness instructions` to select controller-global and
 target files; `/harness skills` opens the existing Skill manager. The file browser is always controller-side, including while
 the current Session is remote. It shows readability, a bounded preview, shared targets, and whether saved rules match the
-current Session's admitted generation.
+current Session's admitted generation using the complete file digest rather than the truncated preview. Only the current
+Session target is comparable; other target rows are marked as future-only. Removed targets with retained bindings remain
+visible so they can be unbound safely, and an existing bound rule can be reused for another target without retyping its path.
+Every child view has an explicit Back row and preserves its parent selection.
 
 Saving a binding or editing a referenced file affects future admission only: an existing Session keeps its frozen copy across
 ordinary turns, process restart, Session re-entry, transparent reconnect, and Skill activation. Choose **Apply saved

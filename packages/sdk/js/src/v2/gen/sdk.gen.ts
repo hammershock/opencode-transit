@@ -452,6 +452,8 @@ import type {
   V2SessionHistoryResponses,
   V2SessionInstructionsApplyErrors,
   V2SessionInstructionsApplyResponses,
+  V2SessionInstructionsStatusErrors,
+  V2SessionInstructionsStatusResponses,
   V2SessionInterruptErrors,
   V2SessionInterruptResponses,
   V2SessionListErrors,
@@ -5395,6 +5397,27 @@ export class Revert extends HeyApiClient {
 }
 
 export class Instructions extends HeyApiClient {
+  /**
+   * Inspect whether one Session can apply saved instructions
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<
+      V2SessionInstructionsStatusResponses,
+      V2SessionInstructionsStatusErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/instructions/status",
+      ...options,
+      ...params,
+    })
+  }
+
   /**
    * Apply saved harness instructions to one idle Session
    *
