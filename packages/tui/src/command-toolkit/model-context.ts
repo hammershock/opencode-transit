@@ -1,33 +1,6 @@
 import { defineCommand, type InvocationContext, type RawArguments } from "@opencode-ai/command-kit"
 
-export type ModelContextGeneration = {
-  version: 1
-  generation: number
-  reason: "created" | "legacy-backfill" | "location-rebound" | "init" | "instructions-applied"
-  locationRevision: number
-  environment: {
-    harness: "OpenCode Transit"
-    entrypoint: "opencode-transit"
-    targetKind: "local" | "rexd"
-    targetName: string
-    directory: string
-    projectRoot: string
-    vcs?: string
-    platform: string
-  }
-  instructions: ReadonlyArray<{
-    id: string
-    origin: "global-file" | "target-file" | "project-file" | "configured-file" | "configured-url" | "nested-file"
-    scope: "global" | "target" | "project" | "nested"
-    source: string
-    declaredBy?: string
-    status: "loaded" | "ignored"
-    failureStage?: "discovery" | "read" | "fetch"
-    content?: string
-    digest?: string
-  }>
-  digest: string
-  baseline: string
+export type ModelContextGeneration = Omit<import("@opencode-ai/sdk/v2").ModelContextGeneration, "sources"> & {
   sources: Readonly<
     Record<string, { value: unknown; baseline?: string; removed?: string; refresh?: "generation" | "activation" }>
   >
@@ -122,7 +95,7 @@ export const modelContextCommand = defineCommand<void, ModelContextCommandContex
   id: "fork.context.inspect",
   path: ["context"],
   title: "Model context",
-  description: "Inspect the frozen model context for this Session",
+  description: "Inspect model context or explicitly refresh Session instructions",
   category: "Session",
   provenance: { type: "core", feature: "location-model-context" },
   requires: { session: true },
