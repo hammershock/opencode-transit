@@ -2440,7 +2440,7 @@ function InlineTool(props: {
       failed={failed()}
       denied={Boolean(denied())}
       error={error()}
-      errorExpanded={errorExpanded()}
+      errorExpanded={errorExpanded() || (failed() && props.part.tool === "task")}
       complete={props.complete}
       pending={props.pending}
       failure={props.failure}
@@ -2450,7 +2450,8 @@ function InlineTool(props: {
       onMouseOut={() => setHover(false)}
       onMouseUp={() => {
         if (renderer.getSelection()?.getSelectedText()) return
-        if (failed()) {
+        // Task failures keep their child navigation; show the error inline instead.
+        if (failed() && props.part.tool !== "task") {
           setErrorExpanded((value) => !value)
           return
         }
