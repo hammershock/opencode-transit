@@ -640,7 +640,7 @@ export function Session() {
   const syncSettings = useSyncSettings()
   const targetManager = useTargetManager()
   const skillManager = useSkillManager()
-  const harnessManager = useHarnessManager({ sessionID: route.sessionID, openSkills: skillManager.open })
+  const harnessManager = useHarnessManager({ openSkills: skillManager.open })
   const coreCommandHost = createMemo(() =>
     createCommandHost<
       EnvironmentCommandContext &
@@ -683,6 +683,27 @@ export function Session() {
             enabled: result.data.data.enabled,
             generation: Number(result.data.data.generation),
             variables: result.data.data.variables,
+          }
+        }
+        const inspectModelContext = async () => {
+          const response = await sdk.request(`/api/session/${encodeURIComponent(route.sessionID)}/model-context`)
+          if (!response.ok) throw new Error(`Failed to inspect model context (HTTP ${response.status})`)
+          const result = (await response.json()) as {
+            data: ModelContextGeneration | null
+            skillCatalog: ModelContextGeneration["skillCatalog"] | null
+            skillGuidance: string | null
+            subagentCatalog: ModelContextGeneration["subagentCatalog"] | null
+            subagentGuidance: string | null
+            subagentRefresh: ModelContextGeneration["subagentRefresh"]
+          }
+          if (!result.data) return null
+          return {
+            ...result.data,
+            ...(result.skillCatalog ? { skillCatalog: result.skillCatalog } : {}),
+            ...(result.skillGuidance ? { skillGuidance: result.skillGuidance } : {}),
+            ...(result.subagentCatalog ? { subagentCatalog: result.subagentCatalog } : {}),
+            ...(result.subagentGuidance ? { subagentGuidance: result.subagentGuidance } : {}),
+            ...(result.subagentRefresh ? { subagentRefresh: result.subagentRefresh } : {}),
           }
         }
         return {
@@ -753,29 +774,22 @@ export function Session() {
           },
           presentEnvironment: (snapshot, reveal) => showEnvironment(dialog, snapshot, reveal, toast.error),
           modelContext: {
-            inspect: async () => {
-              const response = await sdk.request(`/api/session/${encodeURIComponent(route.sessionID)}/model-context`)
-              if (!response.ok) throw new Error(`Failed to inspect model context (HTTP ${response.status})`)
-              const result = (await response.json()) as {
-                data: ModelContextGeneration | null
-                skillCatalog: ModelContextGeneration["skillCatalog"] | null
-                skillGuidance: string | null
-                subagentCatalog: ModelContextGeneration["subagentCatalog"] | null
-                subagentGuidance: string | null
-                subagentRefresh: ModelContextGeneration["subagentRefresh"]
-              }
-              if (!result.data) return null
-              return {
-                ...result.data,
-                ...(result.skillCatalog ? { skillCatalog: result.skillCatalog } : {}),
-                ...(result.skillGuidance ? { skillGuidance: result.skillGuidance } : {}),
-                ...(result.subagentCatalog ? { subagentCatalog: result.subagentCatalog } : {}),
-                ...(result.subagentGuidance ? { subagentGuidance: result.subagentGuidance } : {}),
-                ...(result.subagentRefresh ? { subagentRefresh: result.subagentRefresh } : {}),
-              }
-            },
+            inspect: inspectModelContext,
           },
-          presentModelContext: (generation) => showModelContext(dialog, generation),
+          presentModelContext: (generation) => {
+            if (!generation || readOnly()) return showModelContext(dialog, generation)
+            return showModelContext(dialog, generation, async () => {
+              const applied = await sdk.client.v2.session.instructions.apply(
+                { sessionID: route.sessionID },
+                { throwOnError: true },
+              )
+              return {
+                ...generation,
+                ...applied.data,
+                sources: applied.data.sources as ModelContextGeneration["sources"],
+              }
+            })
+          },
           openSyncSettings: syncSettings.open,
         }
       },

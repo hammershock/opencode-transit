@@ -438,6 +438,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         })),
       ],
       bindings: [
+        ...visible.flatMap((item) => tuiConfig.keybinds.get(item.command)),
         ...tuiConfig.keybinds.gather("dialog.select", [
           "dialog.select.prev",
           "dialog.select.next",
@@ -447,7 +448,10 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           "dialog.select.end",
           "dialog.select.submit",
         ]),
-        ...visible.flatMap((item) => tuiConfig.keybinds.get(item.command)),
+        ...(props.bindings ?? []).filter((binding) => {
+          if (typeof binding.cmd !== "string") return true
+          return visible.some((item) => item.command === binding.cmd)
+        }),
         ...(props.onToggle
           ? [
               {
@@ -478,10 +482,6 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               },
             ]
           : []),
-        ...(props.bindings ?? []).filter((binding) => {
-          if (typeof binding.cmd !== "string") return true
-          return visible.some((item) => item.command === binding.cmd)
-        }),
       ],
     }
   })
@@ -567,7 +567,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               {props.title}
             </text>
           )}
-          <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
+          <text fg={theme.textMuted} onMouseUp={() => dialog.pop()}>
             esc
           </text>
         </box>

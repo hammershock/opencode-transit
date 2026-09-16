@@ -11,6 +11,7 @@ import { useDialog, type DialogContext } from "../ui/dialog"
 import { DialogAlert } from "../ui/dialog-alert"
 import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
 import { useToast } from "../ui/toast"
+import { errorMessage } from "../util/error"
 
 type Preview = { title: string; content: string }
 
@@ -138,26 +139,78 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
   return options
 }
 
-export function showModelContext(dialog: DialogContext, generation: ModelContextGeneration | null) {
+export function showModelContext(
+  dialog: DialogContext,
+  generation: ModelContextGeneration | null,
+  refreshInstructions?: () => Promise<ModelContextGeneration | null>,
+) {
   if (!generation) return DialogAlert.show(dialog, "Model context", "No context generation has been established yet.")
   return new Promise<void>((resolve) => {
     dialog.replace(
-      () => (
-        <DialogSelect
-          title={`Model context · ${generation.generation} · ${generation.reason}`}
-          options={modelContextOptions(generation)}
-          footer={<text>{`location ${generation.locationRevision} · ${generation.digest.slice(0, 12)}`}</text>}
-          footerHints={[{ title: "enter", label: "preview" }]}
-          onSelect={(option) =>
-            dialog.replace(() => (
-              <DialogModelContextPreview title={option.value.title} content={option.value.content} />
-            ))
-          }
-        />
-      ),
+      () => <DialogModelContext generation={generation} refreshInstructions={refreshInstructions} />,
       resolve,
     )
   })
+}
+
+export function DialogModelContext(props: {
+  generation: ModelContextGeneration
+  refreshInstructions?: () => Promise<ModelContextGeneration | null>
+}) {
+  const dialog = useDialog()
+  const toast = useToast()
+  const [generation, setGeneration] = createSignal(props.generation)
+  const [refreshing, setRefreshing] = createSignal(false)
+
+  const refresh = async () => {
+    if (!props.refreshInstructions || refreshing()) return
+    setRefreshing(true)
+    try {
+      const next = await props.refreshInstructions()
+      if (!next) throw new Error("No context generation was returned")
+      setGeneration(next)
+      toast.show({
+        title: "Instructions refreshed",
+        message: `Current Session now uses generation ${next.generation}`,
+        variant: "success",
+      })
+    } catch (error) {
+      toast.show({
+        title: "Instructions not refreshed",
+        message: `${errorMessage(error)} Nothing changed.`,
+        variant: "error",
+      })
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  return (
+    <DialogSelect
+      title={`Model context · ${generation().generation} · ${generation().reason}`}
+      locked={refreshing()}
+      preserveSelection
+      options={modelContextOptions(generation())}
+      footer={<text>{`location ${generation().locationRevision} · ${generation().digest.slice(0, 12)}`}</text>}
+      footerHints={[{ title: "enter", label: "preview" }]}
+      actions={
+        props.refreshInstructions
+          ? [
+              {
+                command: "dialog.model_context.refresh_instructions",
+                title: refreshing() ? "refreshing instructions" : "refresh instructions",
+                side: "right",
+                disabled: refreshing(),
+                onTrigger: () => void refresh(),
+              },
+            ]
+          : undefined
+      }
+      onSelect={(option) =>
+        dialog.push(() => <DialogModelContextPreview title={option.value.title} content={option.value.content} />)
+      }
+    />
+  )
 }
 
 export function DialogModelContextPreview(props: Preview) {

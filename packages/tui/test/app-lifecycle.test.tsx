@@ -279,6 +279,7 @@ test.each([
 
     await ready
     await setup.waitForVisualIdle()
+    setup.mockInput.pressKey("home")
     setup.mockInput.pressKey("p", { ctrl: true })
     await setup.waitForVisualIdle()
 
@@ -526,7 +527,7 @@ test("Ctrl+P opens the production Skill Manager without a model turn", async () 
 }, 10_000)
 
 test("the Harness command opens its keyboard-navigable controller instruction manager without a model turn", async () => {
-  const setup = await createTestRenderer({ width: 88, height: 32, useThread: false })
+  const setup = await createTestRenderer({ width: 64, height: 32, useThread: false })
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   const events = createEventSource()
@@ -545,8 +546,9 @@ test("the Harness command opens its keyboard-navigable controller instruction ma
     valid: true,
   }
   let delaySettings = false
+  let localBound = true
   let releaseSettings: (() => void) | undefined
-  const calls = createFetch((url) => {
+  const calls = createFetch((url, request) => {
     if (url.pathname === "/api/target")
       return json({
         path: "/tmp/opencode/targets.jsonc",
@@ -556,7 +558,12 @@ test("the Harness command opens its keyboard-navigable controller instruction ma
         valid: true,
       })
     if (url.pathname === "/api/harness/instructions") {
-      if (!delaySettings) return json(settings)
+      if (!delaySettings)
+        return json({
+          ...settings,
+          revision: localBound ? settings.revision : "1".repeat(64),
+          targets: settings.targets.filter((item) => item.target !== "local" || localBound),
+        })
       return new Promise<Response>((resolve) => {
         releaseSettings = () => resolve(json(settings))
       })
@@ -572,25 +579,34 @@ test("the Harness command opens its keyboard-navigable controller instruction ma
           content: "shared policy",
           size: 13,
           digest: "shared-digest",
+          truncated: true,
           sharedTargets: [orphan],
         },
         diagnostics: [],
       })
     if (url.pathname === "/api/harness/instructions/target/local")
-      return json({
-        scope: { type: "target", target: "local" },
-        mode: "custom",
-        source: {
-          reference: "policies/local.md",
-          resolved: "/tmp/opencode/policies/local.md",
-          status: "readable",
-          content: "local policy",
-          size: 12,
-          digest: "local-digest",
-          sharedTargets: ["local"],
-        },
-        diagnostics: [],
-      })
+      return json(
+        localBound
+          ? {
+              scope: { type: "target", target: "local" },
+              mode: "custom",
+              source: {
+                reference: "policies/local.md",
+                resolved: "/tmp/opencode/policies/local.md",
+                status: "readable",
+                content: "local policy",
+                size: 12,
+                digest: "local-digest",
+                sharedTargets: ["local"],
+              },
+              diagnostics: [],
+            }
+          : { scope: { type: "target", target: "local" }, mode: "default", diagnostics: [] },
+      )
+    if (url.pathname === "/api/harness/instructions/target/unbind" && request.method === "POST") {
+      localBound = false
+      return json({ ...settings, revision: "1".repeat(64), targets: settings.targets.slice(1) })
+    }
     if (url.pathname === `/api/harness/instructions/target/${orphan}`)
       return json({
         scope: { type: "target", target: orphan },
@@ -645,44 +661,40 @@ test("the Harness command opens its keyboard-navigable controller instruction ma
     await waitForFrame(setup, "Harness")
     expect(setup.captureCharFrame()).toContain("Instructions")
     expect(setup.captureCharFrame()).toContain("Skills")
+    expect(setup.captureCharFrame()).not.toContain("Controller global and target rule files")
+    expect(setup.captureCharFrame()).not.toContain("Existing discovery and target access manager")
     setup.mockInput.pressEnter()
-    await waitForFrame(setup, "Harness instructions · Controller")
+    await waitForFrame(setup, "Harness instructions")
     await waitForFrame(setup, "policies/local.md")
     const frame = setup.captureCharFrame()
-    expect(frame).toContain("Back to Harness")
-    expect(frame).toContain("Global")
+    expect(frame).toContain("Global rule")
     expect(frame).toContain("policies/shared.md")
     expect(frame).toContain("local")
     expect(frame).toContain("policies/local.md")
     expect(frame).toContain("Removed target 22222222")
-    expect(frame).toContain("Save ≠ Apply")
+    expect(frame).not.toContain("Back to Harness")
+    expect(frame).not.toContain("Apply to this Session")
+    expect(frame).not.toContain("Save ≠ Apply")
     expect(calls.session).toHaveLength(sessionRequests)
 
-    setup.mockInput.pressArrow("down")
-    setup.mockInput.pressArrow("down")
-    setup.mockInput.pressEnter()
-    await waitForFrame(setup, "local · Controller file")
-    expect(setup.captureCharFrame()).toContain("Back to Instructions")
-    expect(setup.captureCharFrame()).toContain("Reuse bound file…")
-    setup.mockInput.pressArrow("down")
-    setup.mockInput.pressArrow("down")
-    setup.mockInput.pressArrow("down")
-    setup.mockInput.pressEnter()
-    await waitForFrame(setup, "Reuse controller instruction file")
-    expect(setup.captureCharFrame()).toContain("policies/shared.md")
+    setup.mockInput.pressKey("p", { ctrl: true })
+    await waitForFrame(setup, "Instructions · Global")
+    expect(setup.captureCharFrame()).toContain("shared policy")
+    expect(setup.captureCharFrame()).toContain("[preview truncated]")
     setup.mockInput.pressEscape()
-    await waitForFrame(setup, "local · Controller file")
-    await setup.mockInput.typeText("Select another")
+    await waitForFrame(setup, "Harness instructions")
+    setup.mockInput.pressArrow("down")
+    setup.mockInput.pressBackspace()
+    await waitForFrame(setup, "local path unset")
+    expect(setup.captureCharFrame()).toMatch(/local\s+unset/)
     setup.mockInput.pressEnter()
     await waitForFrame(setup, "Controller instruction file")
     setup.mockInput.pressEscape()
-    await waitForFrame(setup, "local · Controller file")
-    expect(setup.captureCharFrame()).toContain("Back to Instructions")
+    await waitForFrame(setup, "Harness instructions")
     expect(calls.session).toHaveLength(sessionRequests)
     setup.mockInput.pressEscape()
-    await waitForFrame(setup, "Harness instructions · Controller")
-    setup.mockInput.pressEscape()
-    await waitForFrame(setup, "Skills Existing discovery and target access manager")
+    await waitForFrameWithout(setup, "Harness instructions")
+    expect(setup.captureCharFrame()).toContain("Harness")
 
     setup.mockInput.pressEscape()
     await waitForFrameWithout(setup, "Harness")
@@ -692,16 +704,17 @@ test("the Harness command opens its keyboard-navigable controller instruction ma
     await waitForFrame(setup, "Harness")
     await setup.waitForVisualIdle()
     setup.mockInput.pressEnter()
-    await waitForFrame(setup, "Harness instructions · Controller")
+    await waitForFrame(setup, "Harness instructions")
     while (!releaseSettings) await Bun.sleep(10)
     setup.mockInput.pressEscape()
-    await waitForFrame(setup, "Skills Existing discovery and target access manager")
+    await waitForFrameWithout(setup, "Harness instructions")
+    expect(setup.captureCharFrame()).toContain("Harness")
     setup.mockInput.pressEscape()
     await waitForFrameWithout(setup, "Harness")
     releaseSettings()
     await Bun.sleep(50)
     await setup.renderOnce()
-    expect(setup.captureCharFrame()).not.toContain("Harness instructions · Controller")
+    expect(setup.captureCharFrame()).not.toContain("Harness instructions")
 
     process.emit("SIGHUP")
     await task
