@@ -253,11 +253,11 @@ export function useHarnessManager(input: { readonly sessionID?: string; readonly
   const promptControllerFile = (current?: HarnessInstructionSource) =>
     new Promise<string | null>((resolve) => {
       let settled = false
-      const finish = (value: string | null) => {
+      const finish = (value: string | null, close = true) => {
         if (settled) return
         settled = true
         resolve(value)
-        dialog.pop()
+        if (close) dialog.pop()
       }
       const snapshot = model()!.settings
       const configDirectory = path.dirname(snapshot.path)
@@ -294,7 +294,8 @@ export function useHarnessManager(input: { readonly sessionID?: string; readonly
             onCancel={() => finish(null)}
           />
         ),
-        () => finish(null),
+        // The dialog is already being popped; do not also close its parent.
+        () => finish(null, false),
       )
     })
 
