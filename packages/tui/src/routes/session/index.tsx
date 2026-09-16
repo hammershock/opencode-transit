@@ -1,6 +1,7 @@
 import { TaskInvocation } from "@opencode-ai/core/v1/task-invocation"
 import {
   batch,
+  createComputed,
   createContext,
   createEffect,
   createMemo,
@@ -78,7 +79,7 @@ import { setPreLayoutSiblingMargin } from "../../util/layout"
 import { useTuiConfig } from "../../config"
 import { useClipboard } from "../../context/clipboard"
 import { nextThinkingMode, reasoningSummary, useThinkingMode, type ThinkingMode } from "../../context/thinking"
-import { getScrollAcceleration } from "../../util/scroll"
+import { compensatePrunedScrollTop, getScrollAcceleration } from "../../util/scroll"
 import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
@@ -529,6 +530,33 @@ export function Session() {
   let seeded = false
   let scroll: ScrollBoxRenderable
   let prompt: PromptRef | undefined
+  const [followOutput, setFollowOutput] = createSignal(true)
+  const updateFollowOutput = () => {
+    if (!scroll || scroll.isDestroyed) return
+    setFollowOutput(scroll.scrollTop >= Math.max(0, scroll.scrollHeight - scroll.viewport.height) - 1)
+  }
+  const scrollBy = (delta: number) => {
+    scroll.scrollBy(delta)
+    updateFollowOutput()
+  }
+  const scrollTo = (position: number) => {
+    scroll.scrollTo(position)
+    updateFollowOutput()
+  }
+  createComputed(() => {
+    const current = messages()
+    if (!scroll || scroll.isDestroyed) return
+    const next = compensatePrunedScrollTop({
+      children: scroll.getChildren(),
+      messageIDs: new Set(current.map((message) => message.id)),
+      scrollTop: scroll.scrollTop,
+      scrollHeight: scroll.scrollHeight,
+      viewportHeight: scroll.viewport.height,
+    })
+    if (next === undefined) return
+    setFollowOutput(false)
+    scroll.scrollTop = next
+  })
   const [shellCompletionGeneration, setShellCompletionGeneration] = createSignal(0)
   const bind = (r: PromptRef | undefined) => {
     prompt = r
@@ -619,20 +647,20 @@ export function Session() {
     const targetID = findNextVisibleMessage(direction)
 
     if (!targetID) {
-      scroll.scrollBy(direction === "next" ? scroll.height : -scroll.height)
+      scrollBy(direction === "next" ? scroll.height : -scroll.height)
       dialog.clear()
       return
     }
 
     const child = scroll.getChildren().find((c) => c.id === targetID)
-    if (child) scroll.scrollBy(child.y - scroll.y - 1)
+    if (child) scrollBy(child.y - scroll.y - 1)
     dialog.clear()
   }
 
   function toBottom() {
     setTimeout(() => {
       if (!scroll || scroll.isDestroyed) return
-      scroll.scrollTo(scroll.scrollHeight)
+      scrollTo(scroll.scrollHeight)
     }, 50)
   }
 
@@ -908,7 +936,7 @@ export function Session() {
               const child = scroll.getChildren().find((child) => {
                 return child.id === messageID
               })
-              if (child) scroll.scrollBy(child.y - scroll.y - 1)
+              if (child) scrollBy(child.y - scroll.y - 1)
             }}
             sessionID={route.sessionID}
             setPrompt={(promptInfo) => prompt?.set(promptInfo)}
@@ -932,7 +960,7 @@ export function Session() {
               const child = scroll.getChildren().find((child) => {
                 return child.id === messageID
               })
-              if (child) scroll.scrollBy(child.y - scroll.y - 1)
+              if (child) scrollBy(child.y - scroll.y - 1)
             }}
             sessionID={route.sessionID}
           />
@@ -1198,7 +1226,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(-scroll.height / 2)
+        scrollBy(-scroll.height / 2)
         dialog.clear()
       },
     },
@@ -1208,7 +1236,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(scroll.height / 2)
+        scrollBy(scroll.height / 2)
         dialog.clear()
       },
     },
@@ -1218,7 +1246,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(-1)
+        scrollBy(-1)
         dialog.clear()
       },
     },
@@ -1228,7 +1256,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(1)
+        scrollBy(1)
         dialog.clear()
       },
     },
@@ -1238,7 +1266,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(-scroll.height / 4)
+        scrollBy(-scroll.height / 4)
         dialog.clear()
       },
     },
@@ -1248,7 +1276,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollBy(scroll.height / 4)
+        scrollBy(scroll.height / 4)
         dialog.clear()
       },
     },
@@ -1258,7 +1286,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollTo(0)
+        scrollTo(0)
         dialog.clear()
       },
     },
@@ -1268,7 +1296,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       run: () => {
-        scroll.scrollTo(scroll.scrollHeight)
+        scrollTo(scroll.scrollHeight)
         dialog.clear()
       },
     },
@@ -1297,7 +1325,7 @@ export function Session() {
             const child = scroll.getChildren().find((child) => {
               return child.id === message.id
             })
-            if (child) scroll.scrollBy(child.y - scroll.y - 1)
+            if (child) scrollBy(child.y - scroll.y - 1)
             break
           }
         }
@@ -1538,7 +1566,7 @@ export function Session() {
         dialog.clear()
         setTimeout(() => {
           const row = scroll.getChildren().find((child) => child.id === `skill-${snapshot.id}`)
-          if (row) scroll.scrollBy(row.y - scroll.y - 1)
+          if (row) scrollBy(row.y - scroll.y - 1)
         }, 0)
       },
     })),
@@ -1669,10 +1697,11 @@ export function Session() {
                     foregroundColor: theme.border,
                   },
                 }}
-                stickyScroll={true}
+                stickyScroll={followOutput()}
                 stickyStart="bottom"
                 flexGrow={1}
                 scrollAcceleration={scrollAcceleration()}
+                onMouseScroll={() => queueMicrotask(updateFollowOutput)}
               >
                 <box height={1} />
                 <For each={messageIDs()}>
@@ -2036,7 +2065,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
   const partsByID = createMemo(() => new Map(props.parts.map((part) => [part.id, part] as const)))
 
   return (
-    <>
+    <box id={props.message.id} flexShrink={0}>
       <For each={partIDs()}>
         {(partID, index) => {
           const part = createMemo(() => partsByID().get(partID))
@@ -2126,7 +2155,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           </box>
         </Match>
       </Switch>
-    </>
+    </box>
   )
 }
 
