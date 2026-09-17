@@ -15,6 +15,7 @@ const Exited = Schema.Struct({
   signal: Schema.optional(Schema.NullOr(Schema.String)),
   timed_out: Schema.optional(Schema.Boolean),
 })
+const EXIT_EVENT_GRACE_MS = 1_000
 
 /**
  * Executes one bounded operation through an already-acquired Rexd lease.
@@ -35,6 +36,7 @@ export async function runRexdProcess(
   let resolveExit = (_value: typeof Exited.Type) => undefined as void
   let rejectExit = (_cause: Error) => undefined as void
   let outputChain = Promise.resolve()
+  let deadline: ReturnType<typeof setTimeout> | undefined
   const exited = new Promise<typeof Exited.Type>((resolve, reject) => {
     resolveExit = resolve
     rejectExit = reject
@@ -84,6 +86,12 @@ export async function runRexdProcess(
       ),
     )
     processID = started.process_id
+    // Rexd enforces the command timeout, but its terminal notification is not
+    // reliable enough to leave the controller waiting without its own bound.
+    deadline = setTimeout(
+      () => rejectExit(new Error("Timed out")),
+      Duration.toMillis(options.timeout) + EXIT_EVENT_GRACE_MS,
+    )
     pending.forEach(([method, params]) => receive(method, params))
     pending.length = 0
     if (options.signal?.aborted) abort()
@@ -111,6 +119,7 @@ export async function runRexdProcess(
       stderrTruncated: truncated.stderr,
     }
   } finally {
+    if (deadline) clearTimeout(deadline)
     remove()
     removeClose()
     options.signal?.removeEventListener("abort", abort)
