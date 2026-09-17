@@ -149,6 +149,25 @@ describe("Rexd Location routing contract", () => {
     expect(calls.filter((call) => call.method === "exec.start")).toHaveLength(1)
   })
 
+  test("missing remote exit notification respects the process timeout", async () => {
+    const { lease, calls } = processLease((method) => {
+      if (method === "exec.start") return { process_id: "lost-exit" }
+      if (method === "exec.kill") return { ok: true }
+      return undefined
+    })
+
+    await expect(
+      runRexdProcess(lease, {
+        command: "printf finished",
+        shell: true,
+        cwd: "/workspace",
+        timeout: "1 millis",
+        maxOutputBytes: 1024,
+      }),
+    ).rejects.toThrow("Timed out")
+    expect(calls.map((call) => call.method)).toEqual(["exec.start", "exec.kill"])
+  })
+
   test("failed process start releases all listeners", async () => {
     let notifications = 0
     let closes = 0
