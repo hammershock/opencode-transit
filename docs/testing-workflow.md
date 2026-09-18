@@ -1,10 +1,18 @@
 # Fork Testing Workflow
 
-Every functional change in this fork must pass automated verification and real-device acceptance. Unit tests alone are insufficient because Location, SSH/Rexd, TUI input, secure storage, provider authentication and multi-device synchronization depend on real operating-system behavior. Fork-owned TUI checks also follow [`ui-design-guidelines.md`](ui-design-guidelines.md).
+Verification in this fork is proportional to impact and risk. A narrow low-risk change may be accepted with focused tests that directly exercise the changed behavior. Broader changes still require the package, contract, integration, real-device, and multi-device evidence selected below because Location, SSH/Rexd, TUI input, secure storage, provider authentication, persistent data, and synchronization can depend on real operating-system behavior. Fork-owned TUI checks also follow [`ui-design-guidelines.md`](ui-design-guidelines.md).
+
+## Focused fast path
+
+Use the focused fast path when the diff is narrow, its behavior and failure mode are well understood, it does not create a material migration or data-loss risk, and focused tests cover the changed boundary. Document why the scope is low risk and list the exact checks run.
+
+For this fork (`origin` / `hammershock/opencode-transit`), once those focused tests pass and the PR is open, the change may merge without waiting for review or queued CI. Do not claim unawaited checks passed. Build and transactionally install on the Mac from a clean exact post-merge `dev` commit, then verify the installed version and manifest, macOS signature when applicable, and a proportional smoke test. A later regression is handled through a follow-up issue/PR.
+
+Do not use this fast path when the change's actual risk requires wider evidence, including incompatible public-contract changes, migrations, credentials or authorization, persistent-data integrity, synchronization or deletion semantics, release automation, or affected platform-specific behavior. Remote execution and TUI changes may still qualify when the patch is tightly bounded and a focused contract test or harmless real-target probe resolves the relevant risk; otherwise run the broader rows below. This authorization applies only to the fork and never permits writes to `upstream`.
 
 ## Platform selection: Mac by default
 
-For routine platform-neutral logic, tool lifecycle, and TUI changes, require a clean Mac candidate build, focused automated checks, and the affected real workflow through `opencode-transit`. Windows/WSL2 is not a mandatory second device for every task. Its temporary unavailability alone does not block a platform-neutral change, and a Mac pass must never be reported as Windows evidence.
+Outside the focused fast path, routine platform-neutral logic, tool lifecycle, and TUI changes require a clean Mac candidate build, focused automated checks, and the affected real workflow through `opencode-transit`. Windows/WSL2 is not a mandatory second device for every task. Its temporary unavailability alone does not block a platform-neutral change, and a Mac pass must never be reported as Windows evidence.
 
 Add coverage according to the changed boundary:
 
@@ -24,14 +32,14 @@ The verification gate belongs to the project, not to an external contributor's h
 
 - External contributors run the relevant automated checks and real workflow on every supported controller they can access. Their pull request lists exact results and every platform or scenario not run.
 - Missing access to Mac Apple Silicon or `mywindows`/WSL2 does not block opening or reviewing an external pull request.
-- Before a functional change merges, the accepting maintainer builds the exact candidate commit and completes missing risk-selected required rows or records an explicit scoped deferral. Evidence is added to the same pull request.
+- Before a non-fast-path functional change merges, the accepting maintainer builds the exact candidate commit and completes missing risk-selected required rows or records an explicit scoped deferral. For a focused fast-path change, the maintainer instead builds and installs the clean exact post-merge integration commit on the Mac and records that evidence.
 - Documentation-only and template-only changes normally use rendering, link, schema, and formatting checks instead of runtime device acceptance.
 
 Optional unrun Windows coverage is not an outstanding mandatory gate for an otherwise verified platform-neutral change. Required checks and explicit maintainer dispositions remain visible in the PR.
 
-## Required test ladder
+## Risk-selected test ladder
 
-Run tests in this order:
+Select the necessary levels for the changed boundary and run selected checks in this order. A focused fast-path change may stop after the smallest level that directly establishes its behavior and failure path:
 
 1. **Static checks:** formatting or lint checks required by the affected package, generated-file checks and package-local `bun typecheck`.
 2. **Unit tests:** parsers, state transitions, reducers, cryptographic envelopes, conflict rules and failure classification.
@@ -40,7 +48,7 @@ Run tests in this order:
 5. **Real-device acceptance:** execute the built `opencode-transit` on Mac and any additional risk-selected devices.
 6. **Milestone regression:** run the relevant wider matrix for the affected milestone and platform artifacts, including cross-device cases when applicable.
 
-A lower test layer does not automatically replace a required real workflow. A Mac-only task does not owe a synthetic Windows check merely to mark Windows optional. A Windows or synchronization defect still requires corresponding evidence or a documented maintainer disposition.
+A lower test layer does not replace a real workflow when the affected boundary or issue contract requires one. A Mac-only task does not owe a synthetic Windows check merely to mark Windows optional. A Windows or synchronization defect still requires corresponding evidence or a documented maintainer disposition.
 
 ## Canonical devices and entrypoint
 
@@ -61,7 +69,7 @@ Canonical environments:
 
 Record the actual hostname, OS/architecture, Git commit, executable path, `--version` output and executable hash for every real-device run. When several devices are selected, they must test the same candidate commit; platform artifacts may differ.
 
-For Mac-only acceptance, prepare an isolated clean checkout at the exact PR head and run `bun run script/transit-build.ts --single --skip-install` from `packages/opencode`. Verify the manifest and use the transactional installer in [`development/opencode-transit.md`](development/opencode-transit.md). Record post-merge integration builds separately from PR-head evidence. For required paired builds use `opencode-transit-dual-build --pr <number-or-url>`; without arguments it builds latest `origin/dev`. Failure preparing an optional WSL device does not prevent native Mac-only qualification.
+For required pre-merge Mac acceptance, prepare an isolated clean checkout at the exact PR head and run `bun run script/transit-build.ts --single --skip-install` from `packages/opencode`. For a focused fast-path change, perform this build after merge from an isolated clean checkout at the exact `dev` integration commit. Verify the manifest and use the transactional installer in [`development/opencode-transit.md`](development/opencode-transit.md). Record PR-head and post-merge integration builds distinctly. For required paired builds use `opencode-transit-dual-build --pr <number-or-url>`; without arguments it builds latest `origin/dev`. Failure preparing an optional WSL device does not prevent native Mac-only qualification.
 
 ## Isolation and data safety
 
@@ -75,7 +83,7 @@ For Mac-only acceptance, prepare an isolated clean checkout at the exact PR head
 
 ## Task-level real-device gate
 
-Every functional task names the relevant rows and platform-selection rationale. After automated checks pass, run the exact candidate through `opencode-transit` on Mac and required additional devices. Isolated candidate acceptance need not overwrite a production installation; record final installation separately.
+Every non-fast-path functional task names the relevant rows and platform-selection rationale. After automated checks pass, run the exact candidate through `opencode-transit` on Mac and required additional devices. A focused fast-path task instead records why focused coverage is sufficient and performs the clean post-merge Mac build/install verification described above. Isolated candidate acceptance need not overwrite a production installation; record final installation separately.
 
 Minimum evidence:
 
@@ -230,7 +238,8 @@ In particular, preserve regression coverage for the legacy sync resurrection fai
 
 ## Merge and release rules
 
-- A PR cannot be marked Done until Mac evidence and required extra-device evidence or explicit scoped maintainer dispositions are recorded.
+- A focused fast-path PR may merge after its focused tests pass without waiting for queued CI or pre-merge Mac evidence; record the skipped wait and add clean post-merge Mac build/install evidence.
+- Other PRs cannot be marked Done until Mac evidence and required extra-device evidence or explicit scoped maintainer dispositions are recorded.
 - A known failure on an affected platform remains unresolved even if Mac passes; optional unrun Windows coverage is not itself a failure.
 - Flaky real-device behavior is a defect to diagnose, not a passing retry.
 - A milestone release requires the relevant matrix for included behavior and shipped artifacts; synchronization milestones retain bidirectional tests.
