@@ -514,8 +514,10 @@ export function useSubagentManager(input: {
   const options = createMemo<DialogSelectOption<string>[]>(() =>
     rows().map((entry) => {
       const presentation = subagentPresentation(entry, dimensions().width)
+      const title = subagentRow(entry, dimensions().width)
       return {
-        title: subagentRow(entry, dimensions().width),
+        title,
+        titleWidth: Bun.stringWidth(title),
         inspectionTitle: `${presentation.prefix}${presentation.description}`,
         inspectionView: (offset, width) => (
           <>
