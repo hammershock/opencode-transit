@@ -209,9 +209,9 @@ Delete the local branch only after the merge is verified and no worktree uses it
 A task is **Done** only when:
 
 - every acceptance check in the issue is satisfied;
-- relevant package-local tests and `bun typecheck` pass from the correct package directories;
+- verification selected under `docs/testing-workflow.md` passes: focused tests alone may complete a narrow low-risk change, while broader package, typecheck, contract, integration, or device checks remain required when its affected boundary or risk calls for them;
 - compatibility/failure-path tests required by the RFC pass;
-- relevant Mac acceptance and required additional device scenarios pass under the exact built commit, or the maintainer explicitly records a scoped deferral; optional unrun platforms and their rationale are disclosed;
+- when required by the selected risk tier, relevant Mac acceptance and additional device scenarios pass under the exact built commit, or the maintainer explicitly records a scoped deferral; optional and intentionally skipped coverage is disclosed without being reported as passing;
 - generated files were produced by repository scripts and are consistent;
 - UI changes include before/after screenshots or recordings;
 - no secrets, external login state, machine-specific paths or credentials entered the diff, fixtures or logs;
@@ -219,6 +219,8 @@ A task is **Done** only when:
 - the governing RFC's `implemented-by` field is updated only when the merged PR actually implements a complete tracked portion, using PR links rather than developer names.
 
 Test failures that predate the task must be reproduced on the declared base and documented. They are not silently ignored and are not repaired in the task unless the issue scope is expanded explicitly.
+
+For `origin` (`hammershock/opencode-transit`), opening a PR plus passing focused tests supplies standing authorization to merge a narrow low-risk change without waiting for review or queued CI, then build and transactionally install the exact `dev` integration commit on the Mac. The PR records the fast-path decision and any checks not awaited. Later regressions are repaired through a follow-up issue/PR rather than retroactively overstating the original evidence. This exception does not apply to `upstream` or waive risk-selected gates for larger changes.
 
 ## Upstream synchronization
 
