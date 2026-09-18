@@ -1,6 +1,8 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { ConfigPermissionV1 } from "@opencode-ai/core/v1/config/permission"
 import { Config } from "@/config/config"
+import { ConfigAgent } from "@/config/agent"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { Provider } from "@/provider/provider"
 
@@ -33,6 +35,7 @@ import { Location } from "@opencode-ai/core/location"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 
 export const Info = Schema.Struct({
+  id: Schema.optional(Schema.String),
   name: Schema.String,
   description: Schema.optional(Schema.String),
   mode: Schema.Literals(["subagent", "primary", "all"]),
@@ -42,6 +45,7 @@ export const Info = Schema.Struct({
   temperature: Schema.optional(Schema.Finite),
   color: Schema.optional(Schema.String),
   permission: PermissionV1.Ruleset,
+  configuredPermission: Schema.optional(ConfigPermissionV1.Info),
   model: Schema.optional(
     Schema.Struct({
       modelID: ModelV2.ID,
@@ -52,6 +56,8 @@ export const Info = Schema.Struct({
   prompt: Schema.optional(Schema.String),
   options: Schema.Record(Schema.String, Schema.Unknown),
   steps: Schema.optional(Schema.Finite),
+  source: Schema.optional(Schema.Literals(["builtin", "global", "compatibility"])),
+  editable: Schema.optional(Schema.Boolean),
 }).annotate({ identifier: "Agent" })
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 
@@ -66,6 +72,7 @@ export interface Interface {
   readonly list: () => Effect.Effect<Info[]>
   readonly defaultInfo: () => Effect.Effect<Info>
   readonly defaultAgent: () => Effect.Effect<string>
+  readonly invalidate: () => Effect.Effect<void>
   readonly generate: (input: {
     description: string
     model?: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
@@ -79,7 +86,7 @@ export interface Interface {
   >
 }
 
-type State = Omit<Interface, "generate">
+type State = Omit<Interface, "generate" | "invalidate">
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Agent") {}
 
@@ -98,6 +105,8 @@ const layer = Layer.effect(
     const state = yield* InstanceState.make<State>(
       Effect.fn("Agent.state")(function* (ctx) {
         const cfg = yield* config.get()
+        const globalConfig = yield* config.getGlobal()
+        const globalAgents = yield* Effect.promise(() => ConfigAgent.load(Global.Path.config))
         const skillDirs = yield* skill.dirs()
         const referenceDirs = Object.keys(cfg.references ?? cfg.reference ?? {}).length
           ? yield* Effect.gen(function* () {
@@ -139,6 +148,7 @@ const layer = Layer.effect(
 
         const agents: Record<string, Info> = {
           build: {
+            id: "build",
             name: "build",
             description: "The default agent. Executes tools based on configured permissions.",
             options: {},
@@ -152,8 +162,11 @@ const layer = Layer.effect(
             ),
             mode: "primary",
             native: true,
+            source: "builtin",
+            editable: true,
           },
           plan: {
+            id: "plan",
             name: "plan",
             description: "Plan mode. Disallows all edit tools.",
             options: {},
@@ -178,8 +191,11 @@ const layer = Layer.effect(
             ),
             mode: "primary",
             native: true,
+            source: "builtin",
+            editable: true,
           },
           general: {
+            id: "general",
             name: "general",
             description: `General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.`,
             permission: Permission.merge(
@@ -192,8 +208,11 @@ const layer = Layer.effect(
             options: {},
             mode: "subagent",
             native: true,
+            source: "builtin",
+            editable: true,
           },
           explore: {
+            id: "explore",
             name: "explore",
             permission: Permission.merge(
               defaults,
@@ -215,11 +234,16 @@ const layer = Layer.effect(
             options: {},
             mode: "subagent",
             native: true,
+            source: "builtin",
+            editable: true,
           },
           compaction: {
+            id: "compaction",
             name: "compaction",
             mode: "primary",
             native: true,
+            source: "builtin",
+            editable: false,
             hidden: true,
             prompt: PROMPT_COMPACTION,
             permission: Permission.merge(
@@ -232,10 +256,13 @@ const layer = Layer.effect(
             options: {},
           },
           title: {
+            id: "title",
             name: "title",
             mode: "primary",
             options: {},
             native: true,
+            source: "builtin",
+            editable: false,
             hidden: true,
             temperature: 0.5,
             permission: Permission.merge(
@@ -248,10 +275,13 @@ const layer = Layer.effect(
             prompt: PROMPT_TITLE,
           },
           summary: {
+            id: "summary",
             name: "summary",
             mode: "primary",
             options: {},
             native: true,
+            source: "builtin",
+            editable: false,
             hidden: true,
             permission: Permission.merge(
               defaults,
@@ -272,11 +302,17 @@ const layer = Layer.effect(
           let item = agents[key]
           if (!item)
             item = agents[key] = {
+              id: key,
               name: key,
               mode: "all",
               permission: Permission.merge(defaults, user),
               options: {},
               native: false,
+              source:
+                Object.hasOwn(globalConfig.agent ?? {}, key) || Object.hasOwn(globalAgents, key)
+                  ? "global"
+                  : "compatibility",
+              editable: Object.hasOwn(globalConfig.agent ?? {}, key) || Object.hasOwn(globalAgents, key),
             }
           if (value.model) item.model = Provider.parseModel(value.model)
           item.variant = value.variant ?? item.variant
@@ -291,6 +327,8 @@ const layer = Layer.effect(
           item.steps = value.steps ?? item.steps
           item.options = mergeDeep(item.options, value.options ?? {})
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
+          item.configuredPermission = value.permission ?? item.configuredPermission
+          item.id = value.id ?? item.id
         }
 
         // Ensure Truncate.GLOB is allowed unless explicitly configured
@@ -310,6 +348,13 @@ const layer = Layer.effect(
         }
 
         const get = Effect.fnUntraced(function* (agent: string) {
+          const identities = Object.values(agents).filter((item) => item.id === agent)
+          if (identities.length === 1) return identities[0]
+          if (identities.length > 1) return agents[agent]
+          const exact = agents[agent]
+          if (exact) return exact
+          const matches = Object.values(agents).filter((item) => item.name === agent)
+          if (matches.length === 1) return matches[0]
           return agents[agent]
         })
 
@@ -319,7 +364,11 @@ const layer = Layer.effect(
             agents,
             values(),
             sortBy(
-              [(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "build"), "desc"],
+              [
+                (x) =>
+                  cfg.default_agent ? x.id === cfg.default_agent || x.name === cfg.default_agent : x.id === "build",
+                "desc",
+              ],
               [(x) => x.name, "asc"],
             ),
           )
@@ -328,7 +377,7 @@ const layer = Layer.effect(
         const defaultInfo = Effect.fnUntraced(function* () {
           const c = yield* config.get()
           if (c.default_agent) {
-            const agent = agents[c.default_agent]
+            const agent = yield* get(c.default_agent)
             if (!agent) throw new Error(`default agent "${c.default_agent}" not found`)
             if (agent.mode === "subagent") throw new Error(`default agent "${c.default_agent}" is a subagent`)
             if (agent.hidden === true) throw new Error(`default agent "${c.default_agent}" is hidden`)
@@ -340,7 +389,8 @@ const layer = Layer.effect(
         })
 
         const defaultAgent = Effect.fnUntraced(function* () {
-          return (yield* defaultInfo()).name
+          const agent = yield* defaultInfo()
+          return agent.id ?? agent.name
         })
 
         return {
@@ -364,6 +414,9 @@ const layer = Layer.effect(
       }),
       defaultAgent: Effect.fn("Agent.defaultAgent")(function* () {
         return yield* InstanceState.useEffect(state, (s) => s.defaultAgent())
+      }),
+      invalidate: Effect.fn("Agent.invalidate")(function* () {
+        yield* InstanceState.invalidateAll(state)
       }),
       generate: Effect.fn("Agent.generate")(function* (input: {
         description: string

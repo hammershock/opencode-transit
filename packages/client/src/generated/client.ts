@@ -190,6 +190,16 @@ import type {
   EnvironmentRevealOutput,
   EnvironmentInitInput,
   EnvironmentInitOutput,
+  SubagentsCatalogInput,
+  SubagentsCatalogOutput,
+  SubagentsCreateInput,
+  SubagentsCreateOutput,
+  SubagentsUpdateInput,
+  SubagentsUpdateOutput,
+  SubagentsRemoveInput,
+  SubagentsRemoveOutput,
+  SubagentsSetAccessInput,
+  SubagentsSetAccessOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -1567,6 +1577,98 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/environment/init`,
             successStatus: 200,
             declaredStatuses: [400, 404, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+    },
+    subagents: {
+      catalog: (input: SubagentsCatalogInput, requestOptions?: RequestOptions) =>
+        request<SubagentsCatalogOutput>(
+          {
+            method: "GET",
+            path: `/api/subagent`,
+            query: {
+              location: input["location"],
+              sessionID: input["sessionID"],
+              parentAgentID: input["parentAgentID"],
+              includeInactive: input["includeInactive"],
+            },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      create: (input: SubagentsCreateInput, requestOptions?: RequestOptions) =>
+        request<SubagentsCreateOutput>(
+          {
+            method: "POST",
+            path: `/api/subagent/definition`,
+            query: { location: input["location"] },
+            body: {
+              sessionID: input["sessionID"],
+              parentAgentID: input["parentAgentID"],
+              expectedRevision: input["expectedRevision"],
+              definition: input["definition"],
+            },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      update: (input: SubagentsUpdateInput, requestOptions?: RequestOptions) =>
+        request<SubagentsUpdateOutput>(
+          {
+            method: "PATCH",
+            path: `/api/subagent/definition/${encodeURIComponent(input.subagentID)}`,
+            query: { location: input["location"] },
+            body: {
+              sessionID: input["sessionID"],
+              parentAgentID: input["parentAgentID"],
+              expectedRevision: input["expectedRevision"],
+              definition: input["definition"],
+            },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      remove: (input: SubagentsRemoveInput, requestOptions?: RequestOptions) =>
+        request<SubagentsRemoveOutput>(
+          {
+            method: "DELETE",
+            path: `/api/subagent/definition/${encodeURIComponent(input.subagentID)}`,
+            query: { location: input["location"] },
+            body: {
+              sessionID: input["sessionID"],
+              parentAgentID: input["parentAgentID"],
+              expectedRevision: input["expectedRevision"],
+            },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      setAccess: (input: SubagentsSetAccessInput, requestOptions?: RequestOptions) =>
+        request<SubagentsSetAccessOutput>(
+          {
+            method: "PATCH",
+            path: `/api/subagent/access`,
+            query: { location: input["location"] },
+            body: {
+              sessionID: input["sessionID"],
+              parentAgentID: input["parentAgentID"],
+              expectedRevision: input["expectedRevision"],
+              subagentID: input["subagentID"],
+              active: input["active"],
+              scope: input["scope"],
+            },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
             empty: false,
           },
           requestOptions,

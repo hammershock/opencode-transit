@@ -137,6 +137,15 @@ export type TargetNotFoundError = {
 export const isTargetNotFoundError = (value: unknown): value is TargetNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "TargetNotFoundError"
 
+export type SubagentMutationError = {
+  readonly _tag: "SubagentMutationError"
+  readonly kind: "conflict" | "not-found" | "readonly"
+  readonly message: string
+  readonly revision?: string | undefined
+}
+export const isSubagentMutationError = (value: unknown): value is SubagentMutationError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SubagentMutationError"
+
 export type HealthGetOutput = { readonly healthy: true }
 
 export type LocationGetInput = {
@@ -5916,4 +5925,466 @@ export type EnvironmentInitOutput = {
         readonly generation: number | "Infinity" | "-Infinity" | "NaN"
       }
     | { readonly status: "cancelled" | "failed"; readonly template: "created" | "existing" }
+}
+
+export type SubagentsCatalogInput = {
+  readonly location?: {
+    readonly location?:
+      | {
+          readonly directory?: string | undefined
+          readonly workspace?: string | undefined
+          readonly target?: string | undefined
+        }
+      | undefined
+    readonly sessionID?: string | undefined
+    readonly parentAgentID: string
+    readonly includeInactive?: "true" | "false" | undefined
+  }["location"]
+  readonly sessionID?: {
+    readonly location?:
+      | {
+          readonly directory?: string | undefined
+          readonly workspace?: string | undefined
+          readonly target?: string | undefined
+        }
+      | undefined
+    readonly sessionID?: string | undefined
+    readonly parentAgentID: string
+    readonly includeInactive?: "true" | "false" | undefined
+  }["sessionID"]
+  readonly parentAgentID: {
+    readonly location?:
+      | {
+          readonly directory?: string | undefined
+          readonly workspace?: string | undefined
+          readonly target?: string | undefined
+        }
+      | undefined
+    readonly sessionID?: string | undefined
+    readonly parentAgentID: string
+    readonly includeInactive?: "true" | "false" | undefined
+  }["parentAgentID"]
+  readonly includeInactive?: {
+    readonly location?:
+      | {
+          readonly directory?: string | undefined
+          readonly workspace?: string | undefined
+          readonly target?: string | undefined
+        }
+      | undefined
+    readonly sessionID?: string | undefined
+    readonly parentAgentID: string
+    readonly includeInactive?: "true" | "false" | undefined
+  }["includeInactive"]
+}
+
+export type SubagentsCatalogOutput = {
+  readonly location: {
+    readonly target: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly lastKnownTargetName?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: {
+    readonly revision: string
+    readonly parentAgentID: string
+    readonly sessionID?: string
+    readonly entries: ReadonlyArray<{
+      readonly id: string
+      readonly name: string
+      readonly description?: string
+      readonly variant?: string
+      readonly prompt?: string
+      readonly steps?: number
+      readonly permission?: {
+        readonly [x: string]: "ask" | "allow" | "deny" | { readonly [x: string]: "ask" | "allow" | "deny" }
+      }
+      readonly model?: { readonly providerID: string; readonly modelID: string }
+      readonly effective: "active" | "inactive"
+      readonly reason: "default" | "global" | "session" | "permission" | "parent-disabled"
+      readonly approvalRequired: boolean
+      readonly capabilities: ReadonlyArray<string>
+      readonly editable: boolean
+      readonly source: "builtin" | "global" | "compatibility"
+    }>
+    readonly diagnostics: ReadonlyArray<string>
+  }
+}
+
+export type SubagentsCreateInput = {
+  readonly location?: {
+    readonly location?:
+      | {
+          readonly directory?: string | undefined
+          readonly workspace?: string | undefined
+          readonly target?: string | undefined
+        }
+      | undefined
+  }["location"]
+  readonly sessionID: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly definition: {
+      readonly name: string
+      readonly model?: string
+      readonly variant?: string
+      readonly description?: string
+      readonly prompt?: string
+      readonly steps?: number
+      readonly permission?: {
+        readonly [x: string]: "ask" | "allow" | "deny" | { readonly [x: string]: "ask" | "allow" | "deny" }
+      }
+    }
+  }["sessionID"]
+  readonly parentAgentID: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly definition: {
+      readonly name: string
+      readonly model?: string
+      readonly variant?: string
+      readonly description?: string
+      readonly prompt?: string
+      readonly steps?: number
+      readonly permission?: {
+        readonly [x: string]: "ask" | "allow" | "deny" | { readonly [x: string]: "ask" | "allow" | "deny" }
+      }
+    }
+  }["parentAgentID"]
+  readonly expectedRevision: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly definition: {
+      readonly name: string
+      readonly model?: string
+      readonly variant?: string
+      readonly description?: string
+      readonly prompt?: string
+      readonly steps?: number
+      readonly permission?: {
+        readonly [x: string]: "ask" | "allow" | "deny" | { readonly [x: string]: "ask" | "allow" | "deny" }
+      }
+    }
+  }["expectedRevision"]
+  readonly definition: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly definition: {
+      readonly name: string
+      readonly model?: string
+      readonly variant?: string
+      readonly description?: string
+      readonly prompt?: string
+      readonly steps?: number
+      readonly permission?: {
+        readonly [x: string]: "ask" | "allow" | "deny" | { readonly [x: string]: "ask" | "allow" | "deny" }
+      }
+    }
+  }["definition"]
+}
+
+export type SubagentsCreateOutput = {
+  readonly location: {
+    readonly target: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly lastKnownTargetName?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: {
+    readonly revision: string
+    readonly parentAgentID: string
+    readonly sessionID?: string
+    readonly entries: ReadonlyArray<{
+      readonly id: string
+      readonly name: string
+      readonly description?: string
+      readonly variant?: string
+      readonly prompt?: string
+      readonly steps?: number
+      readonly permission?: {
+        readonly [x: string]: "ask" | "allow" | "deny" | { readonly [x: string]: "ask" | "allow" | "deny" }
+      }
+      readonly model?: { readonly providerID: string; readonly modelID: string }
+      readonly effective: "active" | "inactive"
+      readonly reason: "default" | "global" | "session" | "permission" | "parent-disabled"
+      readonly approvalRequired: boolean
+      readonly capabilities: ReadonlyArray<string>
+      readonly editable: boolean
+      readonly source: "builtin" | "global" | "compatibility"
+    }>
+    readonly diagnostics: ReadonlyArray<string>
+  }
+}
+
+export type SubagentsUpdateInput = {
+  readonly subagentID: { readonly subagentID: string }["subagentID"]
+  readonly location?: {
+    readonly location?:
+      | {
+          readonly directory?: string | undefined
+          readonly workspace?: string | undefined
+          readonly target?: string | undefined
+        }
+      | undefined
+  }["location"]
+  readonly sessionID: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly definition: {
+      readonly name: string
+      readonly model?: string
+      readonly variant?: string
+      readonly description?: string
+      readonly prompt?: string
+      readonly steps?: number
+      readonly permission?: {
+        readonly [x: string]: "ask" | "allow" | "deny" | { readonly [x: string]: "ask" | "allow" | "deny" }
+      }
+    }
+  }["sessionID"]
+  readonly parentAgentID: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly definition: {
+      readonly name: string
+      readonly model?: string
+      readonly variant?: string
+      readonly description?: string
+      readonly prompt?: string
+      readonly steps?: number
+      readonly permission?: {
+        readonly [x: string]: "ask" | "allow" | "deny" | { readonly [x: string]: "ask" | "allow" | "deny" }
+      }
+    }
+  }["parentAgentID"]
+  readonly expectedRevision: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly definition: {
+      readonly name: string
+      readonly model?: string
+      readonly variant?: string
+      readonly description?: string
+      readonly prompt?: string
+      readonly steps?: number
+      readonly permission?: {
+        readonly [x: string]: "ask" | "allow" | "deny" | { readonly [x: string]: "ask" | "allow" | "deny" }
+      }
+    }
+  }["expectedRevision"]
+  readonly definition: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly definition: {
+      readonly name: string
+      readonly model?: string
+      readonly variant?: string
+      readonly description?: string
+      readonly prompt?: string
+      readonly steps?: number
+      readonly permission?: {
+        readonly [x: string]: "ask" | "allow" | "deny" | { readonly [x: string]: "ask" | "allow" | "deny" }
+      }
+    }
+  }["definition"]
+}
+
+export type SubagentsUpdateOutput = {
+  readonly location: {
+    readonly target: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly lastKnownTargetName?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: {
+    readonly revision: string
+    readonly parentAgentID: string
+    readonly sessionID?: string
+    readonly entries: ReadonlyArray<{
+      readonly id: string
+      readonly name: string
+      readonly description?: string
+      readonly variant?: string
+      readonly prompt?: string
+      readonly steps?: number
+      readonly permission?: {
+        readonly [x: string]: "ask" | "allow" | "deny" | { readonly [x: string]: "ask" | "allow" | "deny" }
+      }
+      readonly model?: { readonly providerID: string; readonly modelID: string }
+      readonly effective: "active" | "inactive"
+      readonly reason: "default" | "global" | "session" | "permission" | "parent-disabled"
+      readonly approvalRequired: boolean
+      readonly capabilities: ReadonlyArray<string>
+      readonly editable: boolean
+      readonly source: "builtin" | "global" | "compatibility"
+    }>
+    readonly diagnostics: ReadonlyArray<string>
+  }
+}
+
+export type SubagentsRemoveInput = {
+  readonly subagentID: { readonly subagentID: string }["subagentID"]
+  readonly location?: {
+    readonly location?:
+      | {
+          readonly directory?: string | undefined
+          readonly workspace?: string | undefined
+          readonly target?: string | undefined
+        }
+      | undefined
+  }["location"]
+  readonly sessionID: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+  }["sessionID"]
+  readonly parentAgentID: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+  }["parentAgentID"]
+  readonly expectedRevision: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+  }["expectedRevision"]
+}
+
+export type SubagentsRemoveOutput = {
+  readonly location: {
+    readonly target: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly lastKnownTargetName?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: {
+    readonly revision: string
+    readonly parentAgentID: string
+    readonly sessionID?: string
+    readonly entries: ReadonlyArray<{
+      readonly id: string
+      readonly name: string
+      readonly description?: string
+      readonly variant?: string
+      readonly prompt?: string
+      readonly steps?: number
+      readonly permission?: {
+        readonly [x: string]: "ask" | "allow" | "deny" | { readonly [x: string]: "ask" | "allow" | "deny" }
+      }
+      readonly model?: { readonly providerID: string; readonly modelID: string }
+      readonly effective: "active" | "inactive"
+      readonly reason: "default" | "global" | "session" | "permission" | "parent-disabled"
+      readonly approvalRequired: boolean
+      readonly capabilities: ReadonlyArray<string>
+      readonly editable: boolean
+      readonly source: "builtin" | "global" | "compatibility"
+    }>
+    readonly diagnostics: ReadonlyArray<string>
+  }
+}
+
+export type SubagentsSetAccessInput = {
+  readonly location?: {
+    readonly location?:
+      | {
+          readonly directory?: string | undefined
+          readonly workspace?: string | undefined
+          readonly target?: string | undefined
+        }
+      | undefined
+  }["location"]
+  readonly sessionID: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly subagentID: string
+    readonly active: boolean
+    readonly scope: "session" | "global"
+  }["sessionID"]
+  readonly parentAgentID: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly subagentID: string
+    readonly active: boolean
+    readonly scope: "session" | "global"
+  }["parentAgentID"]
+  readonly expectedRevision: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly subagentID: string
+    readonly active: boolean
+    readonly scope: "session" | "global"
+  }["expectedRevision"]
+  readonly subagentID: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly subagentID: string
+    readonly active: boolean
+    readonly scope: "session" | "global"
+  }["subagentID"]
+  readonly active: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly subagentID: string
+    readonly active: boolean
+    readonly scope: "session" | "global"
+  }["active"]
+  readonly scope: {
+    readonly sessionID: string
+    readonly parentAgentID: string
+    readonly expectedRevision: string
+    readonly subagentID: string
+    readonly active: boolean
+    readonly scope: "session" | "global"
+  }["scope"]
+}
+
+export type SubagentsSetAccessOutput = {
+  readonly location: {
+    readonly target: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly lastKnownTargetName?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: {
+    readonly revision: string
+    readonly parentAgentID: string
+    readonly sessionID?: string
+    readonly entries: ReadonlyArray<{
+      readonly id: string
+      readonly name: string
+      readonly description?: string
+      readonly variant?: string
+      readonly prompt?: string
+      readonly steps?: number
+      readonly permission?: {
+        readonly [x: string]: "ask" | "allow" | "deny" | { readonly [x: string]: "ask" | "allow" | "deny" }
+      }
+      readonly model?: { readonly providerID: string; readonly modelID: string }
+      readonly effective: "active" | "inactive"
+      readonly reason: "default" | "global" | "session" | "permission" | "parent-disabled"
+      readonly approvalRequired: boolean
+      readonly capabilities: ReadonlyArray<string>
+      readonly editable: boolean
+      readonly source: "builtin" | "global" | "compatibility"
+    }>
+    readonly diagnostics: ReadonlyArray<string>
+  }
 }

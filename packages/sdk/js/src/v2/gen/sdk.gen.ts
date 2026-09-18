@@ -296,6 +296,10 @@ import type {
   SkillDiscoveryUpdate,
   SkillRevisionInput,
   SkillTargetScopeUpdate,
+  SubagentAccessUpdate,
+  SubagentDefinitionCreate,
+  SubagentDefinitionUpdatePayload,
+  SubagentMutationContext,
   SubtaskPartInput,
   SyncHistoryListErrors,
   SyncHistoryListResponses,
@@ -514,6 +518,16 @@ import type {
   V2SkillSettingsResponses,
   V2SkillTargetScopeUpdateErrors,
   V2SkillTargetScopeUpdateResponses,
+  V2SubagentAccessUpdateErrors,
+  V2SubagentAccessUpdateResponses,
+  V2SubagentCatalogErrors,
+  V2SubagentCatalogResponses,
+  V2SubagentDefinitionCreateErrors,
+  V2SubagentDefinitionCreateResponses,
+  V2SubagentDefinitionRemoveErrors,
+  V2SubagentDefinitionRemoveResponses,
+  V2SubagentDefinitionUpdateErrors,
+  V2SubagentDefinitionUpdateResponses,
   V2TargetBindingBindErrors,
   V2TargetBindingBindResponses,
   V2TargetBindingListErrors,
@@ -8542,6 +8556,226 @@ export class Environment extends HeyApiClient {
   }
 }
 
+export class Definition extends HeyApiClient {
+  /**
+   * Create subagent
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters: {
+      location?: {
+        directory?: string
+        workspace?: string
+        target?: string
+      }
+      subagentDefinitionCreate: SubagentDefinitionCreate
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "location" },
+            { key: "subagentDefinitionCreate", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SubagentDefinitionCreateResponses,
+      V2SubagentDefinitionCreateErrors,
+      ThrowOnError
+    >({
+      url: "/api/subagent/definition",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Remove subagent
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters: {
+      subagentID: string
+      location?: {
+        directory?: string
+        workspace?: string
+        target?: string
+      }
+      subagentMutationContext: SubagentMutationContext
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "subagentID" },
+            { in: "query", key: "location" },
+            { key: "subagentMutationContext", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      V2SubagentDefinitionRemoveResponses,
+      V2SubagentDefinitionRemoveErrors,
+      ThrowOnError
+    >({
+      url: "/api/subagent/definition/{subagentID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Update subagent
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      subagentID: string
+      location?: {
+        directory?: string
+        workspace?: string
+        target?: string
+      }
+      subagentDefinitionUpdatePayload: SubagentDefinitionUpdatePayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "subagentID" },
+            { in: "query", key: "location" },
+            { key: "subagentDefinitionUpdatePayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<
+      V2SubagentDefinitionUpdateResponses,
+      V2SubagentDefinitionUpdateErrors,
+      ThrowOnError
+    >({
+      url: "/api/subagent/definition/{subagentID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Access extends HeyApiClient {
+  /**
+   * Set subagent access
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      location?: {
+        directory?: string
+        workspace?: string
+        target?: string
+      }
+      subagentAccessUpdate: SubagentAccessUpdate
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "location" },
+            { key: "subagentAccessUpdate", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<
+      V2SubagentAccessUpdateResponses,
+      V2SubagentAccessUpdateErrors,
+      ThrowOnError
+    >({
+      url: "/api/subagent/access",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Subagent extends HeyApiClient {
+  /**
+   * Resolve subagents
+   */
+  public catalog<ThrowOnError extends boolean = false>(
+    parameters: {
+      location?: {
+        directory?: string
+        workspace?: string
+        target?: string
+      }
+      sessionID?: string
+      parentAgentID: string
+      includeInactive?: "true" | "false"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "location" },
+            { in: "query", key: "sessionID" },
+            { in: "query", key: "parentAgentID" },
+            { in: "query", key: "includeInactive" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2SubagentCatalogResponses, V2SubagentCatalogErrors, ThrowOnError>({
+      url: "/api/subagent",
+      ...options,
+      ...params,
+    })
+  }
+
+  private _definition?: Definition
+  get definition(): Definition {
+    return (this._definition ??= new Definition({ client: this.client }))
+  }
+
+  private _access?: Access
+  get access(): Access {
+    return (this._access ??= new Access({ client: this.client }))
+  }
+}
+
 export class V2 extends HeyApiClient {
   private _shell?: Shell
   get shell(): Shell {
@@ -8656,6 +8890,11 @@ export class V2 extends HeyApiClient {
   private _environment?: Environment
   get environment(): Environment {
     return (this._environment ??= new Environment({ client: this.client }))
+  }
+
+  private _subagent?: Subagent
+  get subagent(): Subagent {
+    return (this._subagent ??= new Subagent({ client: this.client }))
   }
 }
 

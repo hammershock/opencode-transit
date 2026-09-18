@@ -30,6 +30,7 @@ import { schemaErrorLayer } from "./middleware/schema-error"
 import { PtyEnvironment } from "./pty-environment"
 import { layer as locationLayer } from "./location"
 import { sessionLocationLayer } from "./middleware/session-location"
+import { SubagentManager } from "./subagent"
 
 const applicationServices = LayerNode.group([
   Database.node,
@@ -68,6 +69,7 @@ function makeRoutes<AuthError, AuthServices>(auth: Layer.Layer<ServerAuth.Config
 
   return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
     Layer.provide(handlers),
+    Layer.provide(SubagentManager.unavailableLayer),
     HttpRouter.provideRequest(LocationEnvironmentAgentV2.layer),
     Layer.provide(sessionLocationLayer),
     Layer.provide(locationLayer),

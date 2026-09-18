@@ -30,6 +30,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Database } from "@opencode-ai/core/database/database"
 import { httpApiLayer } from "./httpapi-layer"
+import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 
 const noopBootstrapLayer = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
 const appLayer = AppNodeBuilder.build(
@@ -378,6 +379,112 @@ describe("HttpApi SDK", () => {
           expectStatus(() => sdk.config.providers(), 200),
           expectStatus(() => sdk.find.files({ query: "hello", limit: 10 }), 200),
         ])
+      }),
+  )
+
+  httpapiInstance(
+    "uses the generated SDK for revisioned subagent access",
+    { serverPath: "raw", git: false },
+    ({ directory }) =>
+      Effect.gen(function* () {
+        const handler = HttpApiApp.webHandler()
+        const fetch = Object.assign(
+          (request: RequestInfo | URL, init?: RequestInit) =>
+            handler.handler(request instanceof Request ? request : new Request(request, init), HttpApiApp.context),
+          { preconnect: globalThis.fetch.preconnect },
+        ) satisfies typeof globalThis.fetch
+        const sdk = createOpencodeClient({
+          baseUrl: "http://localhost",
+          directory,
+          fetch,
+        })
+        const session = yield* call(() => sdk.session.create({ title: "subagent-sdk" }, { throwOnError: true }))
+        const initial = yield* call(() =>
+          sdk.v2.subagent.catalog(
+            {
+              sessionID: session.data.id,
+              parentAgentID: "build",
+              includeInactive: "true",
+            },
+            { throwOnError: true },
+          ),
+        )
+        const snapshot = initial.data.data
+        expect(snapshot.entries.find((entry) => entry.id === "general")).toMatchObject({ effective: "active" })
+
+        const updated = yield* call(() =>
+          sdk.v2.subagent.access.update(
+            {
+              subagentAccessUpdate: {
+                sessionID: session.data.id,
+                parentAgentID: "build",
+                subagentID: "general",
+                active: false,
+                scope: "session",
+                expectedRevision: snapshot.revision,
+              },
+            },
+            { throwOnError: true },
+          ),
+        )
+        expect(updated.data.data.entries.find((entry) => entry.id === "general")).toMatchObject({
+          effective: "inactive",
+          reason: "session",
+        })
+        const created = yield* call(() =>
+          sdk.v2.subagent.definition.create(
+            {
+              subagentDefinitionCreate: {
+                sessionID: session.data.id,
+                parentAgentID: "build",
+                expectedRevision: updated.data.data.revision,
+                definition: {
+                  name: "SDK Reviewer",
+                  description: "Review focused changes",
+                  prompt: "Review the requested change.",
+                  steps: 5,
+                  permission: { edit: "deny", bash: "deny" },
+                },
+              },
+            },
+            { throwOnError: true },
+          ),
+        )
+        const reviewer = created.data.data.entries.find((entry) => entry.name === "SDK Reviewer")
+        expect(reviewer).toMatchObject({
+          prompt: "Review the requested change.",
+          steps: 5,
+          permission: { edit: "deny", bash: "deny" },
+        })
+        const renamed = yield* call(() =>
+          sdk.v2.subagent.definition.update(
+            {
+              subagentID: reviewer!.id,
+              subagentDefinitionUpdatePayload: {
+                sessionID: session.data.id,
+                parentAgentID: "build",
+                expectedRevision: created.data.data.revision,
+                definition: { name: "SDK Focused Reviewer", prompt: reviewer!.prompt },
+              },
+            },
+            { throwOnError: true },
+          ),
+        )
+        expect(renamed.data.data.entries.find((entry) => entry.id === reviewer!.id)?.name).toBe("SDK Focused Reviewer")
+        const removed = yield* call(() =>
+          sdk.v2.subagent.definition.remove(
+            {
+              subagentID: reviewer!.id,
+              subagentMutationContext: {
+                sessionID: session.data.id,
+                parentAgentID: "build",
+                expectedRevision: renamed.data.data.revision,
+              },
+            },
+            { throwOnError: true },
+          ),
+        )
+        expect(removed.data.data.entries.some((entry) => entry.id === reviewer!.id)).toBe(false)
       }),
   )
 

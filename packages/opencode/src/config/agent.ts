@@ -10,25 +10,31 @@ import { ConfigParse } from "./parse"
 
 export async function load(dir: string) {
   const result: Record<string, ConfigAgentV1.Info> = {}
-  for (const item of await Glob.scan("{agent,agents}/**/*.md", {
+  const files = await Glob.scan("{agent,agents}/**/*.md", {
     cwd: dir,
     absolute: true,
     dot: true,
     symlink: true,
-  })) {
+  })
+  for (const item of files.toSorted((a, b) => Number(isManagerDefinition(a)) - Number(isManagerDefinition(b)))) {
     const md = await ConfigMarkdown.parse(item).catch(() => undefined)
     if (!md) continue
 
     const name = configEntryNameFromPath(path.relative(dir, item), ["agent/", "agents/"])
 
     const config = {
-      name,
       ...md.data,
+      id: typeof md.data.id === "string" ? md.data.id : name,
+      name: typeof md.data.name === "string" ? md.data.name : name,
       prompt: md.content.trim(),
     }
-    result[config.name] = ConfigParse.schema(ConfigAgentV1.Info, config, item)
+    result[config.id] = ConfigParse.schema(ConfigAgentV1.Info, config, item)
   }
   return result
+}
+
+function isManagerDefinition(file: string) {
+  return path.basename(file).startsWith(".subagent-")
 }
 
 export async function loadMode(dir: string) {

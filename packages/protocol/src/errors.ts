@@ -26,6 +26,16 @@ export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()(
   { httpApiStatus: 409 },
 ) {}
 
+export class SubagentMutationError extends Schema.TaggedErrorClass<SubagentMutationError>()(
+  "SubagentMutationError",
+  {
+    kind: Schema.Literals(["conflict", "not-found", "readonly"]),
+    message: Schema.String,
+    revision: Schema.String.pipe(Schema.optional),
+  },
+  { httpApiStatus: 409 },
+) {}
+
 export class ServiceUnavailableError extends Schema.TaggedErrorClass<ServiceUnavailableError>()(
   "ServiceUnavailableError",
   {

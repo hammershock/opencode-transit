@@ -107,6 +107,11 @@ export const Info = Schema.Struct({
       [Schema.Record(Schema.String, ConfigAgentV1.Info)],
     ),
   ).annotate({ description: "Agent configuration, see https://opencode.ai/docs/agents" }),
+  subagent_access: Schema.optional(Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Boolean))).annotate(
+    {
+      description: "Device-global subagent access defaults keyed by parent and child Agent identity",
+    },
+  ),
   provider: Schema.optional(Schema.Record(Schema.String, ConfigProviderV1.Info)).annotate({
     description: "Custom provider configurations and model overrides",
   }),

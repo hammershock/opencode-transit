@@ -11,6 +11,11 @@ const Color = Schema.Union([
 
 const AgentSchema = Schema.StructWithRest(
   Schema.Struct({
+    id: Schema.optional(Schema.String).annotate({
+      description: "Stable Agent identity. Display-name changes do not change this value.",
+    }),
+    schema_revision: Schema.optional(Schema.Literal(1)),
+    name: Schema.optional(Schema.String).annotate({ description: "Display name for this Agent" }),
     model: Schema.optional(Schema.String),
     variant: Schema.optional(Schema.String).annotate({
       description: "Default model variant for this agent (applies only when using the agent's configured model).",
@@ -41,6 +46,8 @@ const AgentSchema = Schema.StructWithRest(
 )
 
 const KNOWN_KEYS = new Set([
+  "id",
+  "schema_revision",
   "name",
   "model",
   "variant",

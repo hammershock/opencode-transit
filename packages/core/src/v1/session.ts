@@ -32,6 +32,7 @@ export {
   StepStartPart,
   SubtaskPart,
   SubtaskPartInput,
+  SubagentAccess,
   SymbolSource,
   TextPart,
   TextPartInput,

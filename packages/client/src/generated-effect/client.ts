@@ -1086,6 +1086,113 @@ const adaptGroup20 = (raw: RawClient["server.environment"]) => ({
   init: Endpoint20_3(raw),
 })
 
+type Endpoint21_0Request = Parameters<RawClient["server.subagent"]["subagent.catalog"]>[0]
+type Endpoint21_0Input = {
+  readonly location?: Endpoint21_0Request["query"]["location"]
+  readonly sessionID?: Endpoint21_0Request["query"]["sessionID"]
+  readonly parentAgentID: Endpoint21_0Request["query"]["parentAgentID"]
+  readonly includeInactive?: Endpoint21_0Request["query"]["includeInactive"]
+}
+const Endpoint21_0 = (raw: RawClient["server.subagent"]) => (input: Endpoint21_0Input) =>
+  raw["subagent.catalog"]({
+    query: {
+      location: input["location"],
+      sessionID: input["sessionID"],
+      parentAgentID: input["parentAgentID"],
+      includeInactive: input["includeInactive"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint21_1Request = Parameters<RawClient["server.subagent"]["subagent.definition.create"]>[0]
+type Endpoint21_1Input = {
+  readonly location?: Endpoint21_1Request["query"]["location"]
+  readonly sessionID: Endpoint21_1Request["payload"]["sessionID"]
+  readonly parentAgentID: Endpoint21_1Request["payload"]["parentAgentID"]
+  readonly expectedRevision: Endpoint21_1Request["payload"]["expectedRevision"]
+  readonly definition: Endpoint21_1Request["payload"]["definition"]
+}
+const Endpoint21_1 = (raw: RawClient["server.subagent"]) => (input: Endpoint21_1Input) =>
+  raw["subagent.definition.create"]({
+    query: { location: input["location"] },
+    payload: {
+      sessionID: input["sessionID"],
+      parentAgentID: input["parentAgentID"],
+      expectedRevision: input["expectedRevision"],
+      definition: input["definition"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint21_2Request = Parameters<RawClient["server.subagent"]["subagent.definition.update"]>[0]
+type Endpoint21_2Input = {
+  readonly subagentID: Endpoint21_2Request["params"]["subagentID"]
+  readonly location?: Endpoint21_2Request["query"]["location"]
+  readonly sessionID: Endpoint21_2Request["payload"]["sessionID"]
+  readonly parentAgentID: Endpoint21_2Request["payload"]["parentAgentID"]
+  readonly expectedRevision: Endpoint21_2Request["payload"]["expectedRevision"]
+  readonly definition: Endpoint21_2Request["payload"]["definition"]
+}
+const Endpoint21_2 = (raw: RawClient["server.subagent"]) => (input: Endpoint21_2Input) =>
+  raw["subagent.definition.update"]({
+    params: { subagentID: input["subagentID"] },
+    query: { location: input["location"] },
+    payload: {
+      sessionID: input["sessionID"],
+      parentAgentID: input["parentAgentID"],
+      expectedRevision: input["expectedRevision"],
+      definition: input["definition"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint21_3Request = Parameters<RawClient["server.subagent"]["subagent.definition.remove"]>[0]
+type Endpoint21_3Input = {
+  readonly subagentID: Endpoint21_3Request["params"]["subagentID"]
+  readonly location?: Endpoint21_3Request["query"]["location"]
+  readonly sessionID: Endpoint21_3Request["payload"]["sessionID"]
+  readonly parentAgentID: Endpoint21_3Request["payload"]["parentAgentID"]
+  readonly expectedRevision: Endpoint21_3Request["payload"]["expectedRevision"]
+}
+const Endpoint21_3 = (raw: RawClient["server.subagent"]) => (input: Endpoint21_3Input) =>
+  raw["subagent.definition.remove"]({
+    params: { subagentID: input["subagentID"] },
+    query: { location: input["location"] },
+    payload: {
+      sessionID: input["sessionID"],
+      parentAgentID: input["parentAgentID"],
+      expectedRevision: input["expectedRevision"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint21_4Request = Parameters<RawClient["server.subagent"]["subagent.access.update"]>[0]
+type Endpoint21_4Input = {
+  readonly location?: Endpoint21_4Request["query"]["location"]
+  readonly sessionID: Endpoint21_4Request["payload"]["sessionID"]
+  readonly parentAgentID: Endpoint21_4Request["payload"]["parentAgentID"]
+  readonly expectedRevision: Endpoint21_4Request["payload"]["expectedRevision"]
+  readonly subagentID: Endpoint21_4Request["payload"]["subagentID"]
+  readonly active: Endpoint21_4Request["payload"]["active"]
+  readonly scope: Endpoint21_4Request["payload"]["scope"]
+}
+const Endpoint21_4 = (raw: RawClient["server.subagent"]) => (input: Endpoint21_4Input) =>
+  raw["subagent.access.update"]({
+    query: { location: input["location"] },
+    payload: {
+      sessionID: input["sessionID"],
+      parentAgentID: input["parentAgentID"],
+      expectedRevision: input["expectedRevision"],
+      subagentID: input["subagentID"],
+      active: input["active"],
+      scope: input["scope"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
+const adaptGroup21 = (raw: RawClient["server.subagent"]) => ({
+  catalog: Endpoint21_0(raw),
+  create: Endpoint21_1(raw),
+  update: Endpoint21_2(raw),
+  remove: Endpoint21_3(raw),
+  setAccess: Endpoint21_4(raw),
+})
+
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),
   location: adaptGroup1(raw["server.location"]),
@@ -1108,6 +1215,7 @@ const adaptClient = (raw: RawClient) => ({
   targets: adaptGroup18(raw["server.target"]),
   "server.harness": adaptGroup19(raw["server.harness"]),
   environment: adaptGroup20(raw["server.environment"]),
+  subagents: adaptGroup21(raw["server.subagent"]),
 })
 
 export const make = (options?: { readonly baseUrl?: URL | string }) =>

@@ -3,10 +3,11 @@ export * as SubagentEconomics from "./economics"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Hash } from "@opencode-ai/core/util/hash"
 import { SessionID } from "@/session/schema"
-import { Context, DateTime, Effect, Layer, Schema } from "effect"
+import { Context, DateTime, Effect, Layer, Option, Schema } from "effect"
 import { Agent } from "./agent"
 import { Config } from "@/config/config"
 import { Permission } from "@/permission"
+import { Subagent } from "./subagent"
 import { Provider } from "@/provider/provider"
 import { SessionContextExtension } from "@opencode-ai/server/session-context-extension"
 import { InstanceStore } from "@/project/instance-store"
@@ -91,13 +92,31 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const agents = yield* Agent.Service
     const provider = yield* Provider.Service
-    const catalogs = new Map<SessionID, { catalog: Catalog; guidance: string }>()
+    const subagents = Option.getOrUndefined(yield* Effect.serviceOption(Subagent.Service))
+    const catalogs = new Map<
+      SessionID,
+      { parentAgentID: string; subagentRevision: string; catalog: Catalog; guidance: string }
+    >()
 
     const load = Effect.fn("SubagentEconomics.load")(function* (sessionID: SessionID, parent: Agent.Info) {
-      const cached = catalogs.get(sessionID)
-      if (cached) return cached
       if ((yield* config.get()).experimental?.subagent_economics !== true) return undefined
 
+      const parentAgentID = parent.id ?? parent.name
+      const snapshot = subagents
+        ? yield* subagents.resolve({
+            parentAgentID,
+            sessionID,
+            includeInactive: false,
+          })
+        : undefined
+      const cached = catalogs.get(sessionID)
+      if (
+        cached &&
+        cached.parentAgentID === parentAgentID &&
+        cached.subagentRevision === (snapshot?.revision ?? "legacy")
+      )
+        return cached
+      const available = snapshot ? new Set(snapshot.entries.map((entry) => entry.id)) : undefined
       const entries = yield* Effect.forEach(
         (yield* agents.list())
           .filter(
@@ -105,14 +124,16 @@ const layer = Layer.effect(
               item.mode !== "primary" &&
               item.hidden !== true &&
               item.model !== undefined &&
-              Permission.evaluate("task", item.name, parent.permission).action !== "deny",
+              (available
+                ? available.has(item.id ?? item.name)
+                : Permission.evaluate("task", item.id ?? item.name, parent.permission).action !== "deny"),
           )
           .toSorted((a, b) => a.name.localeCompare(b.name)),
         (item) =>
           provider.getModel(item.model.providerID, item.model.modelID).pipe(
             Effect.map((model) =>
               Entry.make({
-                agent: item.name,
+                agent: item.id ?? item.name,
                 model: item.model,
                 pricing: {
                   status:
@@ -159,6 +180,8 @@ const layer = Layer.effect(
       })
       const rendered = render(base)
       const value = {
+        parentAgentID,
+        subagentRevision: snapshot?.revision ?? "legacy",
         catalog: rendered.truncated ? Catalog.make({ ...base, truncated: true }) : base,
         guidance: rendered.guidance,
       }
@@ -271,7 +294,11 @@ function escape(value: string) {
   return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
 }
 
-export const node = LayerNode.make({ service: Service, layer, deps: [Config.node, Agent.node, Provider.node] })
+export const node = LayerNode.make({
+  service: Service,
+  layer,
+  deps: [Config.node, Agent.node, Subagent.node, Provider.node],
+})
 export const contextNode = LayerNode.make({
   service: SessionContextExtension.Service,
   layer: contextLayer,

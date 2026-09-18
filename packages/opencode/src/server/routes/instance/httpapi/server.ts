@@ -7,6 +7,8 @@ import * as Observability from "@opencode-ai/core/observability"
 import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
 import { SubagentEconomics } from "@/agent/economics"
+import { Subagent } from "@/agent/subagent"
+import { subagentManagerLayer } from "@/agent/subagent-server"
 import { Auth } from "@/auth"
 import { BackgroundJob } from "@/background/job"
 import { Command } from "@/command"
@@ -195,6 +197,7 @@ const instanceRoutes = instanceApiRoutes.pipe(
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
   Layer.provide(handlers),
+  Layer.provide(subagentManagerLayer),
   HttpRouter.provideRequest(LocationEnvironmentAgent.layer),
   Layer.provide(PluginPtyEnvironment.layer),
   Layer.provide([serverHttpApiAuthLayer, v2SchemaErrorLayer]),
@@ -250,6 +253,7 @@ export const app = LayerNode.group([
   SyncControl.node,
   ProviderAuth.node,
   Agent.node,
+  Subagent.node,
   SubagentEconomics.node,
   SubagentEconomics.contextNode,
   Skill.node,

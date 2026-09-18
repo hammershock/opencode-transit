@@ -116,6 +116,7 @@ export function fromRow(row: SessionRow): Info {
     metadata: row.metadata ?? undefined,
     revert,
     permission: row.permission ? [...row.permission] : undefined,
+    subagentAccess: row.subagent_access ?? undefined,
     time: {
       created: row.time_created,
       updated: row.time_updated,
@@ -159,6 +160,7 @@ export function toRow(info: Info) {
         }
       : null,
     permission: info.permission,
+    subagent_access: info.subagentAccess ?? null,
     time_created: info.time.created,
     time_updated: info.time.updated,
     time_compacting: info.time.compacting,
@@ -253,6 +255,7 @@ export const Info = Schema.Struct({
   metadata: optional(Metadata),
   time: Time,
   permission: optional(PermissionV1.Ruleset),
+  subagentAccess: optional(SessionV1.SubagentAccess),
   revert: optional(Revert),
 }).annotate({ identifier: "Session" })
 export type Info = Types.DeepMutable<Schema.Schema.Type<typeof Info>>
@@ -456,6 +459,10 @@ export interface Interface {
     time: number
   }) => Effect.Effect<void>
   readonly setPermission: (input: { sessionID: SessionID; permission: PermissionV1.Ruleset }) => Effect.Effect<void>
+  readonly setSubagentAccess: (input: {
+    sessionID: SessionID
+    subagentAccess?: SessionV1.SubagentAccess
+  }) => Effect.Effect<void>
   readonly setApprovalMode: (input: { sessionID: SessionID; approvalMode: ApprovalMode.Mode }) => Effect.Effect<void>
   readonly setRevert: (input: {
     sessionID: SessionID
@@ -497,12 +504,13 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Se
 
 export const use = serviceUse(Service)
 
-export type Patch = Omit<Partial<Info>, "time" | "share" | "summary" | "revert" | "permission"> & {
+export type Patch = Omit<Partial<Info>, "time" | "share" | "summary" | "revert" | "permission" | "subagentAccess"> & {
   time?: Partial<Info["time"]>
   share?: Partial<NonNullable<Info["share"]>> | null
   summary?: Info["summary"] | null
   revert?: Info["revert"] | null
   permission?: Info["permission"] | null
+  subagentAccess?: Info["subagentAccess"] | null
 }
 
 const layer: Layer.Layer<
@@ -533,6 +541,7 @@ const layer: Layer.Layer<
       path?: string
       metadata?: typeof Metadata.Type
       permission?: PermissionV1.Ruleset
+      subagentAccess?: SessionV1.SubagentAccess
       approvalMode?: ApprovalMode.Mode
     }) {
       const ctx = yield* InstanceState.context
@@ -557,6 +566,7 @@ const layer: Layer.Layer<
         model: input.model,
         metadata: input.metadata,
         permission: input.permission ? [...input.permission] : undefined,
+        subagentAccess: input.subagentAccess,
         approvalMode: input.approvalMode ?? "normal",
         cost: 0,
         tokens: EmptyTokens,
@@ -746,6 +756,7 @@ const layer: Layer.Layer<
         workspaceID: original.workspaceID,
         title,
         metadata: structuredClone(original.metadata),
+        subagentAccess: structuredClone(original.subagentAccess),
       })
       const msgs = yield* messages({ sessionID: input.sessionID })
       const idMap = new Map<string, MessageID>()
@@ -790,6 +801,7 @@ const layer: Layer.Layer<
           summary: info.summary === null ? undefined : (info.summary ?? current.summary),
           revert: info.revert === null ? undefined : (info.revert ?? current.revert),
           permission: info.permission === null ? undefined : (info.permission ?? current.permission),
+          subagentAccess: info.subagentAccess === null ? undefined : (info.subagentAccess ?? current.subagentAccess),
         } as Info
         yield* events.publish(SessionV1.Event.Updated, { sessionID, info: next })
       })
@@ -830,6 +842,16 @@ const layer: Layer.Layer<
       yield* patch(input.sessionID, { permission: [...input.permission], time: { updated: Date.now() } }).pipe(
         Effect.orDie,
       )
+    })
+
+    const setSubagentAccess = Effect.fn("Session.setSubagentAccess")(function* (input: {
+      sessionID: SessionID
+      subagentAccess?: SessionV1.SubagentAccess
+    }) {
+      yield* patch(input.sessionID, {
+        subagentAccess: input.subagentAccess ?? null,
+        time: { updated: Date.now() },
+      }).pipe(Effect.orDie)
     })
 
     const setApprovalMode = Effect.fn("Session.setApprovalMode")(function* (input: {
@@ -972,6 +994,7 @@ const layer: Layer.Layer<
       setMetadata,
       setAgentModel,
       setPermission,
+      setSubagentAccess,
       setApprovalMode,
       setRevert,
       clearRevert,

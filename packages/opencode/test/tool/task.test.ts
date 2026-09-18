@@ -11,6 +11,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { Agent } from "../../src/agent/agent"
+import { Subagent } from "@/agent/subagent"
 import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Config } from "@/config/config"
@@ -34,6 +35,9 @@ import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/l
 import { Location } from "@opencode-ai/core/location"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { eq } from "drizzle-orm"
+import { Global } from "@opencode-ai/core/global"
+import fs from "fs/promises"
+import path from "path"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -48,6 +52,7 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   LayerNode.compile(
     LayerNode.group([
       Agent.node,
+      Subagent.node,
       BackgroundJob.node,
       EventV2Bridge.node,
       Config.node,
@@ -241,10 +246,10 @@ describe("tool.task", () => {
 
         expect(first).toBe(second)
 
-        const alpha = first.indexOf("- alpha: Alpha agent")
-        const explore = first.indexOf("- explore:")
-        const general = first.indexOf("- general:")
-        const zebra = first.indexOf("- zebra: Zebra agent")
+        const alpha = first.indexOf('<subagent id="alpha"')
+        const explore = first.indexOf('<subagent id="explore"')
+        const general = first.indexOf('<subagent id="general"')
+        const zebra = first.indexOf('<subagent id="zebra"')
 
         expect(alpha).toBeGreaterThan(-1)
         expect(explore).toBeGreaterThan(alpha)
@@ -277,8 +282,8 @@ describe("tool.task", () => {
         const description =
           (yield* registry.tools({ ...ref, agent: build })).find((tool) => tool.id === TaskTool.id)?.description ?? ""
 
-        expect(description).toContain("- alpha: Alpha agent")
-        expect(description).not.toContain("- zebra: Zebra agent")
+        expect(description).toContain('<subagent id="alpha"')
+        expect(description).not.toContain('<subagent id="zebra"')
       }),
     {
       config: {
@@ -300,6 +305,337 @@ describe("tool.task", () => {
         },
       },
     },
+  )
+
+  it.instance("does not publish the Task tool when the effective catalog is empty", () =>
+    Effect.gen(function* () {
+      const agents = yield* Agent.Service
+      const registry = yield* ToolRegistry.Service
+      const subagents = yield* Subagent.Service
+      const { chat } = yield* seed()
+      const build = yield* agents.get("build")
+      const initial = yield* subagents.resolve({
+        parentAgentID: "build",
+        sessionID: chat.id,
+        includeInactive: true,
+      })
+      yield* Effect.forEach(
+        initial.entries,
+        (entry) =>
+          Effect.gen(function* () {
+            const current = yield* subagents.resolve({
+              parentAgentID: "build",
+              sessionID: chat.id,
+              includeInactive: true,
+            })
+            yield* subagents.setSessionAccess({
+              sessionID: chat.id,
+              parentAgentID: "build",
+              subagentID: entry.id,
+              active: false,
+              expectedRevision: current.revision,
+            })
+          }),
+        { concurrency: 1 },
+      )
+
+      expect(
+        (yield* registry.tools({ ...ref, agent: build, sessionID: chat.id })).some((tool) => tool.id === TaskTool.id),
+      ).toBe(false)
+    }),
+  )
+
+  it.instance("rejects a Task call when its published catalog revision is stale", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const agents = yield* Agent.Service
+      const subagents = yield* Subagent.Service
+      const registry = yield* ToolRegistry.Service
+      const { chat, assistant } = yield* seed()
+      const build = yield* agents.get("build")
+      const snapshot = yield* subagents.resolve({
+        parentAgentID: "build",
+        sessionID: chat.id,
+        includeInactive: true,
+      })
+      const task = (yield* registry.tools({ ...ref, agent: build, sessionID: chat.id })).find(
+        (tool) => tool.id === TaskTool.id,
+      )
+      if (!task) throw new Error("Task tool unavailable")
+
+      yield* subagents.setSessionAccess({
+        sessionID: chat.id,
+        parentAgentID: "build",
+        subagentID: "general",
+        active: false,
+        expectedRevision: snapshot.revision,
+      })
+      const exit = yield* task
+        .execute(
+          {
+            description: "inspect stale catalog",
+            prompt: "do not start after the catalog changes",
+            subagent_type: "general",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: stubOps() },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected stale catalog failure")
+      expect(Cause.squash(exit.cause)).toHaveProperty("message", expect.stringContaining("catalog_changed"))
+      expect(yield* sessions.children(chat.id)).toHaveLength(0)
+    }),
+  )
+
+  it.instance(
+    "global access replaces the default and clears the current Session override",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const subagents = yield* Subagent.Service
+        const { chat } = yield* seed()
+        const initial = yield* subagents.resolve({
+          parentAgentID: "build",
+          sessionID: chat.id,
+          includeInactive: true,
+        })
+        const session = yield* subagents.setSessionAccess({
+          sessionID: chat.id,
+          parentAgentID: "build",
+          subagentID: "access-fixture",
+          active: false,
+          expectedRevision: initial.revision,
+        })
+        expect(session.entries.find((entry) => entry.id === "access-fixture")).toMatchObject({
+          effective: "inactive",
+          reason: "session",
+        })
+        expect(
+          (yield* subagents.resolve({
+            parentAgentID: "build",
+            sessionID: chat.id,
+            includeInactive: false,
+          })).revision,
+        ).toBe(session.revision)
+
+        const global = yield* subagents.setGlobalAccess({
+          sessionID: chat.id,
+          parentAgentID: "build",
+          subagentID: "access-fixture",
+          active: true,
+          expectedRevision: session.revision,
+        })
+
+        expect(global.entries.find((entry) => entry.id === "access-fixture")).toMatchObject({
+          effective: "active",
+          reason: "global",
+        })
+        expect((yield* sessions.get(chat.id)).subagentAccess?.build?.["access-fixture"]).toBeUndefined()
+      }),
+    { config: { agent: { "access-fixture": { mode: "subagent" } } } },
+  )
+
+  it.instance(
+    "recovers an interrupted global access mutation before resolving the catalog",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const subagents = yield* Subagent.Service
+        const { chat } = yield* seed()
+        const initial = yield* subagents.resolve({
+          parentAgentID: "build",
+          sessionID: chat.id,
+          includeInactive: true,
+        })
+        yield* subagents.setSessionAccess({
+          sessionID: chat.id,
+          parentAgentID: "build",
+          subagentID: "recovery-fixture",
+          active: false,
+          expectedRevision: initial.revision,
+        })
+        const journal = path.join(Global.Path.state, "subagent-access-journal.json")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.dirname(journal), { recursive: true })
+          await Bun.write(
+            journal,
+            JSON.stringify({
+              version: 1,
+              sessionID: chat.id,
+              parentAgentID: "build",
+              subagentID: "recovery-fixture",
+              active: true,
+            }),
+          )
+        })
+
+        const recovered = yield* subagents.resolve({
+          parentAgentID: "build",
+          sessionID: chat.id,
+          includeInactive: true,
+        })
+
+        expect(recovered.entries.find((entry) => entry.id === "recovery-fixture")).toMatchObject({
+          effective: "active",
+          reason: "global",
+        })
+        expect((yield* sessions.get(chat.id)).subagentAccess?.build?.["recovery-fixture"]).toBeUndefined()
+        expect(yield* Effect.promise(() => Bun.file(journal).exists())).toBe(false)
+      }),
+    { config: { agent: { "recovery-fixture": { mode: "subagent" } } } },
+  )
+
+  it.instance("serializes catalog mutations so one concurrent stale revision is rejected", () =>
+    Effect.gen(function* () {
+      const subagents = yield* Subagent.Service
+      const { chat } = yield* seed()
+      const initial = yield* subagents.resolve({
+        parentAgentID: "build",
+        sessionID: chat.id,
+        includeInactive: true,
+      })
+      const outcomes = yield* Effect.all(
+        ["general", "explore"].map((subagentID) =>
+          subagents
+            .setSessionAccess({
+              sessionID: chat.id,
+              parentAgentID: "build",
+              subagentID,
+              active: false,
+              expectedRevision: initial.revision,
+            })
+            .pipe(Effect.exit),
+        ),
+        { concurrency: "unbounded" },
+      )
+
+      expect(outcomes.filter(Exit.isSuccess)).toHaveLength(1)
+      const failure = outcomes.find(Exit.isFailure)
+      expect(failure).toBeDefined()
+      if (failure && Exit.isFailure(failure)) expect(Cause.squash(failure.cause)).toBeInstanceOf(Subagent.ConflictError)
+    }),
+  )
+
+  it.instance("materializes a stable manager definition when editing existing global Markdown", () =>
+    Effect.gen(function* () {
+      const agents = yield* Agent.Service
+      const config = yield* Config.Service
+      const subagents = yield* Subagent.Service
+      const { chat } = yield* seed()
+      const directory = path.join(Global.Path.config, "agents")
+      yield* Effect.promise(() => fs.mkdir(directory, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(directory, "legacy-review.md"),
+          "---\nmode: subagent\ndescription: Legacy definition\n---\nReview legacy changes.",
+        ),
+      )
+      yield* config.invalidate()
+      yield* agents.invalidate()
+      const initial = yield* subagents.resolve({
+        parentAgentID: "build",
+        sessionID: chat.id,
+        includeInactive: true,
+      })
+      expect(initial.entries.find((entry) => entry.id === "legacy-review")).toMatchObject({
+        name: "legacy-review",
+        source: "global",
+        editable: true,
+      })
+
+      const updated = yield* subagents.update({
+        sessionID: chat.id,
+        parentAgentID: "build",
+        subagentID: "legacy-review",
+        expectedRevision: initial.revision,
+        definition: {
+          name: "Focused Legacy Reviewer",
+          description: "Updated through the manager",
+          prompt: "Review the focused change.",
+        },
+      })
+
+      expect(updated.entries.find((entry) => entry.id === "legacy-review")).toMatchObject({
+        name: "Focused Legacy Reviewer",
+        description: "Updated through the manager",
+      })
+      const manager = (yield* Effect.promise(() => fs.readdir(directory))).find((file) =>
+        file.startsWith(".subagent-legacy-review-"),
+      )
+      expect(manager).toBeDefined()
+      expect(yield* Effect.promise(() => Bun.file(path.join(directory, manager!)).text())).toContain(
+        "schema_revision: 1",
+      )
+    }),
+  )
+
+  it.instance("keeps a stable ID while editing and deleting a global definition", () =>
+    Effect.gen(function* () {
+      const subagents = yield* Subagent.Service
+      const { chat } = yield* seed()
+      const initial = yield* subagents.resolve({
+        parentAgentID: "build",
+        sessionID: chat.id,
+        includeInactive: true,
+      })
+      const created = yield* subagents.create({
+        sessionID: chat.id,
+        parentAgentID: "build",
+        expectedRevision: initial.revision,
+        definition: { name: "Review Agent", description: "Review focused changes" },
+      })
+      const added = created.entries.find((entry) => entry.name === "Review Agent")
+      if (!added) throw new Error("created subagent missing")
+      const definition = (yield* Effect.promise(() => fs.readdir(path.join(Global.Path.config, "agents")))).find(
+        (file) => file.includes(added.id),
+      )
+      expect(definition).toBeDefined()
+
+      const updated = yield* subagents.update({
+        sessionID: chat.id,
+        parentAgentID: "build",
+        subagentID: added.id,
+        expectedRevision: created.revision,
+        definition: { name: "Focused Reviewer", description: "Review focused changes" },
+      })
+      expect(updated.entries.find((entry) => entry.id === added.id)?.name).toBe("Focused Reviewer")
+      expect(
+        yield* Effect.promise(() => Bun.file(path.join(Global.Path.config, "agents", definition!)).text()),
+      ).toContain("name: Focused Reviewer")
+
+      const removed = yield* subagents.remove({
+        sessionID: chat.id,
+        parentAgentID: "build",
+        subagentID: added.id,
+        expectedRevision: updated.revision,
+      })
+      expect(removed.entries.some((entry) => entry.id === added.id)).toBe(false)
+      expect(yield* Effect.promise(() => Bun.file(path.join(Global.Path.config, "agents", definition!)).exists())).toBe(
+        false,
+      )
+      expect(
+        (yield* Effect.promise(() => fs.readdir(path.join(Global.Path.config, ".trash", "subagents")))).some((file) =>
+          file.endsWith(definition!),
+        ),
+      ).toBe(true)
+      const recreated = yield* subagents.create({
+        sessionID: chat.id,
+        parentAgentID: "build",
+        expectedRevision: removed.revision,
+        definition: { name: "Review Agent", description: "A new definition" },
+      })
+      expect(recreated.entries.find((entry) => entry.name === "Review Agent")?.id).not.toBe(added.id)
+    }),
   )
 
   it.instance("execute resumes an existing task session from task_id", () =>
@@ -522,50 +858,57 @@ describe("tool.task", () => {
     }),
   )
 
-  it.instance("execute asks by default and skips checks when bypassed", () =>
-    Effect.gen(function* () {
-      const { chat, assistant } = yield* seed()
-      const tool = yield* TaskTool
-      const def = yield* tool.init()
-      const calls: unknown[] = []
-      const promptOps = stubOps()
+  it.instance(
+    "execute asks when catalog access requires approval and skips checks when bypassed",
+    () =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const calls: unknown[] = []
+        const promptOps = stubOps()
 
-      const exec = (extra?: Record<string, any>) =>
-        def.execute(
-          {
+        const exec = (extra?: Record<string, any>) =>
+          def.execute(
+            {
+              description: "inspect bug",
+              prompt: "look into the cache key path",
+              subagent_type: "general",
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps, ...extra },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: (input) =>
+                Effect.sync(() => {
+                  calls.push(input)
+                }),
+            },
+          )
+
+        yield* exec()
+        yield* exec({ bypassAgentCheck: true })
+
+        expect(calls).toHaveLength(1)
+        expect(calls[0]).toEqual({
+          permission: "task",
+          patterns: ["general"],
+          always: ["*"],
+          metadata: {
             description: "inspect bug",
-            prompt: "look into the cache key path",
             subagent_type: "general",
           },
-          {
-            sessionID: chat.id,
-            messageID: assistant.id,
-            agent: "build",
-            abort: new AbortController().signal,
-            extra: { promptOps, ...extra },
-            messages: [],
-            metadata: () => Effect.void,
-            ask: (input) =>
-              Effect.sync(() => {
-                calls.push(input)
-              }),
-          },
-        )
-
-      yield* exec()
-      yield* exec({ bypassAgentCheck: true })
-
-      expect(calls).toHaveLength(1)
-      expect(calls[0]).toEqual({
-        permission: "task",
-        patterns: ["general"],
-        always: ["*"],
-        metadata: {
-          description: "inspect bug",
-          subagent_type: "general",
-        },
-      })
-    }),
+        })
+      }),
+    {
+      config: {
+        permission: { task: "ask" },
+      },
+    },
   )
 
   it.instance("execute cancels child session when abort signal fires", () =>

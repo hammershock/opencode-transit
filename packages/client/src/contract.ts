@@ -20,6 +20,7 @@ export const groupNames = {
   "server.health": "health",
   "server.location": "location",
   "server.agent": "agents",
+  "server.subagent": "subagents",
   "server.session": "sessions",
   "server.message": "messages",
   "server.model": "models",
@@ -40,6 +41,10 @@ export const groupNames = {
 } as const
 
 export const endpointNames = {
+  "subagent.definition.create": "create",
+  "subagent.definition.update": "update",
+  "subagent.definition.remove": "remove",
+  "subagent.access.update": "setAccess",
   "session.messages": "list",
   "integration.connect.key": "connectKey",
   "integration.connect.oauth": "connectOauth",

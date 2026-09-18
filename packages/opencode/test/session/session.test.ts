@@ -396,21 +396,26 @@ describe("Session", () => {
     }),
   )
 
-  it.instance("persists metadata and copies it on fork by default", () =>
+  it.instance("persists metadata and subagent access and copies them on fork", () =>
     Effect.gen(function* () {
       const session = yield* SessionNs.Service
       const meta = { source: "sdk", trace: { id: "abc" } }
       const created = yield* Effect.acquireRelease(session.create({ title: "with-meta", metadata: meta }), (info) =>
         session.remove(info.id).pipe(Effect.ignore),
       )
+      const subagentAccess = { build: { general: false } }
+      yield* session.setSubagentAccess({ sessionID: created.id, subagentAccess })
       const saved = yield* session.get(created.id)
       const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id }), (info) =>
         session.remove(info.id).pipe(Effect.ignore),
       )
 
       expect(saved.metadata).toEqual(meta)
+      expect(saved.subagentAccess).toEqual(subagentAccess)
       expect(fork.metadata).toEqual(meta)
       expect(fork.metadata).not.toBe(meta)
+      expect(fork.subagentAccess).toEqual(subagentAccess)
+      expect(fork.subagentAccess).not.toBe(subagentAccess)
     }),
   )
 

@@ -43,6 +43,33 @@ function mergeConfig(target: Info, source: Info): Info {
   return mergeDeep(target, source) as Info
 }
 
+async function writeFileAtomic(file: string, content: string) {
+  await fsNode.mkdir(path.dirname(file), { recursive: true })
+  const mode = await fsNode
+    .stat(file)
+    .then((info) => info.mode)
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return 0o600
+      throw error
+    })
+  const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`
+  return fsNode
+    .open(temp, "wx", mode)
+    .then((handle) =>
+      handle
+        .writeFile(content)
+        .then(() => handle.sync())
+        .finally(() => handle.close()),
+    )
+    .then(() => fsNode.rename(temp, file))
+    .then(() => fsNode.open(path.dirname(file), "r"))
+    .then((handle) => handle.sync().finally(() => handle.close()))
+    .catch(async (error) => {
+      await fsNode.unlink(temp).catch(() => undefined)
+      throw error
+    })
+}
+
 function mergeConfigConcatArrays(target: Info, source: Info): Info {
   const merged = mergeConfig(target, source)
   if (target.instructions && source.instructions) {
@@ -182,6 +209,7 @@ const layer = Layer.effect(
     const env = yield* Env.Service
     const npmSvc = yield* Npm.Service
     const http = yield* HttpClient.HttpClient
+    const flock = yield* EffectFlock.Service
 
     const readConfigFile = (filepath: string) => fs.readFileStringSafe(filepath).pipe(Effect.orDie)
 
@@ -657,9 +685,10 @@ const layer = Layer.effect(
 
     const invalidate = Effect.fn("Config.invalidate")(function* () {
       yield* invalidateGlobal
+      yield* InstanceState.invalidateAll(state)
     })
 
-    const updateGlobal = Effect.fn("Config.updateGlobal")(function* (config: Info) {
+    const updateGlobalUnlocked = Effect.fnUntraced(function* (config: Info) {
       const file = globalConfigFile()
       const before = (yield* readConfigFile(file)) ?? "{}"
       const patch = writableGlobal(config)
@@ -673,17 +702,21 @@ const layer = Layer.effect(
         const serialized = JSON.stringify(merged, null, 2)
         next = yield* decodeConfig(merged, file)
         changed = serialized !== before
-        if (changed) yield* fs.writeFileString(file, serialized).pipe(Effect.orDie)
+        if (changed) yield* Effect.promise(() => writeFileAtomic(file, serialized))
       } else {
         const updated = patchJsonc(before, patch)
         next = yield* decodeConfig(ConfigParse.jsonc(updated, file), file)
         changed = updated !== before
-        if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
+        if (changed) yield* Effect.promise(() => writeFileAtomic(file, updated))
       }
 
       if (changed) yield* invalidate()
       return { info: next, changed }
     })
+
+    const updateGlobal = Effect.fn("Config.updateGlobal")((config: Info) =>
+      flock.withLock(updateGlobalUnlocked(config), "global-config").pipe(Effect.orDie),
+    )
 
     return Service.of({
       get,
@@ -701,7 +734,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [FSUtil.node, Auth.node, Account.node, Env.node, Npm.node, httpClient],
+  deps: [FSUtil.node, Auth.node, Account.node, Env.node, Npm.node, httpClient, EffectFlock.node],
 })
 
 export * as Config from "./config"
