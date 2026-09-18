@@ -1,0 +1,306 @@
+name: transit-ci
+
+on:
+  pull_request:
+    branches: [dev]
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Run the complete Transit matrix
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ case(github.ref == 'refs/heads/dev', format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  scope:
+    if: github.repository == 'hammershock/opencode-transit'
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.scope.outputs.api }}
+      app: ${{ steps.scope.outputs.app }}
+      base: ${{ steps.scope.outputs.base }}
+      code: ${{ steps.scope.outputs.code }}
+      full: ${{ steps.scope.outputs.full }}
+      nix: ${{ steps.scope.outputs.nix }}
+      platform: ${{ steps.scope.outputs.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Select CI lanes
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_FULL: ${{ inputs.full }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BASE: ${{ github.event.before }}
+          PUSH_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          full=false
+          if [ "$EVENT_NAME" = "push" ] || [ "$INPUT_FULL" = "true" ] || [[ ",$LABELS," = *",ci:full,"* ]]; then
+            full=true
+          fi
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$PR_BASE"
+            head="$PR_HEAD"
+          elif [ "$EVENT_NAME" = "push" ] && [ -n "$PUSH_BASE" ] && [ "$PUSH_BASE" != "0000000000000000000000000000000000000000" ]; then
+            base="$PUSH_BASE"
+            head="$PUSH_HEAD"
+          else
+            base="$(git rev-parse HEAD^)"
+            head="$(git rev-parse HEAD)"
+          fi
+
+          api=false
+          app=false
+          code=false
+          nix=false
+          platform=false
+
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              .github/workflows/transit-ci.yml|.github/actions/setup-bun/*)
+                code=true
+                ;;
+              docs/*|*.md|.github/*)
+                ;;
+              *)
+                code=true
+                ;;
+            esac
+
+            case "$path" in
+              packages/client/*|packages/protocol/*|packages/schema/*|packages/server/*|packages/sdk/js/*|packages/opencode/src/server/*|packages/opencode/test/server/*)
+                api=true
+                ;;
+            esac
+
+            case "$path" in
+              packages/app/*|packages/desktop/*|packages/session-ui/*|packages/storybook/*|packages/ui/*)
+                app=true
+                ;;
+            esac
+
+            case "$path" in
+              flake.nix|flake.lock|nix/*)
+                nix=true
+                ;;
+            esac
+
+            case "$path" in
+              bun.lock|package.json|turbo.json|.github/actions/setup-bun/*|packages/desktop/*|*windows*|*win32*|*wsl*|*pty*|*shell*)
+                platform=true
+                ;;
+            esac
+          done < <(git diff --name-only -z "$base" "$head")
+
+          if [ "$full" = "true" ]; then
+            api=true
+            app=true
+            code=true
+            nix=true
+            platform=true
+          fi
+
+          {
+            echo "api=$api"
+            echo "app=$app"
+            echo "base=$base"
+            echo "code=$code"
+            echo "full=$full"
+            echo "nix=$nix"
+            echo "platform=$platform"
+          } >> "$GITHUB_OUTPUT"
+
+  quick:
+    name: quick
+    needs: scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        if: needs.scope.outputs.code == 'true'
+        uses: ./.github/actions/setup-bun
+
+      - name: Cache Turbo
+        if: needs.scope.outputs.code == 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: node_modules/.cache/turbo
+          key: transit-turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-${{ github.sha }}
+          restore-keys: |
+            transit-turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-
+            transit-turbo-${{ runner.os }}-
+
+      - name: Configure git identity
+        if: needs.scope.outputs.code == 'true'
+        run: |
+          git config --global user.email "bot@opencode.ai"
+          git config --global user.name "opencode"
+
+      - name: Run typecheck
+        if: needs.scope.outputs.code == 'true'
+        run: bun typecheck
+
+      - name: Run affected tests
+        if: needs.scope.outputs.code == 'true'
+        run: GITHUB_ACTIONS=false bun turbo test --filter="...[${{ needs.scope.outputs.base }}]"
+        env:
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: false
+
+      - name: Check generated client
+        if: needs.scope.outputs.api == 'true'
+        working-directory: packages/client
+        run: bun run check:generated
+
+      - name: Run HttpApi exerciser gates
+        if: needs.scope.outputs.api == 'true'
+        working-directory: packages/opencode
+        run: bun run test:httpapi
+
+      - name: Confirm documentation-only change
+        if: needs.scope.outputs.code != 'true'
+        run: echo "No runtime checks are needed for this change."
+
+  windows:
+    needs: scope
+    if: needs.scope.outputs.platform == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Cache Turbo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: node_modules/.cache/turbo
+          key: transit-turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-${{ github.sha }}
+          restore-keys: |
+            transit-turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-
+            transit-turbo-${{ runner.os }}-
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@opencode.ai"
+          git config --global user.name "opencode"
+
+      - name: Run affected tests
+        run: GITHUB_ACTIONS=false bun turbo test --filter="...[${{ needs.scope.outputs.base }}]"
+        env:
+          OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: true
+
+  app-e2e:
+    needs: scope
+    if: needs.scope.outputs.app == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Select Playwright-compatible Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24.15"
+
+      - name: Read Playwright version
+        id: playwright-version
+        run: |
+          version=$(node -e 'console.log(require("./package.json").workspaces.catalog["@playwright/test"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.playwright-browsers
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.playwright-version.outputs.version }}-chromium
+
+      - name: Install Playwright system dependencies
+        if: runner.os == 'Linux'
+        working-directory: packages/app
+        run: bunx playwright install-deps chromium
+
+      - name: Install Playwright browser
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: packages/app
+        run: bunx playwright install chromium
+
+      - name: Run app e2e tests
+        working-directory: packages/app
+        run: bun run test:e2e:local
+        env:
+          CI: true
+        timeout-minutes: 30
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-${{ runner.os }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            packages/app/e2e/test-results
+            packages/app/e2e/playwright-report
+
+  nix:
+    needs: scope
+    if: needs.scope.outputs.nix == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Nix
+        uses: nixbuild/nix-quick-install-action@2c9db80fb984ceb1bcaa77cdda3fdf8cfba92035 # v34
+
+      - name: Evaluate flake outputs
+        run: |
+          nix flake metadata
+          nix flake show --all-systems

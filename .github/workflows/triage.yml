@@ -6,7 +6,10 @@ on:
 
 jobs:
   triage:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    if: >-
+      github.repository != 'hammershock/opencode-transit' ||
+      !contains(fromJSON('["OWNER","MEMBER"]'), github.event.issue.author_association)
+    runs-on: ${{ github.repository == 'hammershock/opencode-transit' && 'ubuntu-latest' || 'blacksmith-4vcpu-ubuntu-2404' }}
     permissions:
       contents: read
       issues: write

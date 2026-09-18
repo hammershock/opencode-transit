@@ -22,6 +22,7 @@ env:
 
 jobs:
   unit:
+    if: github.repository != 'hammershock/opencode-transit'
     name: unit (${{ matrix.settings.name }})
     strategy:
       fail-fast: false
@@ -80,6 +81,7 @@ jobs:
         run: bun run test:httpapi
 
   e2e:
+    if: github.repository != 'hammershock/opencode-transit'
     name: e2e (${{ matrix.settings.name }})
     strategy:
       fail-fast: false

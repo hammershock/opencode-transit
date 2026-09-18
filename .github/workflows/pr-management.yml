@@ -6,7 +6,10 @@ on:
 
 jobs:
   check-duplicates:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    if: >-
+      github.repository != 'hammershock/opencode-transit' ||
+      !contains(fromJSON('["OWNER","MEMBER"]'), github.event.pull_request.author_association)
+    runs-on: ${{ github.repository == 'hammershock/opencode-transit' && 'ubuntu-latest' || 'blacksmith-4vcpu-ubuntu-2404' }}
     permissions:
       contents: read
       pull-requests: write
