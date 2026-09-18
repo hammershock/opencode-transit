@@ -10,7 +10,13 @@ export interface Renderer {
 
 export async function create(): Promise<Renderer> {
   const { Terminal } = await import("@xterm/headless")
-  const terminal = new Terminal({ cols: 120, rows: 24, scrollback: 2000, allowProposedApi: true })
+  const terminal = new Terminal({
+    cols: 120,
+    rows: 24,
+    scrollback: 2000,
+    allowProposedApi: true,
+    convertEol: true,
+  })
   return {
     write: (chunk) =>
       new Promise((resolve) => {

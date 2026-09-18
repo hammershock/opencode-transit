@@ -2,6 +2,15 @@ import { describe, expect, test } from "bun:test"
 import { UserShellTerminal } from "@/session/user-shell-terminal"
 
 describe("user shell terminal", () => {
+  test("keeps LF-delimited pipe output aligned", async () => {
+    const terminal = await UserShellTerminal.create()
+    await terminal.write("+-------+\n| GPU 0 |")
+    await terminal.write("\n+-------+\n")
+
+    expect(terminal.snapshot()).toBe("+-------+\n| GPU 0 |\n+-------+")
+    terminal.dispose()
+  })
+
   test("snapshots the rendered terminal instead of control sequences", async () => {
     const terminal = await UserShellTerminal.create()
     await terminal.write("download 10%")
