@@ -16,6 +16,7 @@ import { KeymapProvider, useKeymap, useKeymapSelector, useBindings } from "@open
 import { createMemo, type Accessor } from "solid-js"
 import { useTuiConfig } from "./config"
 import { TuiKeybind } from "./config/keybind"
+import { movePromptCursor } from "./prompt/cursor"
 
 export const LEADER_TOKEN = "leader"
 export const OPENCODE_BASE_MODE = "base"
@@ -230,8 +231,22 @@ export function registerOpencodeKeymap(keymap: OpenTuiKeymap, renderer: CliRende
     enabled: () => hasManagedTextareaFocus(renderer),
     bindings: config.keybinds.gather("input", inputCommands),
   })
+  const offCursorGuard = keymap.registerLayer({
+    enabled: () => hasManagedTextareaFocus(renderer),
+    commands: (["left", "right"] as const).flatMap((direction) =>
+      [false, true].map((select) => ({
+        name: `input.${select ? "select" : "move"}.${direction}`,
+        run() {
+          const editor = renderer.currentFocusedEditor
+          if (!(editor instanceof TextareaRenderable) || editor instanceof InputRenderable) return false
+          return movePromptCursor(editor, direction, select)
+        },
+      })),
+    ),
+  })
 
   return () => {
+    offCursorGuard()
     offInputBindings()
     offBackspace()
     offEscape()
