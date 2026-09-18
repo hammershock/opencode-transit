@@ -128,6 +128,8 @@ import { skillCommand, type SkillCommandContext } from "../../command-toolkit/sk
 import { useSkillManager } from "../../component/skill-manager"
 import { harnessCommand, type HarnessCommandContext } from "../../command-toolkit/harness"
 import { useHarnessManager } from "../../component/harness-manager"
+import { subagentCommand, type SubagentCommandContext } from "../../command-toolkit/subagent"
+import { useSubagentManager } from "../../component/subagent-manager"
 
 addDefaultParsers(parsers.parsers)
 
@@ -669,6 +671,11 @@ export function Session() {
   const targetManager = useTargetManager()
   const skillManager = useSkillManager()
   const harnessManager = useHarnessManager({ openSkills: skillManager.open })
+  const subagentManager = useSubagentManager({
+    sessionID: () => route.sessionID,
+    parentAgentID: () => local.agent.current()?.id ?? local.agent.current()?.name ?? "build",
+    location: () => locationQuery(location()),
+  })
   const coreCommandHost = createMemo(() =>
     createCommandHost<
       EnvironmentCommandContext &
@@ -678,13 +685,15 @@ export function Session() {
         ApprovalModeCommandContext &
         ModelContextCommandContext &
         SkillCommandContext &
-        HarnessCommandContext
+        HarnessCommandContext &
+        SubagentCommandContext
     >({
       register: (registry) => {
         environmentCommands.forEach((command) => registry.register(command))
         registry.register(targetCommand)
         registry.register(skillCommand)
         registry.register(harnessCommand)
+        registry.register(subagentCommand)
         sessionControlCommands.forEach((command) => registry.register(command))
         registry.register(approvalModeCommand)
         syncCommands.forEach((command) => registry.register(command))
@@ -743,6 +752,7 @@ export function Session() {
           openTargetManager: targetManager.open,
           openSkillManager: skillManager.open,
           openHarnessManager: harnessManager.open,
+          openSubagentManager: subagentManager.open,
           sessionControls: {
             outputExpansion: setOutputExpansion,
             delete: async () => {
