@@ -13,7 +13,7 @@ import { useSync } from "../context/sync"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { DialogPrompt } from "../ui/dialog-prompt"
-import { DialogSelect, displayTruncate, type DialogSelectOption } from "../ui/dialog-select"
+import { DialogSelect, displayTruncate, inspectionFrame, type DialogSelectOption } from "../ui/dialog-select"
 import { useToast } from "../ui/toast"
 import { errorMessage } from "../util/error"
 
@@ -119,6 +119,11 @@ export function subagentColumnWidths(terminalWidth: number) {
 }
 
 export function subagentRow(entry: SubagentEntry, terminalWidth: number) {
+  const presentation = subagentPresentation(entry, terminalWidth)
+  return `${presentation.prefix}${column(presentation.description, presentation.descriptionWidth)}`
+}
+
+function subagentPresentation(entry: SubagentEntry, terminalWidth: number) {
   const widths = subagentColumnWidths(terminalWidth)
   const state = entry.effective === "active" ? "●" : "○"
   const model = entry.model ? `${entry.model.providerID}/${entry.model.modelID}` : "inherit"
@@ -126,13 +131,16 @@ export function subagentRow(entry: SubagentEntry, terminalWidth: number) {
     .filter(Boolean)
     .join(" · ")
   const description = [entry.description, suffix].filter(Boolean).join(" · ")
-  return [
-    column(state, widths.state),
-    column(entry.name, widths.name),
-    column(model, widths.model),
-    column(subagentCapability(entry), widths.capability),
-    column(description, widths.description),
-  ].join(" ")
+  return {
+    prefix: `${[
+      column(state, widths.state),
+      column(entry.name, widths.name),
+      column(model, widths.model),
+      column(subagentCapability(entry), widths.capability),
+    ].join(" ")} `,
+    description,
+    descriptionWidth: widths.description,
+  }
 }
 
 export function useSubagentManager(input: {
@@ -504,18 +512,25 @@ export function useSubagentManager(input: {
 
   const rows = createMemo(() => snapshot()?.entries ?? [])
   const options = createMemo<DialogSelectOption<string>[]>(() =>
-    rows().map((entry) => ({
-      title: subagentRow(entry, dimensions().width),
-      inspectionTitle: [
-        entry.effective === "active" ? "●" : "○",
-        entry.name,
-        entry.model ? `${entry.model.providerID}/${entry.model.modelID}` : "inherit",
-        subagentCapability(entry),
-        entry.description ?? "",
-      ].join("  "),
-      inspectTitle: true,
-      value: entry.id,
-    })),
+    rows().map((entry) => {
+      const presentation = subagentPresentation(entry, dimensions().width)
+      return {
+        title: subagentRow(entry, dimensions().width),
+        inspectionTitle: `${presentation.prefix}${presentation.description}`,
+        inspectionView: (offset, width) => (
+          <>
+            {presentation.prefix}
+            {inspectionFrame(
+              presentation.description,
+              Math.max(0, width - Bun.stringWidth(presentation.prefix)),
+              offset,
+            )}
+          </>
+        ),
+        inspectTitle: true,
+        value: entry.id,
+      }
+    }),
   )
 
   const selectedEntry = (option?: DialogSelectOption<string>) =>
