@@ -96,6 +96,13 @@ export async function runRexdProcess(
     pending.length = 0
     if (options.signal?.aborted) abort()
     else options.signal?.addEventListener("abort", abort, { once: true })
+    const closeInput = lease.client
+      .request(
+        "exec.input",
+        { session_id: lease.handshake.sessionID, process_id: processID, data: "", eof: true },
+        { timeoutMs: 5_000, signal: options.signal, sideEffect: true },
+      )
+      .catch((cause) => rejectExit(cause))
     const terminal = await exited.catch(async (cause) => {
       await lease.client
         .request(
@@ -107,6 +114,7 @@ export async function runRexdProcess(
       await outputChain
       throw cause
     })
+    await closeInput
     await outputChain
     return {
       command: description,

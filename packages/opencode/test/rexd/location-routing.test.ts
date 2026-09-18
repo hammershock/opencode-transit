@@ -56,6 +56,7 @@ function processLease(handler?: (method: string, params: Record<string, unknown>
           })
           return { process_id: "process-1" }
         }
+        if (method === "exec.input") return { accepted_bytes: 0 }
         if (method === "exec.kill") return { ok: true }
         throw new Error(`unexpected RPC ${method}`)
       },
@@ -82,6 +83,32 @@ describe("Rexd Location routing contract", () => {
       method: "exec.start",
       params: { argv: ["prettier", "--write", "file.ts"], shell: false, cwd: "/workspace" },
     })
+    expect(calls[1]).toEqual({
+      method: "exec.input",
+      params: { session_id: "remote-session", process_id: "process-1", data: "", eof: true },
+    })
+  })
+
+  test("a process that exits before stdin EOF delivery still settles normally", async () => {
+    const { lease, calls } = processLease((method, _params, emit) => {
+      if (method === "exec.start") {
+        queueMicrotask(() => emit("exec.exit", { process_id: "fast", exit_code: 0 }))
+        return { process_id: "fast" }
+      }
+      if (method === "exec.input") throw new Error("process not found")
+      return undefined
+    })
+
+    const result = await runRexdProcess(lease, {
+      command: "true",
+      shell: true,
+      cwd: "/workspace",
+      timeout: "10 seconds",
+      maxOutputBytes: 1024,
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(calls.map((call) => call.method)).toEqual(["exec.start", "exec.input"])
   })
 
   test("streams bounded process output before remote exit", async () => {
@@ -165,7 +192,7 @@ describe("Rexd Location routing contract", () => {
         maxOutputBytes: 1024,
       }),
     ).rejects.toThrow("Timed out")
-    expect(calls.map((call) => call.method)).toEqual(["exec.start", "exec.kill"])
+    expect(calls.map((call) => call.method)).toEqual(["exec.start", "exec.input", "exec.kill"])
   })
 
   test("failed process start releases all listeners", async () => {
@@ -218,6 +245,7 @@ describe("Rexd Location routing contract", () => {
         async request(method: string) {
           calls.push(method)
           if (method === "exec.start") return { process_id: "slow" }
+          if (method === "exec.input") return { accepted_bytes: 0 }
           if (method === "exec.kill") return { ok: true }
           throw new Error(`unexpected RPC ${method}`)
         },
