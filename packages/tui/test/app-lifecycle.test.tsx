@@ -526,6 +526,239 @@ test("Ctrl+P opens the production Skill Manager without a model turn", async () 
   }
 }, 10_000)
 
+test("the production /subagent manager shows effective access and applies a Session override", async () => {
+  const setup = await createTestRenderer({ width: 116, height: 36, useThread: false })
+  const core = await import("@opentui/core")
+  void mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  const events = createEventSource()
+  const catalogRequests: URL[] = []
+  const accessUpdates: unknown[] = []
+  const definitionCreates: unknown[] = []
+  const definitionUpdates: unknown[] = []
+  const definitionDeletes: unknown[] = []
+  let rejectAccess = true
+  const session = {
+    id: "dummy",
+    title: "Subagent manager integration",
+    slug: "dummy",
+    projectID: "project",
+    directory,
+    version: "0.0.0-test",
+    time: { created: 0, updated: 0 },
+  }
+  const entry = {
+    id: "reviewer",
+    name: "Reviewer",
+    description: "Review changes and run focused checks",
+    model: { providerID: "test", modelID: "reasoner" },
+    effective: "active" as const,
+    reason: "default" as const,
+    approvalRequired: false,
+    capabilities: ["read-only", "no-delegation"],
+    editable: true,
+    source: "global" as const,
+  }
+  const snapshot = (active: boolean, created?: { description?: string }) => ({
+    location: { target: { type: "local" }, directory, project: { id: "project", directory } },
+    data: {
+      revision: active ? "revision-1" : "revision-2",
+      parentAgentID: "build",
+      sessionID: "dummy",
+      entries: [
+        {
+          ...entry,
+          effective: active ? ("active" as const) : ("inactive" as const),
+          reason: active ? ("default" as const) : ("session" as const),
+        },
+        ...(created
+          ? [
+              {
+                ...entry,
+                id: "isolated-reviewer",
+                name: "Isolated reviewer",
+                description: created.description,
+                model: undefined,
+                effective: "active" as const,
+                reason: "default" as const,
+              },
+            ]
+          : []),
+      ],
+      diagnostics: [],
+    },
+  })
+  const calls = createFetch(async (url, request) => {
+    if (url.pathname === "/api/target")
+      return json({ path: "/tmp/opencode/targets.jsonc", revision: "test", targets: [], diagnostics: [], valid: true })
+    if (url.pathname === "/config/providers")
+      return json({
+        providers: [
+          {
+            id: "test",
+            name: "Test",
+            source: "custom",
+            env: [],
+            options: {},
+            models: { reasoner: { id: "reasoner", name: "Reasoner", status: "active" } },
+          },
+        ],
+        default: {},
+      })
+    if (url.pathname === "/session/dummy") return json(session)
+    if (url.pathname === "/api/session/dummy/target-resolution")
+      return json({ status: "resolved", location: { directory } })
+    if (url.pathname === "/api/session/dummy/activate") return json({ data: { status: "unchanged", diagnostics: [] } })
+    if (url.pathname === "/session") return json([session])
+    if (url.pathname === "/api/subagent" && request.method === "GET") {
+      catalogRequests.push(url)
+      return json(snapshot(true))
+    }
+    if (url.pathname === "/api/subagent/access" && request.method === "PATCH") {
+      accessUpdates.push(await request.json())
+      if (rejectAccess) {
+        rejectAccess = false
+        return json({ message: "revision changed" }, { status: 409 })
+      }
+      return json(snapshot(false))
+    }
+    if (url.pathname === "/api/subagent/definition" && request.method === "POST") {
+      definitionCreates.push(await request.json())
+      return json(snapshot(false, {}))
+    }
+    if (url.pathname === "/api/subagent/definition/isolated-reviewer" && request.method === "PATCH") {
+      definitionUpdates.push(await request.json())
+      return json(snapshot(false, { description: "Temporary review agent" }))
+    }
+    if (url.pathname === "/api/subagent/definition/isolated-reviewer" && request.method === "DELETE") {
+      definitionDeletes.push(await request.json())
+      return json(snapshot(false))
+    }
+    return undefined
+  })
+  let started!: () => void
+  let api: TuiPluginApi | undefined
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
+  })
+
+  try {
+    const { run } = await import("../src/app")
+    const task = Effect.runPromise(
+      run({
+        url: "http://test",
+        directory,
+        config: createTuiResolvedConfig({ plugin_enabled: {} }),
+        fetch: calls.fetch,
+        events: events.source,
+        args: { continue: true },
+        pluginHost: {
+          async start(input) {
+            api = input.api
+            started()
+          },
+          async dispose() {},
+        },
+      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+    )
+
+    await ready
+    await setup.waitForVisualIdle()
+    api!.keymap.dispatchCommand("fork.subagent.manage")
+    await waitForFrame(setup, "Subagents · build")
+    await waitForFrame(setup, "test/reasoner")
+    await Bun.sleep(300)
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("●")
+    expect(frame).toContain("Reviewer")
+    expect(frame).toContain("test/reasoner")
+    expect(frame).toContain("Read only")
+    expect(frame).toContain("1/1 active")
+    expect(catalogRequests).toHaveLength(1)
+    expect(catalogRequests[0]?.searchParams.get("sessionID")).toBe("dummy")
+    expect(catalogRequests[0]?.searchParams.get("parentAgentID")).toBe("build")
+    expect(catalogRequests[0]?.searchParams.get("includeInactive")).toBe("true")
+
+    setup.mockInput.pressKey(" ")
+    await waitForFrame(setup, "Deactivate · Reviewer")
+    expect(setup.captureCharFrame()).toContain("This session")
+    expect(setup.captureCharFrame()).toContain("Globally")
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "Subagent change not saved")
+    setup.mockInput.pressEscape()
+    await waitForFrame(setup, "1/1 active")
+    expect(catalogRequests).toHaveLength(2)
+
+    setup.mockInput.pressKey(" ")
+    await waitForFrame(setup, "Deactivate · Reviewer")
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "0/1 active")
+    expect(setup.captureCharFrame()).toContain("○")
+    expect(setup.captureCharFrame()).not.toContain("● ○")
+    expect(accessUpdates).toEqual(
+      Array.from({ length: 2 }, () => ({
+        sessionID: "dummy",
+        parentAgentID: "build",
+        expectedRevision: "revision-1",
+        subagentID: "reviewer",
+        active: false,
+        scope: "session",
+      })),
+    )
+
+    setup.mockInput.pressKey("a")
+    await waitForFrame(setup, "Add subagent")
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "Name")
+    await setup.mockInput.typeText("Isolated reviewer")
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "Isolated reviewer")
+    setup.mockInput.pressKey("s", { ctrl: true })
+    await waitForFrame(setup, "1/2 active")
+    expect(definitionCreates).toEqual([
+      {
+        sessionID: "dummy",
+        parentAgentID: "build",
+        expectedRevision: "revision-2",
+        definition: { name: "Isolated reviewer" },
+      },
+    ])
+
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "Edit subagent")
+    setup.mockInput.pressArrow("down")
+    setup.mockInput.pressArrow("down")
+    setup.mockInput.pressArrow("down")
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "Description")
+    await setup.mockInput.typeText("Temporary review agent")
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "Temporary review agent")
+    setup.mockInput.pressKey("s", { ctrl: true })
+    await waitForFrame(setup, "1/2 active")
+    expect(definitionUpdates).toEqual([
+      {
+        sessionID: "dummy",
+        parentAgentID: "build",
+        expectedRevision: "revision-2",
+        definition: { name: "Isolated reviewer", description: "Temporary review agent" },
+      },
+    ])
+
+    setup.mockInput.pressKey("d")
+    await waitForFrame(setup, "Delete · Isolated reviewer")
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "0/1 active")
+    expect(definitionDeletes).toEqual([{ sessionID: "dummy", parentAgentID: "build", expectedRevision: "revision-2" }])
+
+    process.emit("SIGHUP")
+    await task
+  } finally {
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    mock.restore()
+  }
+}, 10_000)
+
 test("the Harness command opens its keyboard-navigable controller instruction manager without a model turn", async () => {
   const setup = await createTestRenderer({ width: 64, height: 32, useThread: false })
   const core = await import("@opentui/core")
