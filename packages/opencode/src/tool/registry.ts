@@ -31,7 +31,7 @@ import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
-import { Effect, Layer, Context } from "effect"
+import { Effect, Layer, Context, Option } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Format } from "../format"
@@ -44,6 +44,7 @@ import { Instruction } from "../session/instruction"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Agent } from "../agent/agent"
+import { Subagent } from "../agent/subagent"
 import { Permission } from "@/permission"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -52,6 +53,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { MCP } from "@/mcp"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { McpCatalog } from "@/mcp/catalog"
+import { ToolJsonSchema } from "./json-schema"
 
 export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
   return (
@@ -81,6 +83,7 @@ export interface Interface {
     modelID: ModelV2.ID
     agent: Agent.Info
     permission?: PermissionV1.Ruleset
+    sessionID?: import("@/session/schema").SessionID
   }) => Effect.Effect<Tool.Def[]>
 }
 
@@ -92,6 +95,7 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const plugin = yield* Plugin.Service
     const agents = yield* Agent.Service
+    const subagents = Option.getOrUndefined(yield* Effect.serviceOption(Subagent.Service))
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
     const mcp = yield* MCP.Service
@@ -257,23 +261,35 @@ const layer = Layer.effect(
       return (yield* all()).map((tool) => tool.id)
     })
 
-    const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info) {
+    const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (input: {
+      agent: Agent.Info
+      sessionID?: import("@/session/schema").SessionID
+      catalog?: Subagent.Snapshot
+    }) {
       const economics =
         (yield* config.get()).experimental?.subagent_economics === true
           ? "The current <available_subagents> system block contains device-local pricing and routing evidence; consider it when choosing an agent."
           : undefined
-      const items = (yield* agents.list()).filter((item) => item.mode !== "primary")
-      const filtered = items.filter(
-        (item) => Permission.evaluate("task", item.name, agent.permission).action !== "deny",
-      )
-      const list = filtered.toSorted((a, b) => a.name.localeCompare(b.name))
-      const description = list
-        .map(
-          (item) =>
-            `- ${item.name}: ${item.description ?? "This subagent should only be called manually by the user."}`,
-        )
-        .join("\n")
-      return ["Available agent types and the tools they have access to:", description, economics]
+      if (!subagents) {
+        const description = (yield* agents.list())
+          .filter(
+            (item) =>
+              item.mode !== "primary" &&
+              Permission.evaluate("task", item.id ?? item.name, input.agent.permission).action !== "deny",
+          )
+          .toSorted((a, b) => a.name.localeCompare(b.name))
+          .map((item) => `- ${item.name}: ${item.description ?? "Call only when selected by the user."}`)
+          .join("\n")
+        return ["Available subagents:", description, economics].filter((part) => part !== undefined).join("\n")
+      }
+      const snapshot =
+        input.catalog ??
+        (yield* subagents.resolve({
+          parentAgentID: input.agent.id ?? input.agent.name,
+          sessionID: input.sessionID,
+          includeInactive: false,
+        }))
+      return ["Available subagents:", subagents.render(snapshot), economics]
         .filter((part) => part !== undefined)
         .join("\n")
     })
@@ -308,7 +324,7 @@ const layer = Layer.effect(
         : undefined
       const visible = filtered.filter((tool) => tool.id !== "execute" || codeModeDescription)
 
-      return yield* Effect.forEach(
+      return (yield* Effect.forEach(
         visible,
         Effect.fnUntraced(function* (tool: Tool.Def) {
           const output = {
@@ -321,23 +337,41 @@ const layer = Layer.effect(
             output.parameters === tool.parameters || output.jsonSchema !== tool.jsonSchema
               ? output.jsonSchema
               : undefined
+          const catalog =
+            tool.id === TaskTool.id && subagents
+              ? yield* subagents.resolve({
+                  parentAgentID: input.agent.id ?? input.agent.name,
+                  sessionID: input.sessionID,
+                  includeInactive: false,
+                })
+              : undefined
+          if (catalog?.entries.length === 0) return
           return {
             id: tool.id,
             description: [
               output.description,
-              tool.id === TaskTool.id ? yield* describeTask(input.agent) : undefined,
+              tool.id === TaskTool.id ? yield* describeTask({ ...input, catalog }) : undefined,
               tool.id === "execute" ? codeModeDescription : undefined,
             ]
               .filter(Boolean)
               .join("\n"),
             parameters: output.parameters,
-            jsonSchema,
-            execute: tool.execute,
+            jsonSchema: catalog
+              ? taskSchema(jsonSchema ?? ToolJsonSchema.fromSchema(output.parameters), catalog)
+              : jsonSchema,
+            execute:
+              tool.id === TaskTool.id && catalog
+                ? (args: Parameters<typeof tool.execute>[0], ctx: Parameters<typeof tool.execute>[1]) =>
+                    tool.execute(args, {
+                      ...ctx,
+                      extra: { ...ctx.extra, subagentCatalogRevision: catalog.revision },
+                    })
+                : tool.execute,
             formatValidationError: tool.formatValidationError,
           }
         }),
         { concurrency: "unbounded" },
-      )
+      )).filter((tool) => tool !== undefined)
     })
 
     const named: Interface["named"] = Effect.fn("ToolRegistry.named")(function* () {
@@ -434,6 +468,7 @@ export const node = LayerNode.make({
     Question.node,
     Todo.node,
     Agent.node,
+    Subagent.node,
     Session.node,
     BackgroundJob.node,
     Provider.node,
@@ -453,3 +488,19 @@ export const node = LayerNode.make({
 })
 
 export * as ToolRegistry from "./registry"
+
+function taskSchema(schema: JSONSchema7, catalog: Subagent.Snapshot): JSONSchema7 {
+  if (schema.type !== "object" || !schema.properties) return schema
+  const current = schema.properties.subagent_type
+  if (typeof current !== "object" || current === null || Array.isArray(current)) return schema
+  return {
+    ...schema,
+    properties: {
+      ...schema.properties,
+      subagent_type: {
+        ...current,
+        enum: catalog.entries.map((entry) => entry.id),
+      },
+    },
+  }
+}

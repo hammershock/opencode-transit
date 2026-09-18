@@ -180,6 +180,12 @@ export type PermissionRule = {
 
 export type PermissionRuleset = Array<PermissionRule>
 
+export type SessionSubagentAccess = {
+  [key: string]: {
+    [key: string]: boolean
+  }
+}
+
 export type Session = {
   id: string
   slug: string
@@ -230,6 +236,7 @@ export type Session = {
     archived?: number
   }
   permission?: PermissionRuleset
+  subagentAccess?: SessionSubagentAccess
   revert?: {
     messageID: string
     partID?: string
@@ -1799,6 +1806,8 @@ export type PermissionConfig =
     }
 
 export type AgentConfig = {
+  id?: string
+  name?: string
   model?: string
   variant?: string
   temperature?: number
@@ -2069,6 +2078,11 @@ export type Config = {
     summary?: AgentConfig
     compaction?: AgentConfig
     [key: string]: AgentConfig | undefined
+  }
+  subagent_access?: {
+    [key: string]: {
+      [key: string]: boolean
+    }
   }
   provider?: {
     [key: string]: ProviderConfig
@@ -2443,6 +2457,7 @@ export type GlobalSession = {
     archived?: number
   }
   permission?: PermissionRuleset
+  subagentAccess?: SessionSubagentAccess
   revert?: {
     messageID: string
     partID?: string
@@ -2569,6 +2584,7 @@ export type Command = {
 }
 
 export type Agent = {
+  id?: string
   name: string
   description?: string
   mode: "subagent" | "primary" | "all"
@@ -2578,6 +2594,7 @@ export type Agent = {
   temperature?: number
   color?: string
   permission: PermissionRuleset
+  configuredPermission?: PermissionConfig
   model?: {
     modelID: string
     providerID: string
@@ -2588,6 +2605,8 @@ export type Agent = {
     [key: string]: unknown
   }
   steps?: number
+  source?: "builtin" | "global" | "compatibility"
+  editable?: boolean
 }
 
 export type LspStatus = {
@@ -3243,6 +3262,13 @@ export type TargetNotFoundError = {
   _tag: "TargetNotFoundError"
   targetID: string
   message: string
+}
+
+export type SubagentMutationError = {
+  _tag: "SubagentMutationError"
+  kind: "conflict" | "not-found" | "readonly"
+  message: string
+  revision?: string
 }
 
 export type EffectHttpApiErrorForbidden = {
@@ -7214,6 +7240,83 @@ export type HarnessInstructionRevisionInput = {
 export type HarnessInstructionTargetMutationInput = {
   target: HarnessInstructionTarget
   expectedRevision: string
+}
+
+export type SubagentPermissionConfig = {
+  [key: string]:
+    | "ask"
+    | "allow"
+    | "deny"
+    | {
+        [key: string]: "ask" | "allow" | "deny"
+      }
+}
+
+export type SubagentEntry = {
+  id: string
+  name: string
+  description?: string
+  variant?: string
+  prompt?: string
+  steps?: number
+  permission?: SubagentPermissionConfig
+  model?: {
+    providerID: string
+    modelID: string
+  }
+  effective: "active" | "inactive"
+  reason: "default" | "global" | "session" | "permission" | "parent-disabled"
+  approvalRequired: boolean
+  capabilities: Array<string>
+  editable: boolean
+  source: "builtin" | "global" | "compatibility"
+}
+
+export type SubagentSnapshot = {
+  revision: string
+  parentAgentID: string
+  sessionID?: string
+  entries: Array<SubagentEntry>
+  diagnostics: Array<string>
+}
+
+export type SubagentDefinitionDraft = {
+  name: string
+  model?: string
+  variant?: string
+  description?: string
+  prompt?: string
+  steps?: number
+  permission?: SubagentPermissionConfig
+}
+
+export type SubagentDefinitionCreate = {
+  sessionID: string
+  parentAgentID: string
+  expectedRevision: string
+  definition: SubagentDefinitionDraft
+}
+
+export type SubagentDefinitionUpdatePayload = {
+  sessionID: string
+  parentAgentID: string
+  expectedRevision: string
+  definition: SubagentDefinitionDraft
+}
+
+export type SubagentMutationContext = {
+  sessionID: string
+  parentAgentID: string
+  expectedRevision: string
+}
+
+export type SubagentAccessUpdate = {
+  sessionID: string
+  parentAgentID: string
+  expectedRevision: string
+  subagentID: string
+  active: boolean
+  scope: "session" | "global"
 }
 
 export type EventModelsDevRefreshed = {
@@ -18803,6 +18906,222 @@ export type V2EnvironmentInitResponses = {
 }
 
 export type V2EnvironmentInitResponse = V2EnvironmentInitResponses[keyof V2EnvironmentInitResponses]
+
+export type V2SubagentCatalogData = {
+  body?: never
+  path?: never
+  query: {
+    location?: {
+      directory?: string
+      workspace?: string
+      target?: string
+    }
+    sessionID?: string
+    parentAgentID: string
+    includeInactive?: "true" | "false"
+  }
+  url: "/api/subagent"
+}
+
+export type V2SubagentCatalogErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2SubagentCatalogError = V2SubagentCatalogErrors[keyof V2SubagentCatalogErrors]
+
+export type V2SubagentCatalogResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: SubagentSnapshot
+  }
+}
+
+export type V2SubagentCatalogResponse = V2SubagentCatalogResponses[keyof V2SubagentCatalogResponses]
+
+export type V2SubagentDefinitionCreateData = {
+  body: SubagentDefinitionCreate
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+      target?: string
+    }
+  }
+  url: "/api/subagent/definition"
+}
+
+export type V2SubagentDefinitionCreateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SubagentMutationError
+   */
+  409: SubagentMutationError
+}
+
+export type V2SubagentDefinitionCreateError = V2SubagentDefinitionCreateErrors[keyof V2SubagentDefinitionCreateErrors]
+
+export type V2SubagentDefinitionCreateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: SubagentSnapshot
+  }
+}
+
+export type V2SubagentDefinitionCreateResponse =
+  V2SubagentDefinitionCreateResponses[keyof V2SubagentDefinitionCreateResponses]
+
+export type V2SubagentDefinitionRemoveData = {
+  body: SubagentMutationContext
+  path: {
+    subagentID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+      target?: string
+    }
+  }
+  url: "/api/subagent/definition/{subagentID}"
+}
+
+export type V2SubagentDefinitionRemoveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SubagentMutationError
+   */
+  409: SubagentMutationError
+}
+
+export type V2SubagentDefinitionRemoveError = V2SubagentDefinitionRemoveErrors[keyof V2SubagentDefinitionRemoveErrors]
+
+export type V2SubagentDefinitionRemoveResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: SubagentSnapshot
+  }
+}
+
+export type V2SubagentDefinitionRemoveResponse =
+  V2SubagentDefinitionRemoveResponses[keyof V2SubagentDefinitionRemoveResponses]
+
+export type V2SubagentDefinitionUpdateData = {
+  body: SubagentDefinitionUpdatePayload
+  path: {
+    subagentID: string
+  }
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+      target?: string
+    }
+  }
+  url: "/api/subagent/definition/{subagentID}"
+}
+
+export type V2SubagentDefinitionUpdateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SubagentMutationError
+   */
+  409: SubagentMutationError
+}
+
+export type V2SubagentDefinitionUpdateError = V2SubagentDefinitionUpdateErrors[keyof V2SubagentDefinitionUpdateErrors]
+
+export type V2SubagentDefinitionUpdateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: SubagentSnapshot
+  }
+}
+
+export type V2SubagentDefinitionUpdateResponse =
+  V2SubagentDefinitionUpdateResponses[keyof V2SubagentDefinitionUpdateResponses]
+
+export type V2SubagentAccessUpdateData = {
+  body: SubagentAccessUpdate
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+      target?: string
+    }
+  }
+  url: "/api/subagent/access"
+}
+
+export type V2SubagentAccessUpdateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SubagentMutationError
+   */
+  409: SubagentMutationError
+}
+
+export type V2SubagentAccessUpdateError = V2SubagentAccessUpdateErrors[keyof V2SubagentAccessUpdateErrors]
+
+export type V2SubagentAccessUpdateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: SubagentSnapshot
+  }
+}
+
+export type V2SubagentAccessUpdateResponse = V2SubagentAccessUpdateResponses[keyof V2SubagentAccessUpdateResponses]
 
 export type PtyConnectData = {
   body?: never

@@ -20,11 +20,13 @@ import { ProjectCopyHandler } from "./handlers/project-copy"
 import { TargetHandler } from "./handlers/target"
 import { EnvironmentHandler } from "./handlers/environment"
 import { HarnessHandler } from "./handlers/harness"
+import { SubagentHandler } from "./handlers/subagent"
 
 export const handlers = Layer.mergeAll(
   HealthHandler,
   LocationHandler,
   AgentHandler,
+  SubagentHandler,
   SessionHandler,
   MessageHandler,
   ModelHandler,

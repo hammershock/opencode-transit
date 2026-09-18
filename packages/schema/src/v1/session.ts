@@ -542,6 +542,11 @@ const SessionModel = Schema.Struct({
   variant: optional(Schema.String),
 })
 
+export const SubagentAccess = Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Boolean)).annotate({
+  identifier: "SessionSubagentAccess",
+})
+export type SubagentAccess = typeof SubagentAccess.Type
+
 export const SessionInfo = Schema.Struct({
   id: SessionID,
   slug: Schema.String,
@@ -571,6 +576,7 @@ export const SessionInfo = Schema.Struct({
     archived: optional(Schema.Finite),
   }),
   permission: optional(PermissionV1.Ruleset),
+  subagentAccess: optional(SubagentAccess),
   revert: optional(SessionRevert),
 }).annotate({ identifier: "Session" })
 export type SessionInfo = typeof SessionInfo.Type

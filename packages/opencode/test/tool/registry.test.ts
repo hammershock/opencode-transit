@@ -4,6 +4,7 @@ import fs from "fs/promises"
 import { fileURLToPath, pathToFileURL } from "url"
 import { Effect, Layer, Result, Schema } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
 import { ToolRegistry } from "@/tool/registry"
 import { Tool } from "@/tool/tool"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
@@ -54,6 +55,7 @@ const root = LayerNode.group([ToolRegistry.node, Agent.node])
 const replacements = [
   [Config.node, configLayer],
   [RuntimeFlags.node, RuntimeFlags.layer()],
+  [LocationServiceMap.node, locationServiceMapLayer],
 ] as const
 
 const it = testEffect(LayerNode.compile(root, replacements))
@@ -61,6 +63,7 @@ const withCodeMode = testEffect(
   LayerNode.compile(root, [
     [Config.node, configLayer],
     [RuntimeFlags.node, RuntimeFlags.layer({ experimentalCodeMode: true })],
+    [LocationServiceMap.node, locationServiceMapLayer],
     [
       MCP.node,
       Layer.mock(MCP.Service, {
@@ -84,6 +87,7 @@ const withEmptyCodeMode = testEffect(
   LayerNode.compile(root, [
     [Config.node, configLayer],
     [RuntimeFlags.node, RuntimeFlags.layer({ experimentalCodeMode: true })],
+    [LocationServiceMap.node, locationServiceMapLayer],
     [
       MCP.node,
       Layer.mock(MCP.Service, {

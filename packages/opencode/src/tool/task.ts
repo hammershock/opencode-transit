@@ -8,9 +8,10 @@ import { SessionID, MessageID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
+import { Subagent } from "../agent/subagent"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
-import { Effect, Exit, Schema, Scope } from "effect"
+import { Effect, Exit, Option, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
@@ -22,6 +23,11 @@ export interface TaskPromptOps {
 }
 
 const id = "task"
+export class CatalogChangedError extends Error {
+  constructor() {
+    super("catalog_changed: the subagent catalog changed; refresh the tool catalog and retry")
+  }
+}
 const BACKGROUND_DESCRIPTION = [
   "Background mode: background=true launches the subagent asynchronously and returns immediately.",
   "Foreground is the default; use it when you need the result before continuing.",
@@ -82,6 +88,7 @@ export const TaskTool = Tool.define(
   id,
   Effect.gen(function* () {
     const agent = yield* Agent.Service
+    const subagents = Option.getOrUndefined(yield* Effect.serviceOption(Subagent.Service))
     const background = yield* BackgroundJob.Service
     const config = yield* Config.Service
     const sessions = yield* Session.Service
@@ -102,6 +109,24 @@ export const TaskTool = Tool.define(
       }
 
       const parent = yield* sessions.get(ctx.sessionID)
+      const catalog = subagents
+        ? yield* subagents.resolve({
+            parentAgentID: ctx.agent,
+            sessionID: ctx.sessionID,
+            includeInactive: true,
+          })
+        : undefined
+      const expectedRevision = ctx.extra?.subagentCatalogRevision
+      if (catalog && typeof expectedRevision === "string" && expectedRevision !== catalog.revision) {
+        return yield* Effect.fail(new CatalogChangedError())
+      }
+      const direct = catalog?.entries.find((item) => item.id === params.subagent_type)
+      const aliases = catalog?.entries.filter((item) => item.name === params.subagent_type) ?? []
+      const entry = direct ?? (aliases.length === 1 ? aliases[0] : undefined)
+      if (catalog && (!entry || entry.effective !== "active")) {
+        return yield* Effect.fail(new Error(`Subagent unavailable: ${params.subagent_type}`))
+      }
+      const subagentID = entry?.id ?? params.subagent_type
       let current = parent
       let depth = 0
       while (current.parentID) {
@@ -116,19 +141,19 @@ export const TaskTool = Tool.define(
         )
       }
 
-      if (!ctx.extra?.bypassAgentCheck) {
+      if (!ctx.extra?.bypassAgentCheck && (!catalog || entry?.approvalRequired)) {
         yield* ctx.ask({
           permission: id,
-          patterns: [params.subagent_type],
+          patterns: [subagentID],
           always: ["*"],
           metadata: {
             description: params.description,
-            subagent_type: params.subagent_type,
+            subagent_type: subagentID,
           },
         })
       }
 
-      const next = yield* agent.get(params.subagent_type)
+      const next = yield* agent.get(subagentID)
       if (!next) {
         return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))
       }
@@ -158,7 +183,7 @@ export const TaskTool = Tool.define(
         (yield* sessions.create({
           parentID: ctx.sessionID,
           title: params.description + ` (@${next.name} subagent)`,
-          agent: next.name,
+          agent: next.id ?? next.name,
           permission: [
             ...childPermission,
             ...childToolDenies.filter(
@@ -209,7 +234,7 @@ export const TaskTool = Tool.define(
             providerID: model.providerID,
           },
           variant: next.model ? undefined : variant,
-          agent: next.name,
+          agent: subagentID,
           parts,
         })
         if (result.info.role === "assistant" && result.info.error) {
