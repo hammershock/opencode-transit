@@ -694,6 +694,7 @@ test("the production /subagent manager shows effective access and applies a Sess
     setup.mockInput.pressEnter()
     await waitForFrame(setup, "0/1 active")
     expect(setup.captureCharFrame()).toContain("○")
+    expect(setup.captureCharFrame()).not.toContain("● ○")
     expect(accessUpdates).toEqual(
       Array.from({ length: 2 }, () => ({
         sessionID: "dummy",

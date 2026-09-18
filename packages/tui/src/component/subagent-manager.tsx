@@ -13,7 +13,13 @@ import { useSync } from "../context/sync"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { DialogPrompt } from "../ui/dialog-prompt"
-import { DialogSelect, displayTruncate, inspectionFrame, type DialogSelectOption } from "../ui/dialog-select"
+import {
+  DialogSelect,
+  displayTruncate,
+  inspectionFrame,
+  type DialogSelectOption,
+  type DialogSelectRef,
+} from "../ui/dialog-select"
 import { useToast } from "../ui/toast"
 import { errorMessage } from "../util/error"
 
@@ -157,8 +163,8 @@ export function useSubagentManager(input: {
   const [snapshot, setSnapshot] = createSignal<SubagentSnapshot>()
   const [loading, setLoading] = createSignal(false)
   const [loadError, setLoadError] = createSignal<string>()
-  const [anchor, setAnchor] = createSignal<string>()
   let generation = 0
+  let selectRef: DialogSelectRef<string> | undefined
 
   const read = async () => {
     const result = await sdk.client.v2.subagent.catalog(
@@ -395,8 +401,9 @@ export function useSubagentManager(input: {
       return result.data.data
     })
     if (!saved) return
-    setAnchor(entry?.id ?? snapshot()?.entries.find((item) => item.name === definition.name)?.id)
+    const id = entry?.id ?? snapshot()?.entries.find((item) => item.name === definition.name)?.id
     dialog.pop()
+    if (id) requestAnimationFrame(() => selectRef?.moveTo(id))
   }
 
   const editor = (entry?: SubagentEntry) => {
@@ -550,7 +557,7 @@ export function useSubagentManager(input: {
         }
         locked={loading()}
         preserveSelection
-        current={anchor()}
+        ref={(value) => (selectRef = value)}
         renderFilter={false}
         options={options()}
         emptyView={
@@ -585,13 +592,11 @@ export function useSubagentManager(input: {
         onToggle={(option) => {
           const entry = selectedEntry(option)
           if (!entry) return
-          setAnchor(entry.id)
           scope(entry)
         }}
         onSelect={(option) => {
           const entry = selectedEntry(option)
           if (!entry) return
-          setAnchor(entry.id)
           if (entry.editable) return editor(entry)
           toast.show({ message: `${entry.name} is read only`, variant: "warning" })
         }}
