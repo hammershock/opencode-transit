@@ -6,7 +6,8 @@ authors:
   - hammershock
 created: 2026-09-19
 updated: 2026-09-19
-implemented-by: []
+implemented-by:
+  - https://github.com/hammershock/opencode-transit/pull/471
 depends-on:
   - 0002
 supersedes: []

@@ -1,7 +1,39 @@
 import { describe, expect, test } from "bun:test"
-import { probeTargetHealth, targetHealthLabel, targetProbeGenerations } from "../../src/component/target-manager"
+import {
+  probeTargetHealth,
+  targetHealthLabel,
+  targetListPresentation,
+  targetProbeGenerations,
+} from "../../src/component/target-manager"
+import { targetDescription } from "../../src/component/target-wizard"
 
 describe("target health presentation", () => {
+  test("shows a description while retaining the host in target details", () => {
+    const target = {
+      id: "target-1",
+      name: "a100-2gpu",
+      description: "Huawei ModelArts 2×A100 GPU server",
+      transport: "ssh" as const,
+      connection: { type: "ssh-config" as const, host: "modelarts" },
+      workspaceRoots: ["/home/ma-user/workspace"],
+    }
+    expect(targetListPresentation(target)).toEqual({
+      description: "Huawei ModelArts 2×A100 GPU server",
+      details: ["modelarts"],
+    })
+    expect(targetListPresentation({ ...target, description: undefined })).toEqual({
+      description: "modelarts",
+      details: [],
+    })
+  })
+
+  test("trims wizard descriptions and omits blank values", () => {
+    expect(targetDescription("  Huawei ModelArts 2×A100 GPU server  ")).toEqual({
+      description: "Huawei ModelArts 2×A100 GPU server",
+    })
+    expect(targetDescription("   ")).toEqual({})
+  })
+
   test("reserves the healthy symbol for ready targets", () => {
     expect(targetHealthLabel("checking")).toBe("◐ checking")
     expect(targetHealthLabel("ready")).toBe("● ready")

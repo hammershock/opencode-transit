@@ -11,6 +11,7 @@ type SDK = ReturnType<typeof useSDK>
 export function targetInput(target: TargetDefinition): TargetInput {
   return {
     name: target.name,
+    ...(target.description ? { description: target.description } : {}),
     connection: target.connection,
     workspaceRoots: target.workspaceRoots,
     transport: target.transport,

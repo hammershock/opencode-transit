@@ -59,6 +59,18 @@ export function targetHealthLabel(state: TargetHealthState) {
   }[state]
 }
 
+export function targetListPresentation(
+  target: { readonly description?: string; readonly connection: { readonly host: string } },
+  healthDetail?: string,
+) {
+  return {
+    description: target.description ?? target.connection.host,
+    details: [target.description ? target.connection.host : undefined, healthDetail].filter((item): item is string =>
+      Boolean(item),
+    ),
+  }
+}
+
 export function TargetHealth(props: { state: () => TargetHealthState }) {
   const { theme } = useTheme()
   return (
@@ -249,9 +261,8 @@ export function useTargetManager() {
           { title: "Refresh status", value: "refresh" as const, category: "Actions" },
           ...(targets()?.targets ?? []).map((target) => ({
             title: target.name,
-            description: target.connection.host,
+            ...targetListPresentation(target, detail(target.id)),
             footer: () => <TargetHealth state={() => state(target.id)} />,
-            details: [detail(target.id)].filter((item): item is string => Boolean(item)),
             value: target as TargetDefinition,
             category: "Configured targets",
           })),

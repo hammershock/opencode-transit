@@ -17,6 +17,7 @@ function request(route: string, init: RequestInit = {}) {
 
 const input = {
   name: "gpu",
+  description: "Huawei ModelArts 2×A100 GPU server",
   transport: "ssh",
   connection: { type: "ssh-config", host: "gpu-alias" },
   defaultDirectory: "/data/project",
@@ -41,10 +42,21 @@ describe("target registry HttpApi", () => {
     })
     expect(createdResponse.status).toBe(200)
     const created = (await createdResponse.json()) as {
-      target: { id: string; name: string; connection: { type: string } }
+      target: { id: string; name: string; description?: string; connection: { type: string } }
       snapshot: { revision: string }
     }
-    expect(created.target).toMatchObject({ name: "gpu", connection: { type: "ssh-config" } })
+    expect(created.target).toMatchObject({
+      name: "gpu",
+      description: "Huawei ModelArts 2×A100 GPU server",
+      connection: { type: "ssh-config" },
+    })
+
+    const listedAfterCreate = (await (await request("/api/target")).json()) as {
+      targets: Array<{ id: string; description?: string }>
+    }
+    expect(listedAfterCreate.targets).toContainEqual(
+      expect.objectContaining({ id: created.target.id, description: "Huawei ModelArts 2×A100 GPU server" }),
+    )
 
     const stale = await request("/api/target", {
       method: "POST",
@@ -53,9 +65,23 @@ describe("target registry HttpApi", () => {
     expect(stale.status).toBe(409)
     expect(await stale.json()).toMatchObject({ _tag: "ConflictError", resource: "targets.jsonc" })
 
+    const updatedResponse = await request(`/api/target/${created.target.id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        input: { ...input, description: undefined },
+        expectedRevision: created.snapshot.revision,
+      }),
+    })
+    expect(updatedResponse.status).toBe(200)
+    const updated = (await updatedResponse.json()) as {
+      target: { description?: string }
+      snapshot: { revision: string }
+    }
+    expect(updated.target.description).toBeUndefined()
+
     const removed = await request(`/api/target/${created.target.id}`, {
       method: "DELETE",
-      body: JSON.stringify({ expectedRevision: created.snapshot.revision }),
+      body: JSON.stringify({ expectedRevision: updated.snapshot.revision }),
     })
     expect(removed.status).toBe(200)
     expect(await removed.json()).toMatchObject({ targets: [] })
