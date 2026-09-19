@@ -2,24 +2,24 @@
 
 RFC（Request for Comments）用于记录本 fork 中影响多个模块或核心行为的设计决策。
 
-| ID                                                    | 标题                                           | 状态     |
-| ----------------------------------------------------- | ---------------------------------------------- | -------- |
-| [0001](0001-shell-execution-scope.md)                 | Execution Scope Model                          | Accepted |
-| [0002](0002-rexd-remote-execution.md)                 | Rexd Remote Execution                          | Accepted |
-| [0003](0003-command-effects.md)                       | Core Command Toolkit                           | Accepted |
-| [0004](0004-user-shell-session.md)                    | User Shell CWD Continuity                      | Accepted |
-| [0005](0005-location-environment.md)                  | Location Environment Loading                   | Accepted |
-| [0006](0006-builtin-command-adjustments.md)           | Built-in Command Adjustments                   | Accepted |
-| [0007](0007-provider-usage.md)                        | Provider Usage Surfaces                        | Accepted |
-| [0008](0008-tui-input-interactions.md)                | TUI Input Interactions                         | Accepted |
-| [0009](0009-session-location-rebinding.md)            | Session Target Recovery                        | Accepted |
-| [0010](0010-encrypted-session-sync.md)                | Multi-device Session Sync                      | Accepted |
-| [0011](0011-location-aware-model-context.md)          | Location-aware Model Context                   | Accepted |
-| [0012](0012-skill-catalog-and-invocation.md)          | Skill Catalog and Sync                         | Accepted |
-| [0013](0013-opencode-transit-identity.md)             | OpenCode Transit Identity                      | Accepted |
-| [0014](0014-subagent-economics.md)                    | Economics-aware Subagent Routing               | Accepted |
-| [0016](0016-subagent-access-manager.md)               | Subagent Access and Definition Manager         | Accepted |
-| [0017](0017-subagent-placement-and-agent-commands.md) | Subagent Destinations and Agent Slash Commands | Draft    |
+| ID                                           | 标题                                   | 状态     |
+| -------------------------------------------- | -------------------------------------- | -------- |
+| [0001](0001-shell-execution-scope.md)        | Execution Scope Model                  | Accepted |
+| [0002](0002-rexd-remote-execution.md)        | Rexd Remote Execution                  | Accepted |
+| [0003](0003-command-effects.md)              | Core Command Toolkit                   | Accepted |
+| [0004](0004-user-shell-session.md)           | User Shell CWD Continuity              | Accepted |
+| [0005](0005-location-environment.md)         | Location Environment Loading           | Accepted |
+| [0006](0006-builtin-command-adjustments.md)  | Built-in Command Adjustments           | Accepted |
+| [0007](0007-provider-usage.md)               | Provider Usage Surfaces                | Accepted |
+| [0008](0008-tui-input-interactions.md)       | TUI Input Interactions                 | Accepted |
+| [0009](0009-session-location-rebinding.md)   | Session Target Recovery                | Accepted |
+| [0010](0010-encrypted-session-sync.md)       | Multi-device Session Sync              | Accepted |
+| [0011](0011-location-aware-model-context.md) | Location-aware Model Context           | Accepted |
+| [0012](0012-skill-catalog-and-invocation.md) | Skill Catalog and Sync                 | Accepted |
+| [0013](0013-opencode-transit-identity.md)    | OpenCode Transit Identity              | Accepted |
+| [0014](0014-subagent-economics.md)           | Economics-aware Subagent Routing       | Accepted |
+| [0016](0016-subagent-access-manager.md)      | Subagent Access and Definition Manager | Accepted |
+| [0017](0017-agent-slash-commands.md)         | Agent Slash Commands                   | Draft    |
 
 ## 状态
 
