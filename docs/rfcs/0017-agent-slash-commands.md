@@ -104,41 +104,51 @@ CommandTextResult {
 
 ## 三、普通 Skill
 
-提供可由用户按普通方式安装的 `opencode-transit` Skill，介绍 OpenCode Transit 的 Location/target 语义、slash 工具、`/slash help`、`/target list`、主 Agent 与 subagent 的能力差异及错误处理。它不是内置 Skill，不自动安装，也不硬编码用户 target 或路径。Skill 按 RFC-0012 的已有发现、target scope、Agent permission、准入与隐式 `skill` tool 契约工作；本草案不安装 Skill。
+提供可由用户按普通方式安装的环境说明 Skill，介绍 OpenCode Transit 的 Location/target 语义、slash 工具、`/slash help`、`/target list`、主 Agent 与 subagent 的能力差异及错误处理。下文以用户提出的 `$SKILL-environment` 表示它的 canonical mention；正式名称随该 Skill package 一起确定。它不是内置 Skill，不自动安装，也不硬编码用户 target 或路径。Skill 按 RFC-0012 的已有发现、target scope、Agent permission、准入与隐式 `skill` tool 契约工作；本草案不安装 Skill。
 
 框架不新增远端 ls、目录补全、跨 target bash 或其他目录探索工具。Skill 内容和 target description 都不能授予执行权限。后续选址任务可以扩展普通 Skill 的使用说明，但不作为本能力交付条件。
 
 ### 3.1 启动上下文
 
-RFC-0011 的 `core/environment` 已经是 harness 与实际 Session Location 的持久事实来源，包含 target kind/name、directory、project root 和 platform。本 RFC 不创建第二份 target 状态，也不把 target description 注入模型。environment baseline 在现有结构化字段之前增加一条清晰说明：
+当前实现已经从 Location-scoped `Location.Service` 构造以下 environment 文本，但 `SystemContext.initialize()` 随后把 `core/environment` 的值和 rendered baseline 写入 durable Context Epoch，provider request 再读取该 frozen baseline。因此当前是“按 Location 动态构造一次、随后进入 Session 持久化”，并不是 RFC-0012 `<available_skills>` 的 runtime-only 注入。
+
+改造保持现有 renderer、字段与顺序，只把 `core/environment` 从 durable SystemContext baseline 拆出，作为与 `skillGuidance` 并列的 device-local startup context part。在 Session activation、Location rebind 和 provider request 组装时使用当前已解析 Location 构造；它不成为 message/part、Context Epoch、Session event、transcript、export、sync 或 compaction 内容。既有 Session 中的 legacy `core/environment` snapshot 保持可解码，但新的 provider request 不再从它注入环境文本，也不改写历史事件。
+
+模型可见文本只做以下最小变化：Target 行只显示非敏感 target name；存在非空 description 时紧随其后显示；其余 Working directory、Project root、VCS 和 Platform 保持现状；环境说明 Skill 在当前 admitted catalog 中唯一可用时，于现有 `</environment>` 后增加一行指引。
 
 ```text
-Your workspace execution environment is OpenCode Transit target "<targetName>" (<targetKind>); filesystem, shell, and workspace tools operate in this Location.
+Execution harness: OpenCode Transit (opencode-transit)
+<environment>
+  Target: a100-2gpu
+  Description: Huawei Modelart 2A100-gpu server
+  Working directory: /home/ma-user/workspace/hanmo/research_template
+  Project root: /home/ma-user/workspace/hanmo/research_template
+  VCS: git
+  Platform: linux-amd64
+</environment>
+
+More About environments, See $SKILL-environment
 ```
 
-`targetName` 使用 RFC-0011 已允许的非敏感显示身份；local 缺少名称时为 `local`，无法解析的 Rexd 显示身份为 `remote`。渲染前对换行与控制字符做安全处理，不包含 description、SSH 信息、controller hostname、credential 或 target timezone。该说明随初始 Context Epoch 和 Location replacement 生效，不因普通 turn、slash 调用或透明重连重复注入。
+local 使用 `Target: local`。description 缺失或为空时完全省略该行；它来自 device-local TargetRegistry，只是用户维护的说明，不参与 target identity、权限或连接。所有动态字段使用固定 renderer 做换行和终端控制字符处理。不得增加 SSH host/IP/user/port、identity file、daemon command、controller hostname、credential、环境变量值或 transport 诊断。
 
-Transit 指南的加载提示属于 RFC-0012 的 device-local Skill guidance，不进入 durable `core/environment` snapshot。当当前 Session admitted catalog 中存在唯一、可用且名称精确为 `opencode-transit` 的 Skill 时，启动 guidance 增加：
+`$SKILL-environment` 不在当前 admitted catalog、存在歧义、被 target scope 排除或被 Agent permission 拒绝时，省略末尾指引，不生成悬空引用。普通 Skill 必须说明 `slash_command` 只对顶层主 Session 可用；subagent 即使能加载该 Skill也不能调用该工具。未来内置化沿用相同 mention 和 renderer，具体迁移另行定义。
 
-```text
-For detailed OpenCode Transit guidance, use the skill tool to load "opencode-transit" (shown to users as $opencode-transit).
-```
-
-Skill 缺失、同名歧义、被 target scope 排除或被 Agent permission 拒绝时省略这一句，不生成悬空引用、不绕过 catalog resolver，也不阻止 Session 启动。Session activation 按 RFC-0012 刷新 catalog 后可以增删该提示；这不会重写 RFC-0011 instruction generation。
-
-普通 Skill 必须说明 `slash_command` 只对顶层主 Session 可用，subagent 即使能加载该 Skill也不能调用该工具。未来把该指南变成 embedded/built-in Skill 时保留 canonical name 和上述 guidance contract；内置化、现有普通 package 的重名迁移与默认可用性由后续 RFC 或任务决定，本 RFC 不提前声明已经内置。
+`/context` 的 model-context endpoint 在现有 frozen generation、`skillCatalog` 和 `skillGuidance` 旁新增 `environmentGuidance` runtime 字段。TUI 的 Environment 行预览该字段的准确文本并标记为 runtime；instructions 继续来自 durable generation。查看只读取当前已接纳/已构造的 runtime 文本，不执行 slash command、不调用模型、不写 Session。旧 generation 中的 environment 只能作为 legacy 诊断显示，不能覆盖当前 runtime preview。其他能查看实际 model startup context 的调试/API 层也必须使用同一 `environmentGuidance`，不能各自复制 renderer。
 
 ## 四、分层与兼容
 
 command-kit 保持 runtime-neutral，拥有 audience/help/parser/result 契约。Core 拥有 actor 校验和 headless dispatch；target list 消费 TargetRegistry 脱敏 projection。Server 必要时提供类型化 adapter，TUI 负责输入和展示；不能把 UI callback 搬到服务端模拟点击。
 
-本 RFC 扩展 RFC-0003 的 audience、帮助和受限 headless execution plane，保留 User resolver 和兼容来源行为。RFC-0002 增加 description 与只读文本列表；RFC-0011 的既有 environment renderer 增加 target 语义说明，RFC-0012 的 device-local guidance 条件式引用 Transit Skill。不改变 Session Location、RFC-0009 rebind 或 Session sync。Target description 和 registry 留在设备本地。
+本 RFC 扩展 RFC-0003 的 audience、帮助和受限 headless execution plane，保留 User resolver 和兼容来源行为。RFC-0002 增加 description 与只读文本列表。Environment guidance 采用 RFC-0012 已验证的 runtime startup-context 模式，但仍是独立 system part，不并入 `<available_skills>`。不改变 Session Location 或 RFC-0009 rebind。Target description 和 registry 留在设备本地。
 
-旧 command 默认 User-only，无 description 的配置继续可读。公共 Protocol/HttpApi 变化必须从 packages/client 运行 `bun run generate`；不得手写生成代码或改变 legacy `session.command` 的 prompt 语义。
+本 RFC 对 RFC-0011 构成一项窄化修订：Location 与 instruction content 继续是 durable Session facts；只有 model-visible environment text 从 Context Epoch 拆为 runtime `environmentGuidance`。RFC-0011 中要求持久化、同步和从 frozen generation 预览 environment 的条款由 3.1 取代；instructions、context generation、refresh 与 sync 的其余契约不变。既有 durable environment 数据保持可解码但不再注入，迁移不得改写历史 Session event。
+
+旧 command 默认 User-only，无 description 的配置继续可读。unresolved Session 不能调用模型，也不能使用 legacy environment 冒充当前环境。公共 Protocol/HttpApi 的 `modelContext` response 增加 runtime `environmentGuidance` 并兼容读取旧 generation；必须从 packages/client 运行 `bun run generate`，不得手写生成代码或改变 legacy `session.command` 的 prompt 语义。
 
 ## 五、任务与依赖
 
-本能力由独立 issue、语义分支、worktree 和 PR 管理。实现包含 target description 全流程、audience/help、主 Session 工具、非交互执行与拒绝、TUI 卡片、`/target list`、environment 启动说明、条件式 Skill guidance 及普通 Skill 示例，形成一个可验收的结果。
+本能力由独立 issue、语义分支、worktree 和 PR 管理。实现包含 target description 全流程、audience/help、主 Session 工具、非交互执行与拒绝、TUI 卡片、`/target list`、现有 environment renderer 的 runtime 化、`/context` runtime preview、条件式 Skill 指引及普通 Skill 示例，形成一个可验收的结果。
 
 交付顺序固定为：**Agent slash command（本 RFC / #464）完成 → subagent 执行位置（RFC-0018 / #466）开始实现**。两份设计可分别评审；本能力的验收不等待 Task 选址，选址不能因“用户可以直接提供 target”而跳过依赖。实现 issue 仍须在 RFC 接受后满足 Ready 条件。
 
@@ -152,17 +162,20 @@ command-kit 保持 runtime-neutral，拥有 audience/help/parser/result 契约�
 6. Agent 卡片显示 bash 风格状态和纯文本输出，不影响用户输入焦点；User 交互命令保持原行为。
 7. 普通 Skill 可指导主 Agent 列出帮助和 target；权限校验不依赖 Skill 是否加载。
 8. 无需新增 Task 目的地参数即可完成全部验收。
-9. local 与 Rexd Session 的 environment 启动说明使用实际 Location 身份且不泄露 controller/连接信息；Location replacement 后更新，普通 turn 不重复生成。
-10. 仅当 admitted catalog 中唯一可用的 `opencode-transit` Skill 存在时显示加载提示；缺失、歧义、scope/permission 排除均省略且不影响启动。
+9. local 与 Rexd Session 保留现有 environment 格式和字段；Target 只显示名称，非空 description 紧随其后，其他字段不改。
+10. 仅当 admitted catalog 中唯一可用的环境说明 Skill 存在时显示 `$SKILL-environment` 指引；缺失、歧义、scope/permission 排除均省略且不影响启动。
 11. 顶层主 Agent 加载 Skill 后能理解 slash channel；subagent 加载同一 Skill 仍无 `slash_command` 定义，直接调用也被执行边界拒绝。
+12. `environmentGuidance` 从当前解析后的 Location 与 device-local target description 动态构造，不写入 Session event/part、Context Epoch、export、sync 或 compaction；legacy environment 可解码但不进入新请求。
+13. `/context` 与其他 model-context 查看层返回并预览同一 renderer 的 `environmentGuidance`，标记 runtime；不复制格式或用旧 generation 覆盖。
 
-文档阶段检查格式、链接、示例和一致性。实现涉及权限和工具入口，需要 command-kit/Core 的 parser/actor/policy contract tests、隔离配置中的 description CRUD integration tests、受影响包内 `bun typecheck`、必要 client generation 和精确提交的 clean Mac build。
+文档阶段检查格式、链接、示例和一致性。实现涉及权限、工具入口与 Session context persistence 边界，不能使用 focused fast path；需要 command-kit/Core 的 parser/actor/policy contract tests、environment renderer/provider lowering tests、旧 context event migration与 sync exclusion tests、`/context` inspector tests、隔离配置中的 description CRUD integration tests、受影响包内 `bun typecheck`、client generation 和精确提交的 clean Mac build。
 
-Mac 实测 target 描述创建/编辑、User 命令入口、主 Agent 的 list/help 文本调用与 subagent 拒绝，提供卡片和表单截图。分别以 local 与已有 Rexd Session 检查实际 target 启动说明，并覆盖 Transit Skill 存在/缺失时的 guidance。列表禁止远端 I/O 用 adapter 测试验证；本任务不要求跨 target child 执行。修改 Windows 平台路径或存储行为时追加相应证据，不声称未测平台通过。
+Mac 实测 target 描述创建/编辑、User 命令入口、主 Agent 的 list/help 文本调用与 subagent 拒绝，提供卡片、表单和 `/context` Environment preview 截图。分别以 local 与已有 Rexd Session 对照现有格式，覆盖有/无 description 和 Skill 指引，并确认 raw Session/export/sync payload 不新增 runtime environment。列表禁止远端 I/O 用 adapter 测试验证；本任务不要求跨 target child 执行。修改 Windows 平台路径或存储行为时追加相应证据，不声称未测平台通过。
 
 ## 七、供评审确认的细节
 
 - `/slash help [command path]` 为集中入口；Agent 帮助只列自身可执行命令。
 - 需要 UI 或人工批准的 Agent command 返回 interaction-required/denied。
 - `/target list` 仅使用 registry 和已有缓存状态，不主动探测目标。
-- 普通指南 Skill 的 canonical name 暂定为 `opencode-transit`；只有它在当前 admitted catalog 中唯一可用时才显示加载提示。
+- 环境说明 Skill 的 canonical mention 暂按用户示例写作 `$SKILL-environment`，由该 Skill package 定稿；只有它在当前 admitted catalog 中唯一可用时才显示指引。
+- 沿用现有 environment renderer 和 `/context` 布局，只改变数据生命周期及上述三处文本。
