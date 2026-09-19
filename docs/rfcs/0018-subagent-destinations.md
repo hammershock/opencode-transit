@@ -72,7 +72,7 @@ TaskInput {
   -> 固定 target identity，计算 directory
   -> prepare target / Location services
   -> 校验连接、能力、roots、canonical path、目录存在和可访问性
-  -> 在目的 Location 解析 child definition、权限、环境与初始 context
+  -> 在目的 Location 解析 child definition、权限、instructions 与 runtime environment guidance
   -> 重新确认 target 配置与有效访问策略未失效
   -> 创建持久化显式 Location 的 child Session
   -> 接纳 child prompt 并按 child Session ID 执行
@@ -86,7 +86,7 @@ preflight 失败不得产生可运行的 child；创建成功后的 provider/模
 
 ### 1.4 子环境、权限与结果
 
-必须从 child Location 构造 filesystem/process、工具 registry、环境 snapshot、target platform、项目根、项目 AGENTS.md/instructions、Skill scope 与 context epoch。RFC-0017 增加的 OpenCode Transit 启动说明必须显示 child 的实际 destination target；可用时的 Transit Skill 提示也按 child admitted catalog 解析，不能沿用 parent 的 target 或 catalog。控制设备全局规则按 RFC-0011 保留；父项目规则和父 `.env` 不因亲子关系复制到目的地。父提供的 task prompt 是任务内容，不能成为目的地环境事实。
+必须从 child Location 构造 filesystem/process、工具 registry、instruction context，以及 RFC-0017 从 durable epoch 拆出的 runtime `environmentGuidance`。该文本保持现有 `<environment>` 格式并显示 child 的 destination target/description；可选环境 Skill 指引按 child admitted catalog 解析，不能沿用 parent 的 environment 或 catalog。环境文本不写入 child Session event/part、Context Epoch、sync 或 export。控制设备全局规则按 RFC-0011 保留；父项目规则和父 `.env` 不因亲子关系复制到目的地。父提供的 task prompt 是任务内容，不能成为目的地环境事实。
 
 subagent 先通过父 effective catalog（RFC-0016）授权，再在目的地验证同一 definition identity 可用；不能因同名改用另一个项目 Agent。目的地缺少所选定义时显式失败。最终权限保留父链 hard deny、所选 definition 和目的 Location 限制；路径权限不得把父机器上的同名路径许可直接移植到另一机器。
 
@@ -100,9 +100,9 @@ Task 的返回值和可见 metadata 至少记录 child Session ID、实际 targe
 
 ## 二、分层与兼容
 
-Task 调用显式 Location 的 Session 创建 workflow，Location provider 和既有 context services 完成目标验证与上下文装配。SessionExecution 保持 process-global、Session-ID based；SessionRunner、工具和权限保持 Location-scoped。不得从父捕获的服务容器解析 child prompt 文件引用或执行 child 工具。
+Task 调用显式 Location 的 Session 创建 workflow，Location provider 和既有 context services 完成目标验证、instruction admission 与 runtime environment rendering。SessionExecution 保持 process-global、Session-ID based；SessionRunner、工具和权限保持 Location-scoped。不得从父捕获的服务容器解析 child prompt 文件引用、渲染 child environment 或执行 child 工具。
 
-本 RFC 扩展 RFC-0002 的亲子选址：每个 Session 仍只有一个 Location。沿用 RFC-0011/0012 的目标环境、规则和 Skill 契约，RFC-0016 的父 effective catalog 决定可选 definition，但不再将 Location 限制解释为强制同位置。RFC-0009 rebind 不变。RFC-0010 继续同步 child 自身 portable Location，不增加 registry 或凭据同步。
+本 RFC 扩展 RFC-0002 的亲子选址：每个 Session 仍只有一个 Location。沿用 RFC-0011 的 instruction、RFC-0017 的 runtime environment、RFC-0012 的 Skill 和 RFC-0016 的父 effective catalog 契约，但不再将 Location 限制解释为强制同位置。RFC-0009 rebind 不变。RFC-0010 继续同步 child 自身 portable Location 与 instructions，不同步 runtime environment，也不增加 registry 或凭据同步。
 
 RFC-0015（[PR #437](https://github.com/hammershock/opencode-transit/pull/437)）是独立控制草案，不是本 RFC 的先决条件；未来控制操作必须读取 child 自身位置。现有调用省略新参数保持同位置行为；不支持新参数的执行路径必须明确拒绝，不能静默忽略。公共 Protocol/HttpApi 变化需运行 packages/client 的 `bun run generate`。
 
@@ -117,13 +117,14 @@ RFC-0015（[PR #437](https://github.com/hammershock/opencode-transit/pull/437)�
 1. 默认值表每行、精确名称解析到同一 ID、空参数、远端到 local 均有 contract test；HOME 与 defaultDirectory 故意不同时使用 HOME。
 2. Missing、非目录、无权限、symlink 越界、HOME unknown 和离线 target 均在 child 创建前失败，无 mkdir 或本地回退。
 3. 显式路径无需 HOME；后续操作保持 roots 校验；外部删除目录不触发补建。
-4. child 文件、shell、项目根、平台、规则、环境、启动 target 说明与 Skill guidance 来自目的地；父同名路径/规则/.env/catalog 不泄漏；覆盖 workspaceID 与定义缺失场景。
+4. child 文件、shell、项目根、平台、规则、runtime environment 与 Skill guidance 来自目的地；父同名路径/规则/.env/environment/catalog 不泄漏；覆盖 workspaceID 与定义缺失场景。
 5. Task 返回实际位置；resume 不重新应用默认值；冲突/未知 task_id 不创建新 child，取消/重试不重复创建。
 6. 前置 slash 工具已验收；完整流程可先获取 target 描述，再创建目的地 child；child 仍无法使用 slash 工具。
+7. child `environmentGuidance` 不进入 Session/sync/export；`/context` 预览同一 runtime renderer 的准确文本。
 
 文档阶段检查格式、链接和契约。实现涉及远程执行与上下文/权限，需针对 Task/Location 的 contract 和临时数据库/filesystem integration tests、受影响包内 `bun typecheck`、必要 client generation，以及精确提交的 clean Mac build。
 
-真实场景至少覆盖 Mac 父 Session → Linux Rexd child，两端设置不同 AGENTS.md、非敏感环境标记和同名文件，确认 child 只见目的地内容且父位置保持。再测不同已有目录、跨 target 默认 HOME、目录缺失、断连、恢复固定位置及 Task 卡片位置展示。测试仅使用隔离 Session/配置和显式测试目录。
+真实场景至少覆盖 Mac 父 Session → Linux Rexd child，两端设置不同 AGENTS.md、非敏感环境标记和同名文件，确认 child 只见目的地内容且父位置保持。检查 child `/context` 的 destination Environment preview，并确认 raw Session/export/sync payload 没有 runtime environment。再测不同已有目录、跨 target 默认 HOME、目录缺失、断连、恢复固定位置及 Task 卡片位置展示。测试仅使用隔离 Session/配置和显式测试目录。
 
 涉及 Windows 路径、HOME 或 transport 行为时补该平台证据；变更 portable Location/亲子 sync 语义时需实际双设备验收。不得声称未测平台通过。
 
