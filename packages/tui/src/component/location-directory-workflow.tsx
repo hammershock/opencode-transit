@@ -17,6 +17,7 @@ export function targetInput(target: TargetDefinition): TargetInput {
     transport: target.transport,
     ...(target.defaultDirectory ? { defaultDirectory: target.defaultDirectory } : {}),
     ...(target.command ? { command: target.command } : {}),
+    ...(target.skillStagingRoot ? { skillStagingRoot: target.skillStagingRoot } : {}),
   }
 }
 

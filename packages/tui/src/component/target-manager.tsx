@@ -2,10 +2,12 @@ import { createResource, createSignal, Match, Switch, untrack } from "solid-js"
 import { useDialog } from "../ui/dialog"
 import { DialogSelect } from "../ui/dialog-select"
 import { DialogConfirm } from "../ui/dialog-confirm"
+import { DialogPrompt } from "../ui/dialog-prompt"
 import { useSDK } from "../context/sdk"
 import { useToast } from "../ui/toast"
 import { errorMessage } from "../util/error"
-import { targetWizard, type TargetDefinition } from "./target-wizard"
+import { targetDescription, targetWizard, type TargetDefinition } from "./target-wizard"
+import { targetInput } from "./location-directory-workflow"
 import { useTheme } from "../context/theme"
 
 export type TargetHealthState = "checking" | "ready" | "unavailable" | "invalid"
@@ -70,6 +72,13 @@ export function targetListPresentation(
     ),
   }
 }
+
+export const targetManagementActions: { title: string; value: "test" | "edit" | "description" | "remove" }[] = [
+  { title: "Test connection", value: "test" },
+  { title: "Edit target", value: "edit" },
+  { title: "Edit description", value: "description" },
+  { title: "Remove target", value: "remove" },
+]
 
 export function TargetHealth(props: { state: () => TargetHealthState }) {
   const { theme } = useTheme()
@@ -209,13 +218,34 @@ export function useTargetManager() {
     dialog.replace(() => (
       <DialogSelect
         title={target.name}
-        options={[
-          { title: "Test connection", value: "test" as const },
-          { title: "Edit or rename", value: "edit" as const },
-          { title: "Remove target", value: "remove" as const },
-        ]}
+        options={targetManagementActions}
         onSelect={(option) => {
           if (option.value === "edit") return save(target)
+          if (option.value === "description") {
+            void (async () => {
+              const snapshot = targets()
+              if (!snapshot) return
+              const description = await DialogPrompt.show(dialog, "Edit description", {
+                value: target.description,
+                placeholder: "Huawei ModelArts 2×A100 GPU server",
+              })
+              if (description === null) return
+              const normalized = targetDescription(description)
+              await sdk.client.v2.target.update(
+                {
+                  targetID: target.id,
+                  input: targetInput({ ...target, description: normalized.description }),
+                  expectedRevision: snapshot.revision,
+                },
+                { throwOnError: true },
+              )
+              await controls.refetch()
+              open()
+            })().catch((error) =>
+              toast.show({ title: "Description update failed", message: errorMessage(error), variant: "error" }),
+            )
+            return
+          }
           if (option.value === "test") {
             void sdk.client.v2.target
               .refresh({ targetID: target.id }, { throwOnError: true })
