@@ -86,7 +86,7 @@ preflight 失败不得产生可运行的 child；创建成功后的 provider/模
 
 ### 1.4 子环境、权限与结果
 
-必须从 child Location 构造 filesystem/process、工具 registry、环境 snapshot、target platform、项目根、项目 AGENTS.md/instructions、Skill scope 与 context epoch。控制设备全局规则按 RFC-0011 保留；父项目规则和父 `.env` 不因亲子关系复制到目的地。父提供的 task prompt 是任务内容，不能成为目的地环境事实。
+必须从 child Location 构造 filesystem/process、工具 registry、环境 snapshot、target platform、项目根、项目 AGENTS.md/instructions、Skill scope 与 context epoch。RFC-0017 增加的 OpenCode Transit 启动说明必须显示 child 的实际 destination target；可用时的 Transit Skill 提示也按 child admitted catalog 解析，不能沿用 parent 的 target 或 catalog。控制设备全局规则按 RFC-0011 保留；父项目规则和父 `.env` 不因亲子关系复制到目的地。父提供的 task prompt 是任务内容，不能成为目的地环境事实。
 
 subagent 先通过父 effective catalog（RFC-0016）授权，再在目的地验证同一 definition identity 可用；不能因同名改用另一个项目 Agent。目的地缺少所选定义时显式失败。最终权限保留父链 hard deny、所选 definition 和目的 Location 限制；路径权限不得把父机器上的同名路径许可直接移植到另一机器。
 
@@ -117,7 +117,7 @@ RFC-0015（[PR #437](https://github.com/hammershock/opencode-transit/pull/437)�
 1. 默认值表每行、精确名称解析到同一 ID、空参数、远端到 local 均有 contract test；HOME 与 defaultDirectory 故意不同时使用 HOME。
 2. Missing、非目录、无权限、symlink 越界、HOME unknown 和离线 target 均在 child 创建前失败，无 mkdir 或本地回退。
 3. 显式路径无需 HOME；后续操作保持 roots 校验；外部删除目录不触发补建。
-4. child 文件、shell、项目根、平台、规则、环境与 Skill 来自目的地；父同名路径/规则/.env 不泄漏；覆盖 workspaceID 与定义缺失场景。
+4. child 文件、shell、项目根、平台、规则、环境、启动 target 说明与 Skill guidance 来自目的地；父同名路径/规则/.env/catalog 不泄漏；覆盖 workspaceID 与定义缺失场景。
 5. Task 返回实际位置；resume 不重新应用默认值；冲突/未知 task_id 不创建新 child，取消/重试不重复创建。
 6. 前置 slash 工具已验收；完整流程可先获取 target 描述，再创建目的地 child；child 仍无法使用 slash 工具。
 
