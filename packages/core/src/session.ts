@@ -878,17 +878,27 @@ const layer = Layer.effect(
       }),
       requestContext: Effect.fn("V2Session.requestContext")(function* (sessionID) {
         const session = yield* result.get(sessionID)
-        const location = yield* requireLocation(sessionID)
-        return yield* Effect.gen(function* () {
-          const agents = yield* AgentV2.Service
-          const runtime = yield* RuntimeContext.Service
-          const agent = yield* agents.select(session.agent)
-          return {
-            runtimeParts: yield* runtime.assemble(session.id, agent),
-            agentSystem: agent.info?.system ?? null,
-            model: session.model ?? null,
-          }
-        }).pipe(Effect.provide(locations.get(location)))
+        const attempt = yield* Effect.gen(function* () {
+          const location = yield* requireLocation(sessionID)
+          return yield* Effect.gen(function* () {
+            const agents = yield* AgentV2.Service
+            const runtime = yield* RuntimeContext.Service
+            const agent = yield* agents.select(session.agent)
+            return {
+              runtimeParts: yield* runtime.assemble(session.id, agent),
+              agentSystem: agent.info?.system ?? null,
+            }
+          }).pipe(Effect.provide(locations.get(location)))
+        }).pipe(Effect.exit)
+
+        if (Exit.isFailure(attempt)) {
+          yield* Effect.logWarning("Model context request inspection unavailable", {
+            sessionID,
+            cause: Cause.pretty(attempt.cause),
+          })
+          return { runtimeParts: [], agentSystem: null, model: session.model ?? null }
+        }
+        return { ...attempt.value, model: session.model ?? null }
       }),
       applyInstructions: Effect.fn("V2Session.applyInstructions")((sessionID) =>
         activity.withExclusive(
