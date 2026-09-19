@@ -19,6 +19,7 @@ RFC（Request for Comments）用于记录本 fork 中影响多个模块或核心
 | [0013](0013-opencode-transit-identity.md)    | OpenCode Transit Identity              | Accepted |
 | [0014](0014-subagent-economics.md)           | Economics-aware Subagent Routing       | Accepted |
 | [0016](0016-subagent-access-manager.md)      | Subagent Access and Definition Manager | Accepted |
+| [0017](0017-agent-slash-commands.md)         | Agent Slash Commands                   | Draft    |
 | [0019](0019-target-descriptions.md)          | Target Descriptions                    | Accepted |
 
 ## 状态
