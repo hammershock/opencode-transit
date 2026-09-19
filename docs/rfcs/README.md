@@ -19,6 +19,9 @@ RFC（Request for Comments）用于记录本 fork 中影响多个模块或核心
 | [0013](0013-opencode-transit-identity.md)    | OpenCode Transit Identity              | Accepted |
 | [0014](0014-subagent-economics.md)           | Economics-aware Subagent Routing       | Accepted |
 | [0016](0016-subagent-access-manager.md)      | Subagent Access and Definition Manager | Accepted |
+| [0018](0018-subagent-destinations.md)        | Subagent Execution Destinations        | Draft    |
+
+RFC-0018 的前置设计为 RFC-0017（[PR #465](https://github.com/hammershock/opencode-transit/pull/465)），该依赖完成后才开始选址实现。
 
 ## 状态
 
