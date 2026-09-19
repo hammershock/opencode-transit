@@ -37,8 +37,12 @@ const modelContextCommands = {
   copy: "dialog.model_context.copy",
 } satisfies ContentPreviewCommands
 
+const scopeOrder = { global: 0, target: 1, project: 2, nested: 3 } as const
+const scopeLabel = { global: "global", target: "target", project: "project", nested: "nested" } as const
+
 export function modelContextOptions(generation: ModelContextGeneration): DialogSelectOption<Preview>[] {
   const environment = generation.environment
+  const sources = generation.sources
   const options: DialogSelectOption<Preview>[] = []
 
   if (generation.model) {
@@ -61,6 +65,7 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
       },
     })
   }
+
   if (generation.agentSystem) {
     options.push({
       category: "SystemPrompt",
@@ -80,51 +85,64 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
     })
   }
 
-  for (const [key, source] of Object.entries(generation.sources)) {
-    if (key === "core/environment") {
-      options.push({
-        category: "SystemPrompt",
-        title: `${environment.targetName} · ${environment.targetKind}`,
-        description: `durable · ${environment.directory}`,
-        details: [`project ${environment.projectRoot}`],
-        footer: `${environment.platform} · ${environment.vcs ?? "no vcs"}`,
-        value: {
-          title: "Environment",
-          content: generation.sources["core/environment"]?.baseline ?? JSON.stringify(environment, null, 2),
-        },
-      })
-      continue
-    }
-    if (key === "core/instructions") {
-      for (const instruction of generation.instructions) {
-        const detail = `${instruction.origin} · ${instruction.scope} · ${instruction.status}`
-        options.push({
-          category: "SystemPrompt",
-          title: instruction.source,
-          description: `durable · ${detail}`,
-          details: instruction.declaredBy ? [`declared by ${instruction.declaredBy}`] : undefined,
-          footer:
-            instruction.status === "ignored"
-              ? `${instruction.failureStage ?? "load"} failed`
-              : instruction.digest?.slice(0, 12),
-          value: {
-            title: instruction.source,
-            content:
-              instruction.status === "ignored"
-                ? `Ignored during ${instruction.failureStage ?? "load"}.`
-                : instruction.content || "(empty instruction file)",
-          },
-        })
-      }
-      continue
-    }
+  const environmentSource = sources["core/environment"]
+  if (environmentSource) {
+    options.push({
+      category: "SystemPrompt",
+      title: "environment",
+      description: `durable · ${environment.targetName} · ${environment.targetKind}`,
+      details: [`directory ${environment.directory}`, `project ${environment.projectRoot}`],
+      footer: `${environment.platform} · ${environment.vcs ?? "no vcs"}`,
+      value: {
+        title: "Environment",
+        content: environmentSource.baseline ?? JSON.stringify(environment, null, 2),
+      },
+    })
+  }
+
+  const dateSource = sources["core/date"]
+  if (dateSource) {
+    options.push({
+      category: "SystemPrompt",
+      title: "date",
+      description: "durable · dynamic",
+      value: { title: "Date", content: dateSource.baseline ?? JSON.stringify(dateSource.value, null, 2) },
+    })
+  }
+
+  const instructions = [...generation.instructions].sort(
+    (a, b) => scopeOrder[a.scope] - scopeOrder[b.scope],
+  )
+  for (const instruction of instructions) {
+    options.push({
+      category: "SystemPrompt",
+      title: instruction.source,
+      description: `durable · ${scopeLabel[instruction.scope]} · ${instruction.status}`,
+      details: instruction.declaredBy ? [`declared by ${instruction.declaredBy}`] : undefined,
+      footer:
+        instruction.status === "ignored"
+          ? `${instruction.failureStage ?? "load"} failed`
+          : instruction.digest?.slice(0, 12),
+      value: {
+        title: instruction.source,
+        content:
+          instruction.status === "ignored"
+            ? `Ignored during ${instruction.failureStage ?? "load"}.`
+            : instruction.content || "(empty instruction file)",
+      },
+    })
+  }
+
+  for (const [key, source] of Object.entries(sources)) {
+    if (key === "core/environment" || key === "core/date" || key === "core/instructions") continue
     options.push({
       category: "SystemPrompt",
       title: key,
-      description: `durable · ${source.refresh === "generation" ? "generation" : "dynamic"}`,
+      description: "durable",
       value: { title: key, content: source.baseline ?? JSON.stringify(source.value, null, 2) },
     })
   }
+
   if (generation.runtimeParts) {
     for (const part of generation.runtimeParts) {
       const description =
@@ -140,21 +158,7 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
       })
     }
   }
-  options.push({
-    category: "Messages",
-    title: "chat history",
-    description: "deferred",
-    value: {
-      title: "Messages",
-      content: "Chat conversation is out of scope for now and reserved for future comprehensive inspection.",
-    },
-  })
-  options.push({
-    category: "Tools",
-    title: "tool definitions",
-    description: "not yet exposed",
-    value: { title: "Tools", content: "Tool definitions are not yet exposed for inspection." },
-  })
+
   if (generation.subagentRefresh) {
     const catalog = generation.subagentCatalog
     options.push({
@@ -196,6 +200,23 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
       })
     }
   }
+
+  options.push({
+    category: "Messages",
+    title: "chat history",
+    description: "deferred",
+    value: {
+      title: "Messages",
+      content: "Chat conversation is out of scope for now and reserved for future comprehensive inspection.",
+    },
+  })
+  options.push({
+    category: "Tools",
+    title: "tool definitions",
+    description: "not yet exposed",
+    value: { title: "Tools", content: "Tool definitions are not yet exposed for inspection." },
+  })
+
   return options
 }
 
