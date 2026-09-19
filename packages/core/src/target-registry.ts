@@ -33,6 +33,7 @@ export type Definition = {
   readonly status: "unverified"
   readonly health?: HealthResult
   readonly name: string
+  readonly description?: string
   readonly transport: "ssh"
   readonly connection: Connection
   readonly defaultDirectory?: string
@@ -250,6 +251,7 @@ export function make(options: {
         const fields = encode(target)
         const scalar = [
           "name",
+          "description",
           "transport",
           "defaultDirectory",
           "workspaceRoots",
@@ -435,6 +437,7 @@ function edit(text: string, jsonPath: readonly (string | number)[], value: unkno
 function encode(target: Definition) {
   return {
     name: target.name,
+    description: target.description,
     transport: target.transport,
     connection: target.connection,
     defaultDirectory: target.defaultDirectory,
@@ -484,6 +487,8 @@ function decodeTarget(prefix: string, value: unknown, diagnostics: Diagnostic[],
     return
   }
   const name = string(value.name, `${prefix}.name`, diagnostics)
+  const description =
+    value.description === undefined ? undefined : string(value.description, `${prefix}.description`, diagnostics)
   if (value.transport !== "ssh") diagnostics.push(error(`${prefix}.transport`, "Only ssh transport is supported"))
   const connection = decodeConnection(value.connection, `${prefix}.connection`, diagnostics)
   const roots = stringArray(value.workspaceRoots, `${prefix}.workspaceRoots`, diagnostics)
@@ -521,6 +526,7 @@ function decodeTarget(prefix: string, value: unknown, diagnostics: Diagnostic[],
     id,
     status: "unverified" as const,
     name,
+    description,
     transport: "ssh" as const,
     connection,
     defaultDirectory,
@@ -636,6 +642,7 @@ function allowedKeys(prefix: string) {
   if (/^\$\.targets\.[^.]+$/.test(prefix))
     return new Set([
       "name",
+      "description",
       "transport",
       "connection",
       "defaultDirectory",
@@ -700,16 +707,7 @@ function decodeLegacy(source: string, text: string): ImportPreview {
         path: `${prefix}.command`,
         message: "Legacy shell command was not imported; review and enter structured program/args explicitly",
       })
-    ;[
-      "description",
-      "home",
-      "platform",
-      "wslDistribution",
-      "wslUser",
-      "rootPolicy",
-      "capabilities",
-      "sshOptions",
-    ].forEach((key) => {
+    ;["home", "platform", "wslDistribution", "wslUser", "rootPolicy", "capabilities", "sshOptions"].forEach((key) => {
       if (item[key] !== undefined)
         diagnostics.push({
           severity: "warning",
@@ -718,11 +716,14 @@ function decodeLegacy(source: string, text: string): ImportPreview {
         })
     })
     if (!roots?.length || (connection.type === "manual" && !connection.user)) return []
+    const description =
+      item.description === undefined ? undefined : string(item.description, `${prefix}.description`, diagnostics)
     return [
       {
         id: Location.TargetID.make(randomUUID()),
         status: "unverified" as const,
         name,
+        description,
         transport: "ssh" as const,
         connection,
         defaultDirectory: typeof item.defaultCwd === "string" ? item.defaultCwd : undefined,

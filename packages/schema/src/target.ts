@@ -59,6 +59,9 @@ export const HealthResult = Schema.Union([
 
 export const Input = Schema.Struct({
   name: Schema.String,
+  // Target is an established undefined-preserving contract. Keep its existing
+  // encoding shape so this additive field does not change every generated Target type.
+  description: Schema.optional(Schema.String),
   transport: Schema.Literal("ssh"),
   connection: Connection,
   defaultDirectory: Schema.optional(Schema.String),

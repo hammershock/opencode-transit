@@ -9,6 +9,7 @@ export type Draft = {
   readonly id: Location.TargetID
   readonly mode: "create" | "edit" | "restore"
   readonly name?: string
+  readonly description?: string
   readonly connection?: TargetRegistry.Connection
   readonly workspaceRoots: readonly string[]
   readonly defaultDirectory?: string
@@ -44,6 +45,7 @@ export function edit(target: TargetRegistry.Definition): State {
       id: target.id,
       mode: "edit",
       name: target.name,
+      description: target.description,
       connection: target.connection,
       workspaceRoots: target.workspaceRoots,
       defaultDirectory: target.defaultDirectory,
@@ -87,6 +89,7 @@ export function input(state: State): TargetRegistry.Input | undefined {
   if (!state.draft.name || !state.draft.connection || !state.draft.workspaceRoots.length) return
   return {
     name: state.draft.name,
+    ...(state.draft.description ? { description: state.draft.description } : {}),
     transport: "ssh",
     connection: state.draft.connection,
     workspaceRoots: state.draft.workspaceRoots,
