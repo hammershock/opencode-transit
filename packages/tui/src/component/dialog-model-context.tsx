@@ -45,7 +45,7 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
     options.push({
       category: "Request",
       title: "model",
-      description: `${generation.model.providerID}/${generation.model.modelID}`,
+      description: `${generation.model.providerID}/${generation.model.id}`,
       value: { title: "Model", content: JSON.stringify(generation.model, null, 2) },
     })
   }

@@ -53,6 +53,7 @@ import { SystemContext } from "./system-context/index"
 import { SessionContextEpoch } from "./session/context-epoch"
 import { ModelContextAssembler } from "./model-context-assembler"
 import { RuntimeContext } from "./runtime-context"
+import { RuntimeContextBuiltIns } from "./runtime-context/builtins"
 import { SkillCatalogContextService } from "./skill/catalog-context-service"
 import { Skill } from "@opencode-ai/schema/skill"
 import { SkillSlashCompatibility } from "./skill/slash-compatibility"
@@ -182,7 +183,7 @@ export interface Interface {
   readonly modelContext: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<ModelContext.Generation | undefined, NotFoundError | ContextSnapshotDecodeError>
-  /** Inspect the per-turn prepared request parts at the Session Location: runtime parts, agent prompt, and model. */
+  /** Inspect the per-turn prepared request parts without resolving the Session Location: runtime parts, agent prompt, and model. */
   readonly requestContext: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<
@@ -191,7 +192,7 @@ export interface Interface {
       agentSystem: string | null
       model: ModelV2.Ref | null
     },
-    NotFoundError | OperationUnavailableError
+    NotFoundError
   >
   readonly applyInstructions: (
     sessionID: SessionSchema.ID,
@@ -878,27 +879,15 @@ const layer = Layer.effect(
       }),
       requestContext: Effect.fn("V2Session.requestContext")(function* (sessionID) {
         const session = yield* result.get(sessionID)
-        const attempt = yield* Effect.gen(function* () {
-          const location = yield* requireLocation(sessionID)
-          return yield* Effect.gen(function* () {
-            const agents = yield* AgentV2.Service
-            const runtime = yield* RuntimeContext.Service
-            const agent = yield* agents.select(session.agent)
-            return {
-              runtimeParts: yield* runtime.assemble(session.id, agent),
-              agentSystem: agent.info?.system ?? null,
-            }
-          }).pipe(Effect.provide(locations.get(location)))
-        }).pipe(Effect.exit)
-
-        if (Exit.isFailure(attempt)) {
-          yield* Effect.logWarning("Model context request inspection unavailable", {
-            sessionID,
-            cause: Cause.pretty(attempt.cause),
-          })
-          return { runtimeParts: [], agentSystem: null, model: session.model ?? null }
+        const guidance = yield* SessionSkillCatalog.guidance(db, sessionID)
+        return {
+          runtimeParts:
+            guidance && guidance.length > 0
+              ? [{ key: RuntimeContextBuiltIns.skillsPart.key, label: RuntimeContextBuiltIns.skillsPart.label, tag: RuntimeContextBuiltIns.skillsPart.tag, text: guidance }]
+              : [],
+          agentSystem: null,
+          model: session.model ?? null,
         }
-        return { ...attempt.value, model: session.model ?? null }
       }),
       applyInstructions: Effect.fn("V2Session.applyInstructions")((sessionID) =>
         activity.withExclusive(

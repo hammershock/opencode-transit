@@ -192,7 +192,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 }),
               ),
             ),
-            Effect.catchTag("Session.OperationUnavailableError", () => Effect.succeed(null)),
           )
           return {
             data:

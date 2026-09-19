@@ -11,7 +11,7 @@ export type ModelContextGeneration = Omit<import("@opencode-ai/sdk/v2").ModelCon
   skillGuidance?: string
   runtimeParts?: ReadonlyArray<{ key: string; label: string; tag: string; text: string }> | null
   agentSystem?: string | null
-  model?: { providerID: string; modelID: string } | null
+  model?: { id: string; providerID: string; variant?: string } | null
   subagentCatalog?: {
     revision: string
     activatedAt: string

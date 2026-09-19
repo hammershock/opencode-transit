@@ -6,15 +6,19 @@ import { makeLocationNode } from "../effect/app-node"
 import { SessionSkillCatalog } from "../session/skill-catalog"
 import { RuntimeContext } from "./index"
 
+export const skillsPart = {
+  key: "skills",
+  label: "Available skills",
+  tag: "<available_skills>",
+  order: 10,
+} as const
+
 const builtIns = Layer.effectDiscard(
   Effect.gen(function* () {
     const runtime = yield* RuntimeContext.Service
     const db = (yield* Database.Service).db
     yield* runtime.register({
-      key: "skills",
-      label: "Available skills",
-      tag: "<available_skills>",
-      order: 10,
+      ...skillsPart,
       enabled: () => true,
       render: (sessionID) => SessionSkillCatalog.guidance(db, sessionID),
     })
