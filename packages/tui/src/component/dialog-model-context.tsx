@@ -49,6 +49,18 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
       value: { title: "Model", content: JSON.stringify(generation.model, null, 2) },
     })
   }
+  if (generation.headers) {
+    const entries = Object.entries(generation.headers)
+    options.push({
+      category: "Request",
+      title: "headers",
+      description: `${entries.length} header${entries.length === 1 ? "" : "s"}`,
+      value: {
+        title: "Request headers",
+        content: entries.map(([name, value]) => `${name}: ${value}`).join("\n"),
+      },
+    })
+  }
   if (generation.agentSystem) {
     options.push({
       category: "Agent",
@@ -56,12 +68,22 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
       description: "base system prompt for the selected agent",
       value: { title: "Agent system prompt", content: generation.agentSystem },
     })
+  } else {
+    options.push({
+      category: "Agent",
+      title: "agent system prompt",
+      description: "not yet exposed",
+      value: {
+        title: "Agent system prompt",
+        content: "The agent base system prompt is not yet exposed for inspection.",
+      },
+    })
   }
 
   for (const [key, source] of Object.entries(generation.sources)) {
     if (key === "core/environment") {
       options.push({
-        category: "Environment",
+        category: "Durable",
         title: `${environment.targetName} · ${environment.targetKind}`,
         description: environment.directory,
         details: [`project ${environment.projectRoot}`],
@@ -77,7 +99,7 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
       for (const instruction of generation.instructions) {
         const detail = `${instruction.origin} · ${instruction.scope} · ${instruction.status}`
         options.push({
-          category: "Instructions",
+          category: "Durable",
           title: instruction.source,
           description: detail,
           details: instruction.declaredBy ? [`declared by ${instruction.declaredBy}`] : undefined,
@@ -97,7 +119,7 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
       continue
     }
     options.push({
-      category: "Context",
+      category: "Durable",
       title: key,
       description: source.refresh === "generation" ? "generation" : "dynamic",
       value: { title: key, content: source.baseline ?? JSON.stringify(source.value, null, 2) },
@@ -118,6 +140,21 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
       })
     }
   }
+  options.push({
+    category: "Tools",
+    title: "tool definitions",
+    description: "not yet exposed",
+    value: { title: "Tools", content: "Tool definitions are not yet exposed for inspection." },
+  })
+  options.push({
+    category: "Messages",
+    title: "chat history",
+    description: "deferred",
+    value: {
+      title: "Messages",
+      content: "Chat conversation is out of scope for now and reserved for future comprehensive inspection.",
+    },
+  })
   if (generation.subagentRefresh) {
     const catalog = generation.subagentCatalog
     options.push({

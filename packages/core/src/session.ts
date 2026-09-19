@@ -183,7 +183,7 @@ export interface Interface {
   readonly modelContext: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<ModelContext.Generation | undefined, NotFoundError | ContextSnapshotDecodeError>
-  /** Inspect the per-turn prepared request parts without resolving the Session Location: runtime parts, agent prompt, and model. */
+  /** Inspect the per-turn prepared request parts without resolving the Session Location: runtime parts, agent prompt, model, and request headers. */
   readonly requestContext: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<
@@ -191,6 +191,7 @@ export interface Interface {
       runtimeParts: ReadonlyArray<RuntimeContext.Rendered>
       agentSystem: string | null
       model: ModelV2.Ref | null
+      headers: Readonly<Record<string, string>>
     },
     NotFoundError
   >
@@ -887,6 +888,11 @@ const layer = Layer.effect(
               : [],
           agentSystem: null,
           model: session.model ?? null,
+          headers: {
+            "x-session-affinity": session.id,
+            "X-Session-Id": session.id,
+            ...(session.parentID ? { "x-parent-session-id": session.parentID } : {}),
+          },
         }
       }),
       applyInstructions: Effect.fn("V2Session.applyInstructions")((sessionID) =>

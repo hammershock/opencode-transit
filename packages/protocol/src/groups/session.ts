@@ -397,6 +397,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           ),
           agentSystem: Schema.NullOr(Schema.String),
           model: Schema.NullOr(Model.Ref),
+          headers: Schema.NullOr(Schema.Record(Schema.String, Schema.String)),
           subagentCatalog: Schema.optional(Schema.NullOr(SubagentEconomicsCatalog)),
           subagentGuidance: Schema.optional(Schema.NullOr(Schema.String)),
           subagentRefresh: Schema.optional(SubagentEconomicsRefresh),

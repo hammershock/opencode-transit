@@ -12,6 +12,7 @@ export type ModelContextGeneration = Omit<import("@opencode-ai/sdk/v2").ModelCon
   runtimeParts?: ReadonlyArray<{ key: string; label: string; tag: string; text: string }> | null
   agentSystem?: string | null
   model?: { id: string; providerID: string; variant?: string } | null
+  headers?: Readonly<Record<string, string>> | null
   subagentCatalog?: {
     revision: string
     activatedAt: string

@@ -965,6 +965,7 @@ export type SessionsModelContextOutput = {
   }> | null
   readonly agentSystem: string | null
   readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+  readonly headers: { readonly [x: string]: string } | null
   readonly subagentCatalog?: {
     readonly revision: string
     readonly activatedAt: string

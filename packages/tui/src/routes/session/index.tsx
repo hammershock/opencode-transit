@@ -732,6 +732,7 @@ export function Session() {
             runtimeParts: ModelContextGeneration["runtimeParts"] | null
             agentSystem: string | null
             model: { id: string; providerID: string; variant?: string } | null
+            headers: Readonly<Record<string, string>> | null
             subagentCatalog: ModelContextGeneration["subagentCatalog"] | null
             subagentGuidance: string | null
             subagentRefresh: ModelContextGeneration["subagentRefresh"]
@@ -744,6 +745,7 @@ export function Session() {
             ...(result.runtimeParts ? { runtimeParts: result.runtimeParts } : {}),
             ...(result.agentSystem ? { agentSystem: result.agentSystem } : {}),
             ...(result.model ? { model: result.model } : {}),
+            ...(result.headers ? { headers: result.headers } : {}),
             ...(result.subagentCatalog ? { subagentCatalog: result.subagentCatalog } : {}),
             ...(result.subagentGuidance ? { subagentGuidance: result.subagentGuidance } : {}),
             ...(result.subagentRefresh ? { subagentRefresh: result.subagentRefresh } : {}),
