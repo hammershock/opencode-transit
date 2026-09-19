@@ -158,9 +158,9 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
   if (generation.subagentRefresh) {
     const catalog = generation.subagentCatalog
     options.push({
-      category: "Subagents",
+      category: "SystemPrompt",
       title: "available_subagents",
-      description: `${generation.subagentRefresh.status} · ${catalog?.agents.length ?? 0} available · device-local`,
+      description: `runtime · device-local · ${generation.subagentRefresh.status} · ${catalog?.agents.length ?? 0} available`,
       details: [
         ...(catalog?.truncated ? ["renderer output truncated"] : []),
         ...generation.subagentRefresh.diagnostics,
@@ -178,9 +178,9 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
     for (const agent of catalog?.agents ?? []) {
       const benchmarks = agent.benchmarks.slice(0, 2)
       options.push({
-        category: "Subagents",
+        category: "SystemPrompt",
         title: agent.agent,
-        description: `${agent.model.providerID}/${agent.model.modelID}`,
+        description: `runtime · ${agent.model.providerID}/${agent.model.modelID}`,
         details: [
           `billing ${agent.billing.mode}${agent.billing.source ? ` · ${agent.billing.source}` : ""}`,
           agent.pricing.status === "available"
