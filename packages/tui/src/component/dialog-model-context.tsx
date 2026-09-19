@@ -63,16 +63,16 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
   }
   if (generation.agentSystem) {
     options.push({
-      category: "Agent",
+      category: "SystemPrompt",
       title: "agent system prompt",
-      description: "base system prompt for the selected agent",
+      description: "agent",
       value: { title: "Agent system prompt", content: generation.agentSystem },
     })
   } else {
     options.push({
-      category: "Agent",
+      category: "SystemPrompt",
       title: "agent system prompt",
-      description: "not yet exposed",
+      description: "agent · not yet exposed",
       value: {
         title: "Agent system prompt",
         content: "The agent base system prompt is not yet exposed for inspection.",
@@ -83,9 +83,9 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
   for (const [key, source] of Object.entries(generation.sources)) {
     if (key === "core/environment") {
       options.push({
-        category: "Durable",
+        category: "SystemPrompt",
         title: `${environment.targetName} · ${environment.targetKind}`,
-        description: environment.directory,
+        description: `durable · ${environment.directory}`,
         details: [`project ${environment.projectRoot}`],
         footer: `${environment.platform} · ${environment.vcs ?? "no vcs"}`,
         value: {
@@ -99,9 +99,9 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
       for (const instruction of generation.instructions) {
         const detail = `${instruction.origin} · ${instruction.scope} · ${instruction.status}`
         options.push({
-          category: "Durable",
+          category: "SystemPrompt",
           title: instruction.source,
-          description: detail,
+          description: `durable · ${detail}`,
           details: instruction.declaredBy ? [`declared by ${instruction.declaredBy}`] : undefined,
           footer:
             instruction.status === "ignored"
@@ -119,9 +119,9 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
       continue
     }
     options.push({
-      category: "Durable",
+      category: "SystemPrompt",
       title: key,
-      description: source.refresh === "generation" ? "generation" : "dynamic",
+      description: `durable · ${source.refresh === "generation" ? "generation" : "dynamic"}`,
       value: { title: key, content: source.baseline ?? JSON.stringify(source.value, null, 2) },
     })
   }
@@ -129,10 +129,10 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
     for (const part of generation.runtimeParts) {
       const description =
         part.key === "skills" && generation.skillCatalog
-          ? `${generation.skillCatalog.skills.length} available · runtime`
+          ? `runtime · ${generation.skillCatalog.skills.length} available`
           : "runtime"
       options.push({
-        category: "Runtime",
+        category: "SystemPrompt",
         title: part.label,
         description,
         footer: part.tag,
@@ -141,12 +141,6 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
     }
   }
   options.push({
-    category: "Tools",
-    title: "tool definitions",
-    description: "not yet exposed",
-    value: { title: "Tools", content: "Tool definitions are not yet exposed for inspection." },
-  })
-  options.push({
     category: "Messages",
     title: "chat history",
     description: "deferred",
@@ -154,6 +148,12 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
       title: "Messages",
       content: "Chat conversation is out of scope for now and reserved for future comprehensive inspection.",
     },
+  })
+  options.push({
+    category: "Tools",
+    title: "tool definitions",
+    description: "not yet exposed",
+    value: { title: "Tools", content: "Tool definitions are not yet exposed for inspection." },
   })
   if (generation.subagentRefresh) {
     const catalog = generation.subagentCatalog
