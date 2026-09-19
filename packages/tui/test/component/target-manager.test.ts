@@ -3,11 +3,49 @@ import {
   probeTargetHealth,
   targetHealthLabel,
   targetListPresentation,
+  targetManagementActions,
   targetProbeGenerations,
 } from "../../src/component/target-manager"
 import { targetDescription } from "../../src/component/target-wizard"
+import { targetInput } from "../../src/component/location-directory-workflow"
 
 describe("target health presentation", () => {
+  test("offers a direct description editor", () => {
+    expect(targetManagementActions.map((action) => action.title)).toEqual([
+      "Test connection",
+      "Edit target",
+      "Edit description",
+      "Remove target",
+    ])
+  })
+
+  test("preserves every target field while projecting a description update", () => {
+    const target = {
+      id: "target-1",
+      name: "a100-2gpu",
+      description: "Old description",
+      transport: "ssh" as const,
+      connection: { type: "manual" as const, host: "gpu.example", user: "hammer", port: 22 },
+      workspaceRoots: ["/home/hammer"],
+      defaultDirectory: "/home/hammer/project",
+      command: { program: "/opt/rexd", args: ["serve", "--stdio"] },
+      skillStagingRoot: "/home/hammer/.cache/opencode/skills",
+    }
+    expect(targetInput({ ...target, description: targetDescription("  New description  ").description })).toEqual({
+      name: "a100-2gpu",
+      description: "New description",
+      transport: "ssh",
+      connection: target.connection,
+      workspaceRoots: ["/home/hammer"],
+      defaultDirectory: "/home/hammer/project",
+      command: target.command,
+      skillStagingRoot: "/home/hammer/.cache/opencode/skills",
+    })
+    expect(targetInput({ ...target, description: targetDescription("   ").description })).not.toHaveProperty(
+      "description",
+    )
+  })
+
   test("shows a description while retaining the host in target details", () => {
     const target = {
       id: "target-1",

@@ -15,6 +15,7 @@ export type TargetDefinition = {
   defaultDirectory?: string
   transport: "ssh"
   command?: { program: string; args: string[] }
+  skillStagingRoot?: string
 }
 
 export type TargetInput = Omit<TargetDefinition, "id">
@@ -68,6 +69,7 @@ export async function targetWizard(
     workspaceRoots,
     ...(defaultDirectory ? { defaultDirectory } : {}),
     ...(current?.command ? { command: current.command } : {}),
+    ...(current?.skillStagingRoot ? { skillStagingRoot: current.skillStagingRoot } : {}),
   })
   const inspected = !services ? undefined : await services.inspect(draft(["/"]))
   const roots = await DialogPrompt.show(dialog, "Workspace root", {
@@ -110,6 +112,7 @@ export async function targetWizard(
     workspaceRoots,
     ...(defaultDirectory.trim() ? { defaultDirectory: defaultDirectory.trim() } : {}),
     ...(current?.command ? { command: current.command } : {}),
+    ...(current?.skillStagingRoot ? { skillStagingRoot: current.skillStagingRoot } : {}),
   }
 }
 
