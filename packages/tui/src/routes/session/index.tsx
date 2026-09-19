@@ -733,6 +733,7 @@ export function Session() {
             agentSystem: string | null
             model: { id: string; providerID: string; variant?: string } | null
             headers: Readonly<Record<string, string>> | null
+            compaction: { reason: "auto" | "manual"; summary: string; recent: string } | null
             subagentCatalog: ModelContextGeneration["subagentCatalog"] | null
             subagentGuidance: string | null
             subagentRefresh: ModelContextGeneration["subagentRefresh"]
@@ -746,6 +747,7 @@ export function Session() {
             ...(result.agentSystem ? { agentSystem: result.agentSystem } : {}),
             ...(result.model ? { model: result.model } : {}),
             ...(result.headers ? { headers: result.headers } : {}),
+            ...(result.compaction ? { compaction: result.compaction } : {}),
             ...(result.subagentCatalog ? { subagentCatalog: result.subagentCatalog } : {}),
             ...(result.subagentGuidance ? { subagentGuidance: result.subagentGuidance } : {}),
             ...(result.subagentRefresh ? { subagentRefresh: result.subagentRefresh } : {}),

@@ -13,6 +13,7 @@ export type ModelContextGeneration = Omit<import("@opencode-ai/sdk/v2").ModelCon
   agentSystem?: string | null
   model?: { id: string; providerID: string; variant?: string } | null
   headers?: Readonly<Record<string, string>> | null
+  compaction?: { reason: "auto" | "manual"; summary: string; recent: string } | null
   subagentCatalog?: {
     revision: string
     activatedAt: string

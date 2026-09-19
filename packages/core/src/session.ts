@@ -183,7 +183,7 @@ export interface Interface {
   readonly modelContext: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<ModelContext.Generation | undefined, NotFoundError | ContextSnapshotDecodeError>
-  /** Inspect the per-turn prepared request parts without resolving the Session Location: runtime parts, agent prompt, model, and request headers. */
+  /** Inspect the per-turn prepared request parts without resolving the Session Location: runtime parts, agent prompt, model, request headers, and the latest compaction checkpoint. */
   readonly requestContext: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<
@@ -192,6 +192,7 @@ export interface Interface {
       agentSystem: string | null
       model: ModelV2.Ref | null
       headers: Readonly<Record<string, string>>
+      compaction: { reason: "auto" | "manual"; summary: string; recent: string } | null
     },
     NotFoundError
   >
@@ -881,18 +882,52 @@ const layer = Layer.effect(
       requestContext: Effect.fn("V2Session.requestContext")(function* (sessionID) {
         const session = yield* result.get(sessionID)
         const guidance = yield* SessionSkillCatalog.guidance(db, sessionID)
+
+        const agentAttempt = yield* Effect.gen(function* () {
+          const location = yield* requireLocation(sessionID)
+          return yield* Effect.gen(function* () {
+            const agents = yield* AgentV2.Service
+            const agent = yield* agents.select(session.agent)
+            return agent.info?.system ?? null
+          }).pipe(Effect.provide(locations.get(location)))
+        }).pipe(Effect.exit)
+
+        const compactionRow = yield* db
+          .select({ id: SessionMessageTable.id, type: SessionMessageTable.type, data: SessionMessageTable.data })
+          .from(SessionMessageTable)
+          .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "compaction")))
+          .orderBy(desc(SessionMessageTable.seq))
+          .limit(1)
+          .get()
+          .pipe(Effect.orDie)
+        const compactionMessage = compactionRow
+          ? Schema.decodeUnknownOption(SessionMessage.Message)({
+              ...compactionRow.data,
+              id: compactionRow.id,
+              type: compactionRow.type,
+            }).valueOrUndefined
+          : undefined
+
         return {
           runtimeParts:
             guidance && guidance.length > 0
               ? [{ key: RuntimeContextBuiltIns.skillsPart.key, label: RuntimeContextBuiltIns.skillsPart.label, tag: RuntimeContextBuiltIns.skillsPart.tag, text: guidance }]
               : [],
-          agentSystem: null,
+          agentSystem: Exit.isSuccess(agentAttempt) ? agentAttempt.value : null,
           model: session.model ?? null,
           headers: {
             "x-session-affinity": session.id,
             "X-Session-Id": session.id,
             ...(session.parentID ? { "x-parent-session-id": session.parentID } : {}),
           },
+          compaction:
+            compactionMessage && compactionMessage.type === "compaction"
+              ? {
+                  reason: compactionMessage.reason,
+                  summary: compactionMessage.summary,
+                  recent: compactionMessage.recent,
+                }
+              : null,
         }
       }),
       applyInstructions: Effect.fn("V2Session.applyInstructions")((sessionID) =>

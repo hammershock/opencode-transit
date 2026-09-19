@@ -216,6 +216,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             agentSystem: requestContext?.agentSystem ?? null,
             model: requestContext?.model ?? null,
             headers: requestContext?.headers ?? null,
+            compaction: requestContext?.compaction ?? null,
             subagentCatalog: subagent?.subagentCatalog,
             subagentGuidance: subagent?.subagentGuidance,
             subagentRefresh: subagent?.subagentRefresh,
