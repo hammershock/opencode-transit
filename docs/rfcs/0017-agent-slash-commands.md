@@ -20,19 +20,19 @@ superseded-by: []
 
 ## 摘要与范围
 
-新增独立于 bash 的 `slash_command` 工具，供主 Agent 调用具有 Agent 访问资格的系统 slash command。命令按 User/Agent 分别配置访问性，Agent 入口只接受纯文本输入输出且不可触发 UI。首批开放 `/target list` 与 `/slash help`；所有 subagent 均不可使用该工具。启动上下文明确当前 OpenCode Transit execution target，可用时引导 Agent 加载普通 Transit 指南 Skill；target description 贯穿创建、编辑、查看和列表。
+新增独立于 bash 的 `slash_command` 工具，供主 Agent 调用具有 Agent 访问资格的系统 slash command。命令按 User/Agent 分别配置访问性，Agent 入口只接受纯文本输入输出且不可触发 UI。首批开放 `/target list` 与 `/slash help`；所有 subagent 均不可使用该工具。启动上下文明确当前 OpenCode Transit execution target，可用时引导 Agent 加载普通 Transit 指南 Skill。
 
 本 RFC 为 **Draft**，设计追踪见 [#464](https://github.com/hammershock/opencode-transit/issues/464)，PR 为 [#465](https://github.com/hammershock/opencode-transit/pull/465)。接受前不得开始运行时实现。
 
 这是可以独立交付和验收的命令渠道任务。Subagent 执行位置另见 RFC-0018（[#466](https://github.com/hammershock/opencode-transit/issues/466)）；RFC-0018 依赖本能力完成，本 RFC 不依赖选址能力。Task 参数、HOME 默认值、child Location 和 resume 均不在本任务范围内。
 
-非目标：父 Session 热切换、远端目录发现或任意远端命令执行工具、placement grant、资源调度、自动安装 Skill，以及开放其他 Agent slash command。
+Target description 已抽为独立的 RFC-0019（[#468](https://github.com/hammershock/opencode-transit/issues/468)），不再由本 RFC 接受或实现；本 RFC 的 `/target list` 与 environment guidance 将消费已实现的 description 字段。
 
-## 一、Target description 与文本列表
+非目标：Target description 数据链、父 Session 热切换、远端目录发现或任意远端命令执行工具、placement grant、资源调度、自动安装 Skill，以及开放其他 Agent slash command。
 
-Target Input/Definition 增加可选 `description: string`。旧配置缺失等价于空描述，不因读取而重写。创建/编辑向导提供描述字段，管理列表和详情可查看与编辑，Core CRUD/JSONC 持久化保留 revision 冲突处理。描述是设备本地用户维护的用途信息，不是命令或授权，不进入 target identity，也不通过 Session sync 复制 registry。
+## 一、Target 文本列表
 
-`/target list` 是独立的只读叶子命令，允许 `[User, Agent]`。输出使用固定文本表格或逐行记录，包含可由后续消费者使用的稳定 selector、显示名称、description，以及已有缓存状态（有则附时间，否则 unknown）。包含 local；local 行使用固定说明，本 RFC 不新增 local registry entry。
+`/target list` 是独立的只读叶子命令，允许 `[User, Agent]`。它消费 RFC-0019 已定义的 description 字段。输出使用固定文本表格或逐行记录，包含可由后续消费者使用的稳定 selector、显示名称、description，以及已有缓存状态（有则附时间，否则 unknown）。包含 local；local 行使用固定说明，本 RFC 不新增 local registry entry。
 
 ```text
 selector       name          description                   status
@@ -140,21 +140,21 @@ local 使用 `Target: local`。description 缺失或为空时完全省略该行�
 
 command-kit 保持 runtime-neutral，拥有 audience/help/parser/result 契约。Core 拥有 actor 校验和 headless dispatch；target list 消费 TargetRegistry 脱敏 projection。Server 必要时提供类型化 adapter，TUI 负责输入和展示；不能把 UI callback 搬到服务端模拟点击。
 
-本 RFC 扩展 RFC-0003 的 audience、帮助和受限 headless execution plane，保留 User resolver 和兼容来源行为。RFC-0002 增加 description 与只读文本列表。Environment guidance 采用 RFC-0012 已验证的 runtime startup-context 模式，但仍是独立 system part，不并入 `<available_skills>`。不改变 Session Location 或 RFC-0009 rebind。Target description 和 registry 留在设备本地。
+本 RFC 扩展 RFC-0003 的 audience、帮助和受限 headless execution plane，保留 User resolver 和兼容来源行为。`/target list` 与 environment guidance 消费 RFC-0019 的 description；本 RFC 不拥有该字段的数据链。Environment guidance 采用 RFC-0012 已验证的 runtime startup-context 模式，但仍是独立 system part，不并入 `<available_skills>`。不改变 Session Location 或 RFC-0009 rebind。Target registry 留在设备本地。
 
 本 RFC 对 RFC-0011 构成一项窄化修订：Location 与 instruction content 继续是 durable Session facts；只有 model-visible environment text 从 Context Epoch 拆为 runtime `environmentGuidance`。RFC-0011 中要求持久化、同步和从 frozen generation 预览 environment 的条款由 3.1 取代；instructions、context generation、refresh 与 sync 的其余契约不变。既有 durable environment 数据保持可解码但不再注入，迁移不得改写历史 Session event。
 
-旧 command 默认 User-only，无 description 的配置继续可读。unresolved Session 不能调用模型，也不能使用 legacy environment 冒充当前环境。公共 Protocol/HttpApi 的 `modelContext` response 增加 runtime `environmentGuidance` 并兼容读取旧 generation；必须从 packages/client 运行 `bun run generate`，不得手写生成代码或改变 legacy `session.command` 的 prompt 语义。
+旧 command 默认 User-only。unresolved Session 不能调用模型，也不能使用 legacy environment 冒充当前环境。公共 Protocol/HttpApi 的 `modelContext` response 增加 runtime `environmentGuidance` 并兼容读取旧 generation；必须从 packages/client 运行 `bun run generate`，不得手写生成代码或改变 legacy `session.command` 的 prompt 语义。
 
 ## 五、任务与依赖
 
-本能力由独立 issue、语义分支、worktree 和 PR 管理。实现包含 target description 全流程、audience/help、主 Session 工具、非交互执行与拒绝、TUI 卡片、`/target list`、现有 environment renderer 的 runtime 化、`/context` runtime preview、条件式 Skill 指引及普通 Skill 示例，形成一个可验收的结果。
+本能力由独立 issue、语义分支、worktree 和 PR 管理。实现包含 audience/help、主 Session 工具、非交互执行与拒绝、TUI 卡片、`/target list`、现有 environment renderer 的 runtime 化、`/context` runtime preview、条件式 Skill 指引及普通 Skill 示例，形成一个可验收的结果。它依赖 RFC-0019 的 Target description 实现先完成。
 
 交付顺序固定为：**Agent slash command（本 RFC / #464）完成 → subagent 执行位置（RFC-0018 / #466）开始实现**。两份设计可分别评审；本能力的验收不等待 Task 选址，选址不能因“用户可以直接提供 target”而跳过依赖。实现 issue 仍须在 RFC 接受后满足 Ready 条件。
 
 ## 六、验收与验证
 
-1. description 在创建、编辑、查看和 list 中一致；旧配置不因读取重写；list 无 SSH/目录调用及敏感字段。
+1. `/target list` 消费 RFC-0019 的 description，且无 SSH/目录调用及敏感字段。
 2. audience 四种组合、alias/shadow、disabled/readOnly/capability deny 使用同一 resolver，手输不可绕过。
 3. subagent 无工具定义且直接调用被拒绝；切换 Agent mode、恢复和间接调用不扩大权限。
 4. headless handler 无 UI 服务；缺参数/确认返回文本错误且无副作用；未适配 prompt/UI command 不执行。
@@ -168,9 +168,9 @@ command-kit 保持 runtime-neutral，拥有 audience/help/parser/result 契约�
 12. `environmentGuidance` 从当前解析后的 Location 与 device-local target description 动态构造，不写入 Session event/part、Context Epoch、export、sync 或 compaction；legacy environment 可解码但不进入新请求。
 13. `/context` 与其他 model-context 查看层返回并预览同一 renderer 的 `environmentGuidance`，标记 runtime；不复制格式或用旧 generation 覆盖。
 
-文档阶段检查格式、链接、示例和一致性。实现涉及权限、工具入口与 Session context persistence 边界，不能使用 focused fast path；需要 command-kit/Core 的 parser/actor/policy contract tests、environment renderer/provider lowering tests、旧 context event migration与 sync exclusion tests、`/context` inspector tests、隔离配置中的 description CRUD integration tests、受影响包内 `bun typecheck`、client generation 和精确提交的 clean Mac build。
+文档阶段检查格式、链接、示例和一致性。实现涉及权限、工具入口与 Session context persistence 边界，不能使用 focused fast path；需要 command-kit/Core 的 parser/actor/policy contract tests、environment renderer/provider lowering tests、旧 context event migration与 sync exclusion tests、`/context` inspector tests、受影响包内 `bun typecheck`、client generation 和精确提交的 clean Mac build。
 
-Mac 实测 target 描述创建/编辑、User 命令入口、主 Agent 的 list/help 文本调用与 subagent 拒绝，提供卡片、表单和 `/context` Environment preview 截图。分别以 local 与已有 Rexd Session 对照现有格式，覆盖有/无 description 和 Skill 指引，并确认 raw Session/export/sync payload 不新增 runtime environment。列表禁止远端 I/O 用 adapter 测试验证；本任务不要求跨 target child 执行。修改 Windows 平台路径或存储行为时追加相应证据，不声称未测平台通过。
+Mac 实测 User 命令入口、主 Agent 的 list/help 文本调用与 subagent 拒绝，提供卡片和 `/context` Environment preview 截图。分别以 local 与已有 Rexd Session 对照现有格式，覆盖有/无 description 和 Skill 指引，并确认 raw Session/export/sync payload 不新增 runtime environment。列表禁止远端 I/O 用 adapter 测试验证；本任务不要求跨 target child 执行。修改 Windows 平台路径或存储行为时追加相应证据，不声称未测平台通过。
 
 ## 七、供评审确认的细节
 
