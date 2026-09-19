@@ -2,6 +2,8 @@
 
 RFC（Request for Comments）用于记录本 fork 中影响多个模块或核心行为的设计决策。
 
+新增或修订 RFC 时，遵循[设计宣言](../design-manifesto.zh.md)（[英文规范版](../design-manifesto.md)）及[开发工作流中的设计评审要求](../development-workflow.md#applying-the-design-manifesto)，在现有动机、契约和验收章节中说明适用的取舍。宣言指导长期方向；具体行为仍由已接受的 RFC 定义，不能把尚未实现的原则当作现有能力或操作授权。
+
 | ID                                           | 标题                                   | 状态     |
 | -------------------------------------------- | -------------------------------------- | -------- |
 | [0001](0001-shell-execution-scope.md)        | Execution Scope Model                  | Accepted |

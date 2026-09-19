@@ -8,6 +8,8 @@ Closes #
 
 <!-- Note important compatibility, security, migration, and deliberately unchanged behavior. -->
 
+<!-- Apply docs/design-manifesto.md and docs/development-workflow.md#applying-the-design-manifesto where relevant: shared-state scope and authorization, execution/identity consistency, persistence, and application/failure semantics. Explain material tradeoffs here and evidence below; small changes do not need a separate manifesto report. -->
+
 ## Verification
 
 <!-- List exact commands and results. Do not include secrets or private machine/account data. -->

@@ -8,6 +8,8 @@ User-facing README, contribution, security, release and visual documentation fol
 
 ## Principles
 
+The [design manifesto](design-manifesto.md) ([简体中文](design-manifesto.zh.md)) supplies the fork's standing product direction. Apply it through the design review below; accepted RFCs remain the source of truth for concrete contracts.
+
 1. Plan by behavior and contract, not by package or developer.
 2. One task has one reviewable outcome, one owner at a time, one branch, one worktree, and one PR.
 3. Accepted RFCs define product and architecture decisions. Tasks may refine implementation details but cannot silently change an RFC decision.
@@ -19,14 +21,30 @@ User-facing README, contribution, security, release and visual documentation fol
 
 Use these artifacts for distinct purposes:
 
-| Artifact            | Owns                                                                        | Does not own                               |
-| ------------------- | --------------------------------------------------------------------------- | ------------------------------------------ |
-| RFC in `docs/rfcs`  | Accepted behavior, boundaries, risks, compatibility and acceptance criteria | Daily progress or implementation ownership |
-| GitHub issue        | One task contract, owner, dependencies, status and handoff notes            | Long-lived architecture decisions          |
-| Branch and worktree | Isolated implementation for exactly one issue                               | Planning for unrelated work                |
-| Pull request        | Review, verification evidence and integration into `dev`                    | Unapproved product decisions               |
+| Artifact            | Owns                                                                        | Does not own                                               |
+| ------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Design manifesto    | Long-term design principles and maintenance priorities                      | Runtime permissions, shipped feature claims or task status |
+| RFC in `docs/rfcs`  | Accepted behavior, boundaries, risks, compatibility and acceptance criteria | Daily progress or implementation ownership                 |
+| GitHub issue        | One task contract, owner, dependencies, status and handoff notes            | Long-lived architecture decisions                          |
+| Branch and worktree | Isolated implementation for exactly one issue                               | Planning for unrelated work                                |
+| Pull request        | Review, verification evidence and integration into `dev`                    | Unapproved product decisions                               |
 
 Do not create a second task tracker in repository Markdown. GitHub issues are the live task queue; RFCs and merged PRs are the durable record. A PR must close exactly one primary issue. It may reference related issues without closing them.
+
+## Applying the design manifesto
+
+Use the manifesto when writing or amending an RFC, making an issue Ready, and reviewing a PR. Address applicable questions in the existing motivation, contract, acceptance, and review sections; do not create a separate report for every change.
+
+- **Workflow value:** What repeated setup, explanation, debugging, or handoff does this improve? Can the user inspect, reproduce, and take over the operation?
+- **Scope and authority:** What is Session-local, Location-scoped, or shared beyond a Location? Distinguish use from mutation and temporary overrides from persistent defaults. For shared configuration or instruction changes, define explicit authorization and proactive proposal behavior.
+- **Execution and identity:** Which execution paths consume the state? Explain relevant tool/terminal differences, identity selection, and boundaries without claiming security isolation or resource reservation that the mechanism does not provide.
+- **Persistence and portability:** Which artifact owns each fact? Keep local paths and credentials out of public artifacts; identify precedence and the effective non-sensitive configuration needed for reproduction.
+- **Application and recovery:** Distinguish edited, applied, and verified state. Define future-process effects, stale consumers, restart requirements, and failure behavior where relevant.
+- **Evidence and complexity:** Specify a real workflow acceptance scenario and why the design reduces total complexity. Reuse existing contracts and preserve manageable upstream integration.
+
+Small fixes and documentation maintenance only need the relevant considerations. These questions refine existing task and verification requirements rather than requiring unrelated features or extra approval for ordinary task-local work.
+
+If a principle reveals a missing or conflicting product decision, resolve it through the RFC process before implementing that behavior. The manifesto does not silently revise accepted RFCs or authorize proposed environment tools, interpolation, initialization hooks, or virtual-environment policies.
 
 ## Task types
 
@@ -44,6 +62,7 @@ Do not create tasks such as “implement RFC-0002” when the RFC crosses severa
 An implementation issue is **Ready** only when it contains:
 
 - a short outcome stated in observable terms;
+- applicable manifesto tradeoffs captured in the contract and acceptance checks below;
 - the governing RFC and exact section, or `Not RFC-governed` with a reason;
 - in-scope and out-of-scope behavior;
 - dependencies expressed as issue links;
@@ -209,6 +228,7 @@ Delete the local branch only after the merge is verified and no worktree uses it
 A task is **Done** only when:
 
 - every acceptance check in the issue is satisfied;
+- applicable manifesto questions have been resolved in the RFC, task contract, or PR review, with intended capabilities distinguished from verified behavior;
 - verification selected under `docs/testing-workflow.md` passes: focused tests alone may complete a narrow low-risk change, while broader package, typecheck, contract, integration, or device checks remain required when its affected boundary or risk calls for them;
 - compatibility/failure-path tests required by the RFC pass;
 - when required by the selected risk tier, relevant Mac acceptance and additional device scenarios pass under the exact built commit, or the maintainer explicitly records a scoped deferral; optional and intentionally skipped coverage is disclosed without being reported as passing;
