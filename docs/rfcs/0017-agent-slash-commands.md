@@ -120,7 +120,7 @@ CommandTextResult {
 Execution harness: OpenCode Transit (opencode-transit)
 <environment>
   Target: a100-2gpu
-  Description: Huawei Modelart 2A100-gpu server
+  description: Huawei Modelart 2A100-gpu server
   Working directory: /home/ma-user/workspace/hanmo/research_template
   Project root: /home/ma-user/workspace/hanmo/research_template
   VCS: git
