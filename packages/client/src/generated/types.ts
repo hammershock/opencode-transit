@@ -4679,6 +4679,7 @@ export type TargetsListOutput = {
         }
       | undefined
     readonly name: string
+    readonly description?: string | undefined
     readonly transport: "ssh"
     readonly connection:
       | { readonly type: "ssh-config"; readonly host: string }
@@ -4735,6 +4736,7 @@ export type TargetsResolveSessionOutput =
             }
           | null
         readonly name: string
+        readonly description?: string | null
         readonly transport: "ssh"
         readonly connection:
           | { readonly type: "ssh-config"; readonly host: string }
@@ -4798,6 +4800,7 @@ export type TargetsResolveSessionOutput =
             }
           | null
         readonly name: string
+        readonly description?: string | null
         readonly transport: "ssh"
         readonly connection:
           | { readonly type: "ssh-config"; readonly host: string }
@@ -4898,6 +4901,7 @@ export type TargetsInspectInput = {
   readonly input: {
     readonly input: {
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -4922,6 +4926,7 @@ export type TargetsCompleteInput = {
   readonly input: {
     readonly input: {
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -4944,6 +4949,7 @@ export type TargetsCompleteInput = {
   readonly value: {
     readonly input: {
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -4966,6 +4972,7 @@ export type TargetsCompleteInput = {
   readonly cursor: {
     readonly input: {
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -4988,6 +4995,7 @@ export type TargetsCompleteInput = {
   readonly cwd: {
     readonly input: {
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -5019,6 +5027,7 @@ export type TargetsCreateInput = {
   readonly input: {
     readonly input: {
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -5039,6 +5048,7 @@ export type TargetsCreateInput = {
   readonly expectedRevision: {
     readonly input: {
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -5078,6 +5088,7 @@ export type TargetsCreateOutput = {
         }
       | undefined
     readonly name: string
+    readonly description?: string | undefined
     readonly transport: "ssh"
     readonly connection:
       | { readonly type: "ssh-config"; readonly host: string }
@@ -5117,6 +5128,7 @@ export type TargetsCreateOutput = {
           }
         | undefined
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -5147,6 +5159,7 @@ export type TargetsUpdateInput = {
   readonly input: {
     readonly input: {
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -5167,6 +5180,7 @@ export type TargetsUpdateInput = {
   readonly expectedRevision: {
     readonly input: {
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -5206,6 +5220,7 @@ export type TargetsUpdateOutput = {
         }
       | undefined
     readonly name: string
+    readonly description?: string | undefined
     readonly transport: "ssh"
     readonly connection:
       | { readonly type: "ssh-config"; readonly host: string }
@@ -5245,6 +5260,7 @@ export type TargetsUpdateOutput = {
           }
         | undefined
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -5297,6 +5313,7 @@ export type TargetsRemoveOutput = {
         }
       | undefined
     readonly name: string
+    readonly description?: string | undefined
     readonly transport: "ssh"
     readonly connection:
       | { readonly type: "ssh-config"; readonly host: string }
@@ -5326,6 +5343,7 @@ export type TargetsRestoreInput = {
   readonly input: {
     readonly input: {
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -5347,6 +5365,7 @@ export type TargetsRestoreInput = {
   readonly referencedSessionIDs: {
     readonly input: {
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -5368,6 +5387,7 @@ export type TargetsRestoreInput = {
   readonly expectedRevision: {
     readonly input: {
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -5408,6 +5428,7 @@ export type TargetsRestoreOutput = {
         }
       | undefined
     readonly name: string
+    readonly description?: string | undefined
     readonly transport: "ssh"
     readonly connection:
       | { readonly type: "ssh-config"; readonly host: string }
@@ -5447,6 +5468,7 @@ export type TargetsRestoreOutput = {
           }
         | undefined
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }
@@ -5547,6 +5569,7 @@ export type TargetsPreviewLegacyImportOutput = {
         }
       | undefined
     readonly name: string
+    readonly description?: string | undefined
     readonly transport: "ssh"
     readonly connection:
       | { readonly type: "ssh-config"; readonly host: string }
@@ -5595,6 +5618,7 @@ export type TargetsImportLegacyOutput = {
         }
       | undefined
     readonly name: string
+    readonly description?: string | undefined
     readonly transport: "ssh"
     readonly connection:
       | { readonly type: "ssh-config"; readonly host: string }
@@ -5634,6 +5658,7 @@ export type TargetsImportLegacyOutput = {
           }
         | undefined
       readonly name: string
+      readonly description?: string | undefined
       readonly transport: "ssh"
       readonly connection:
         | { readonly type: "ssh-config"; readonly host: string }

@@ -7,6 +7,7 @@ import { useTheme } from "../context/theme"
 export type TargetDefinition = {
   id: string
   name: string
+  description?: string
   connection:
     | { type: "ssh-config"; host: string }
     | { type: "manual"; host: string; user: string; port: number; identityFile?: string }
@@ -17,6 +18,10 @@ export type TargetDefinition = {
 }
 
 export type TargetInput = Omit<TargetDefinition, "id">
+
+export function targetDescription(value: string) {
+  return value.trim() ? { description: value.trim() } : {}
+}
 
 type WizardServices = {
   inspect: (input: TargetInput) => Promise<{ home: string } | undefined>
@@ -38,6 +43,11 @@ export async function targetWizard(
     placeholder: "gpu-server",
   })
   if (!name?.trim()) return
+  const description = await DialogPrompt.show(dialog, "Description (optional)", {
+    value: current?.description,
+    placeholder: "Huawei ModelArts 2×A100 GPU server",
+  })
+  if (description === null) return
   const mode = await select(dialog, "SSH connection", [
     { title: "SSH Config host alias", value: "ssh-config" as const },
     { title: "Manual host, user and port", value: "manual" as const },
@@ -52,6 +62,7 @@ export async function targetWizard(
   if (!connection) return
   const draft = (workspaceRoots: string[], defaultDirectory?: string): TargetInput => ({
     name: name.trim(),
+    ...targetDescription(description),
     transport: "ssh",
     connection,
     workspaceRoots,
@@ -93,6 +104,7 @@ export async function targetWizard(
   if (!hostKey) return
   return {
     name: name.trim(),
+    ...targetDescription(description),
     transport: "ssh",
     connection,
     workspaceRoots,

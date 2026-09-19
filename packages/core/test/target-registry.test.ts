@@ -49,9 +49,14 @@ describe("TargetRegistry", () => {
     expect(initial.valid).toBe(true)
     expect(initial.diagnostics).toContainEqual(expect.objectContaining({ path: "$.future", severity: "warning" }))
 
-    const created = await registry.create(manual("gpu"), initial.revision)
+    const created = await registry.create(
+      { ...manual("gpu"), description: "Huawei ModelArts 2×A100 GPU server" },
+      initial.revision,
+    )
     expect(created.target.id).toMatch(/^[0-9a-f-]{36}$/)
     expect(created.target.status).toBe("unverified")
+    expect(created.target.description).toBe("Huawei ModelArts 2×A100 GPU server")
+    expect((await registry.load()).targets[0]?.description).toBe("Huawei ModelArts 2×A100 GPU server")
     expect(await fs.readFile(file, "utf8")).toContain("// owned by the user")
     expect(await fs.readFile(file, "utf8")).toContain('"future": true')
     expect((await fs.stat(file)).mode & 0o777).toBe(0o640)
@@ -59,6 +64,31 @@ describe("TargetRegistry", () => {
     const renamed = await registry.update(created.target.id, manual("gpu-renamed"), created.snapshot.revision)
     expect(renamed.target.id).toBe(created.target.id)
     expect(renamed.snapshot.targets[0]?.name).toBe("gpu-renamed")
+    expect(renamed.snapshot.targets[0]?.description).toBeUndefined()
+    expect(await fs.readFile(file, "utf8")).not.toContain('"description"')
+  })
+
+  test("loads an old registry without rewriting it", async () => {
+    await using root = await tmpdir()
+    const file = path.join(root.path, "targets.jsonc")
+    const id = "9a858c60-01c7-4a3d-a137-f5df09560d42"
+    const original = `{
+  // description predates this optional field
+  "version": 1,
+  "targets": {
+    "${id}": {
+      "name": "gpu",
+      "transport": "ssh",
+      "connection": { "type": "ssh-config", "host": "gpu" },
+      "workspaceRoots": ["/"]
+    }
+  }
+}\n`
+    await fs.writeFile(file, original)
+    const snapshot = await TargetRegistry.make({ directory: root.path }).load()
+    expect(snapshot.valid).toBe(true)
+    expect(snapshot.targets[0]?.description).toBeUndefined()
+    expect(await fs.readFile(file, "utf8")).toBe(original)
   })
 
   test("preserves nested future fields and comments while updating a connection", async () => {
@@ -291,6 +321,7 @@ describe("TargetRegistry", () => {
         gpu: {
           transport: "ssh",
           host: "gpu-alias",
+          description: "Imported GPU server",
           defaultCwd: "/data/project",
           workspaceRoots: ["/data"],
           command: "rexd serve --stdio",
@@ -302,9 +333,11 @@ describe("TargetRegistry", () => {
     const preview = await registry.previewLegacyImport()
     expect(preview.candidates).toHaveLength(1)
     expect(preview.candidates[0]?.connection).toEqual({ type: "ssh-config", host: "gpu-alias" })
+    expect(preview.candidates[0]?.description).toBe("Imported GPU server")
     expect(preview.diagnostics).toContainEqual(expect.objectContaining({ path: "$.targets.gpu.command" }))
     const imported = await registry.importLegacy(preview.sourceRevision, (await registry.load()).revision)
     expect(imported.snapshot.targets[0]?.name).toBe("gpu")
+    expect(imported.snapshot.targets[0]?.description).toBe("Imported GPU server")
     expect(await fs.readFile(legacy, "utf8")).toBe(original)
   })
 
@@ -325,7 +358,9 @@ describe("TargetWizard", () => {
   test("models create steps, immutable identity, host-key acknowledgement, and unverified save", () => {
     const started = TargetWizard.create()
     const id = started.draft.id
-    const named = TargetWizard.next(TargetWizard.update(started, { name: "gpu" }))
+    const named = TargetWizard.next(
+      TargetWizard.update(started, { name: "gpu", description: "Huawei ModelArts 2×A100 GPU server" }),
+    )
     expect(named.step).toBe("connection")
     const connected = TargetWizard.next(
       TargetWizard.update(named, { connection: { type: "ssh-config", host: "gpu-alias" } }),
@@ -345,11 +380,19 @@ describe("TargetWizard", () => {
     expect(reviewed.step).toBe("review")
     expect(reviewed.draft.id).toBe(id)
     expect(TargetWizard.input(reviewed)?.name).toBe("gpu")
+    expect(TargetWizard.input(reviewed)?.description).toBe("Huawei ModelArts 2×A100 GPU server")
     expect(TargetWizard.confirmUnverified(reviewed)).toBe(reviewed)
   })
 
   test("edit retains target identity", () => {
     const id = Location.TargetID.make("bbbf7f19-ab10-4f5d-94ab-fd9225b8f3e9")
-    expect(TargetWizard.edit({ id, status: "unverified", ...manual("gpu") }).draft.id).toBe(id)
+    const edited = TargetWizard.edit({
+      id,
+      status: "unverified",
+      ...manual("gpu"),
+      description: "GPU experiments",
+    })
+    expect(edited.draft.id).toBe(id)
+    expect(edited.draft.description).toBe("GPU experiments")
   })
 })
