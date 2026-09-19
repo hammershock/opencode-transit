@@ -729,6 +729,9 @@ export function Session() {
             data: ModelContextGeneration | null
             skillCatalog: ModelContextGeneration["skillCatalog"] | null
             skillGuidance: string | null
+            runtimeParts: ModelContextGeneration["runtimeParts"] | null
+            agentSystem: string | null
+            model: { providerID: string; modelID: string } | null
             subagentCatalog: ModelContextGeneration["subagentCatalog"] | null
             subagentGuidance: string | null
             subagentRefresh: ModelContextGeneration["subagentRefresh"]
@@ -738,6 +741,9 @@ export function Session() {
             ...result.data,
             ...(result.skillCatalog ? { skillCatalog: result.skillCatalog } : {}),
             ...(result.skillGuidance ? { skillGuidance: result.skillGuidance } : {}),
+            ...(result.runtimeParts ? { runtimeParts: result.runtimeParts } : {}),
+            ...(result.agentSystem ? { agentSystem: result.agentSystem } : {}),
+            ...(result.model ? { model: result.model } : {}),
             ...(result.subagentCatalog ? { subagentCatalog: result.subagentCatalog } : {}),
             ...(result.subagentGuidance ? { subagentGuidance: result.subagentGuidance } : {}),
             ...(result.subagentRefresh ? { subagentRefresh: result.subagentRefresh } : {}),

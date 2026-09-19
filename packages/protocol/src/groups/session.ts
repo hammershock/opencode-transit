@@ -385,6 +385,18 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           data: Schema.NullOr(ModelContext.Generation),
           skillCatalog: Schema.NullOr(Skill.AdmittedCatalog),
           skillGuidance: Schema.NullOr(Schema.String),
+          runtimeParts: Schema.NullOr(
+            Schema.Array(
+              Schema.Struct({
+                key: Schema.String,
+                label: Schema.String,
+                tag: Schema.String,
+                text: Schema.String,
+              }),
+            ),
+          ),
+          agentSystem: Schema.NullOr(Schema.String),
+          model: Schema.NullOr(Model.Ref),
           subagentCatalog: Schema.optional(Schema.NullOr(SubagentEconomicsCatalog)),
           subagentGuidance: Schema.optional(Schema.NullOr(Schema.String)),
           subagentRefresh: Schema.optional(SubagentEconomicsRefresh),

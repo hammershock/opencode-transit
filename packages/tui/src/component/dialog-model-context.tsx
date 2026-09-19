@@ -41,6 +41,23 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
   const environment = generation.environment
   const options: DialogSelectOption<Preview>[] = []
 
+  if (generation.model) {
+    options.push({
+      category: "Request",
+      title: "model",
+      description: `${generation.model.providerID}/${generation.model.modelID}`,
+      value: { title: "Model", content: JSON.stringify(generation.model, null, 2) },
+    })
+  }
+  if (generation.agentSystem) {
+    options.push({
+      category: "Agent",
+      title: "agent system prompt",
+      description: "base system prompt for the selected agent",
+      value: { title: "Agent system prompt", content: generation.agentSystem },
+    })
+  }
+
   for (const [key, source] of Object.entries(generation.sources)) {
     if (key === "core/environment") {
       options.push({
@@ -86,14 +103,20 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
       value: { title: key, content: source.baseline ?? JSON.stringify(source.value, null, 2) },
     })
   }
-  if (generation.skillGuidance) {
-    options.push({
-      category: "Skills",
-      title: "available_skills",
-      description: `${generation.skillCatalog?.skills.length ?? 0} available · controller-local`,
-      footer: generation.skillCatalog?.digest.slice(0, 12),
-      value: { title: "Available skills", content: generation.skillGuidance },
-    })
+  if (generation.runtimeParts) {
+    for (const part of generation.runtimeParts) {
+      const description =
+        part.key === "skills" && generation.skillCatalog
+          ? `${generation.skillCatalog.skills.length} available · runtime`
+          : "runtime"
+      options.push({
+        category: "Runtime",
+        title: part.label,
+        description,
+        footer: part.tag,
+        value: { title: part.label, content: part.text },
+      })
+    }
   }
   if (generation.subagentRefresh) {
     const catalog = generation.subagentCatalog

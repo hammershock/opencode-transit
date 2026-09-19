@@ -183,6 +183,17 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               ),
             ),
           )
+          const requestContext = yield* session.requestContext(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) =>
+              Effect.fail(
+                new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                }),
+              ),
+            ),
+            Effect.catchTag("Session.OperationUnavailableError", () => Effect.succeed(null)),
+          )
           return {
             data:
               (yield* session.modelContext(ctx.params.sessionID).pipe(
@@ -202,6 +213,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               )) ?? null,
             skillCatalog: skillView?.catalog ?? null,
             skillGuidance: skillView?.guidance ?? null,
+            runtimeParts: requestContext?.runtimeParts ?? null,
+            agentSystem: requestContext?.agentSystem ?? null,
+            model: requestContext?.model ?? null,
             subagentCatalog: subagent?.subagentCatalog,
             subagentGuidance: subagent?.subagentGuidance,
             subagentRefresh: subagent?.subagentRefresh,

@@ -52,6 +52,7 @@ import { SessionLocationRuntime } from "./session/location-runtime"
 import { SystemContext } from "./system-context/index"
 import { SessionContextEpoch } from "./session/context-epoch"
 import { ModelContextAssembler } from "./model-context-assembler"
+import { RuntimeContext } from "./runtime-context"
 import { SkillCatalogContextService } from "./skill/catalog-context-service"
 import { Skill } from "@opencode-ai/schema/skill"
 import { SkillSlashCompatibility } from "./skill/slash-compatibility"
@@ -181,6 +182,17 @@ export interface Interface {
   readonly modelContext: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<ModelContext.Generation | undefined, NotFoundError | ContextSnapshotDecodeError>
+  /** Inspect the per-turn prepared request parts at the Session Location: runtime parts, agent prompt, and model. */
+  readonly requestContext: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<
+    {
+      runtimeParts: ReadonlyArray<RuntimeContext.Rendered>
+      agentSystem: string | null
+      model: ModelV2.Ref | null
+    },
+    NotFoundError | OperationUnavailableError
+  >
   readonly applyInstructions: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<
@@ -863,6 +875,20 @@ const layer = Layer.effect(
       modelContext: Effect.fn("V2Session.modelContext")(function* (sessionID) {
         yield* result.get(sessionID)
         return yield* SessionContextEpoch.inspect(db, sessionID)
+      }),
+      requestContext: Effect.fn("V2Session.requestContext")(function* (sessionID) {
+        const session = yield* result.get(sessionID)
+        const location = yield* requireLocation(sessionID)
+        return yield* Effect.gen(function* () {
+          const agents = yield* AgentV2.Service
+          const runtime = yield* RuntimeContext.Service
+          const agent = yield* agents.select(session.agent)
+          return {
+            runtimeParts: yield* runtime.assemble(session.id, agent),
+            agentSystem: agent.info?.system ?? null,
+            model: session.model ?? null,
+          }
+        }).pipe(Effect.provide(locations.get(location)))
       }),
       applyInstructions: Effect.fn("V2Session.applyInstructions")((sessionID) =>
         activity.withExclusive(

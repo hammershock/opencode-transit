@@ -957,6 +957,14 @@ export type SessionsModelContextOutput = {
     readonly digest: string
   } | null
   readonly skillGuidance: string | null
+  readonly runtimeParts: ReadonlyArray<{
+    readonly key: string
+    readonly label: string
+    readonly tag: string
+    readonly text: string
+  }> | null
+  readonly agentSystem: string | null
+  readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
   readonly subagentCatalog?: {
     readonly revision: string
     readonly activatedAt: string
