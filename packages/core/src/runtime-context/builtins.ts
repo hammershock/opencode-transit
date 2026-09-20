@@ -1,14 +1,13 @@
 export * as RuntimeContextBuiltIns from "./builtins"
 
-import { DateTime, Effect, Exit, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import { ModelContext } from "@opencode-ai/schema/model-context"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
+import { InstructionContext, render } from "../instruction-context"
 import { Location } from "../location"
-import { ModelContextAssembler } from "../model-context-assembler"
 import { Reference } from "../reference"
 import { SessionSkillCatalog } from "../session/skill-catalog"
-import { SystemContext } from "../system-context/index"
 import { RuntimeContext } from "./index"
 
 export const skillsPart = {
@@ -23,7 +22,7 @@ const builtIns = Layer.effectDiscard(
     const runtime = yield* RuntimeContext.Service
     const db = (yield* Database.Service).db
     const location = yield* Location.Service
-    const assembler = yield* ModelContextAssembler.Service
+    const instructions = yield* InstructionContext.Service
     const references = yield* Reference.Service
 
     yield* runtime.register({
@@ -60,9 +59,8 @@ const builtIns = Layer.effectDiscard(
       enabled: () => true,
       render: () =>
         Effect.gen(function* () {
-          const attempt = yield* SystemContext.initialize(yield* assembler.load()).pipe(Effect.exit)
-          if (Exit.isFailure(attempt)) return undefined
-          return attempt.value.snapshot[SystemContext.Key.make("core/instructions")]?.baseline
+          const text = render(yield* instructions.list())
+          return text.length > 0 ? text : undefined
         }),
     })
 
@@ -98,7 +96,7 @@ const builtIns = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "runtime-context-builtins",
   layer: builtIns,
-  deps: [Database.node, Location.node, ModelContextAssembler.node, Reference.node, RuntimeContext.node],
+  deps: [Database.node, Location.node, InstructionContext.node, Reference.node, RuntimeContext.node],
 })
 
 function buildEnvironment(location: Location.Interface) {

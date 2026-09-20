@@ -228,6 +228,8 @@ const referenceGuidance = Layer.mock(ReferenceGuidance.Service, { load: () => Ef
 const instructionContext = Layer.mock(InstructionContext.Service, {
   extend: () => Effect.void,
   reload: () => Effect.void,
+  list: () => Effect.succeed(ModelContext.Instructions.make([])),
+  prepareApply: () => Effect.die("unused"),
 })
 const testDirectory = AbsolutePath.make(process.cwd())
 const movedDirectory = AbsolutePath.make(`${process.cwd()}/test`)

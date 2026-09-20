@@ -43,6 +43,8 @@ export interface Interface {
   readonly reload: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   /** Prepare one strict replacement for an explicit current-Session instruction application. */
   readonly prepareApply: (sessionID: SessionSchema.ID) => Effect.Effect<ModelContext.Generation, ApplyError>
+  /** Observe the current full instruction chain for this Location. */
+  readonly list: () => Effect.Effect<ModelContext.Instructions>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/InstructionContext") {}
@@ -617,7 +619,7 @@ const layer = Layer.effect(
     const prepareApply = (sessionID: SessionSchema.ID) =>
       locks.withLock(sessionID)(prepareReplacement(sessionID, "instructions-applied", true))
 
-    return Service.of({ extend, reload, prepareApply })
+    return Service.of({ extend, reload, prepareApply, list: observe })
   }),
 )
 
@@ -637,7 +639,7 @@ export const node = makeLocationNode({
   ],
 })
 
-function render(instructions: ModelContext.Instructions) {
+export function render(instructions: ModelContext.Instructions) {
   return instructions
     .filter((item) => item.status === "loaded" && item.content !== undefined && item.content.length > 0)
     .map((item) => `Instructions from: ${item.source}\n${item.content}`)
