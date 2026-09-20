@@ -136,6 +136,19 @@ const generation: ModelContextGeneration = {
     completedAt: "2026-09-15T08:00:00.000Z",
     diagnostics: ["Usage data unavailable"],
   },
+  tools: [
+    {
+      name: "read",
+      description: "Read a file from the local filesystem.",
+      inputSchema: { type: "object", properties: { path: { type: "string" } } },
+      outputSchema: { type: "string" },
+    },
+    {
+      name: "grep",
+      description: "Search file contents with a regular expression.",
+      inputSchema: { type: "object", properties: { pattern: { type: "string" } } },
+    },
+  ],
 }
 
 describe("model context inspector", () => {
@@ -185,7 +198,8 @@ describe("model context inspector", () => {
       ["SystemPrompt", "available_subagents"],
       ["SystemPrompt", "  research"],
       ["Messages", "conversation-checkpoints"],
-      ["Tools", "tool-definitions"],
+      ["Tools", "read"],
+      ["Tools", "grep"],
     ])
     expect(options[3]?.value.content).toBe("global rules")
     expect(options[4]?.value.content).toBe("target rules")
@@ -196,6 +210,31 @@ describe("model context inspector", () => {
     expect(options[7]?.value.content).toBe(generation.runtimeParts![4]!.text)
     expect(options[8]?.footer).toBe("1")
     expect(options[8]?.value.content).toBe(generation.subagentGuidance!)
+    expect(options[11]?.footer).toBe("Read a file from the local filesystem.")
+    expect(options[11]?.inspectFooter).toBe(true)
+    expect(options[11]?.value.content).toBe(
+      JSON.stringify(
+        {
+          name: "read",
+          description: "Read a file from the local filesystem.",
+          inputSchema: { type: "object", properties: { path: { type: "string" } } },
+          outputSchema: { type: "string" },
+        },
+        null,
+        2,
+      ),
+    )
+    expect(options[12]?.value.content).toBe(
+      JSON.stringify(
+        {
+          name: "grep",
+          description: "Search file contents with a regular expression.",
+          inputSchema: { type: "object", properties: { pattern: { type: "string" } } },
+        },
+        null,
+        2,
+      ),
+    )
   })
 
   test("reports disabled subagent economics without synthetic guidance", () => {
@@ -208,6 +247,13 @@ describe("model context inspector", () => {
     const available = options.find((option) => option.title === "available_subagents")
     expect(available?.footer).toBe("None")
     expect(available?.value.content).toBe("Subagent economics is disabled for this device.")
+  })
+
+  test("reports an empty state when no tool definitions are available", () => {
+    const options = modelContextOptions({ ...generation, tools: undefined })
+    const tools = options.find((option) => option.category === "Tools")
+    expect(tools?.title).toBe("tool-definitions")
+    expect(tools?.value.content).toBe("No tool definitions are available for this Session.")
   })
 
   test("announces one completed refresh state and ignores disabled or loading states", () => {

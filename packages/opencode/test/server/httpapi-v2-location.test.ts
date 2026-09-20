@@ -296,6 +296,7 @@ describe("v2 location HttpApi", () => {
         data: null
         skillCatalog: { skills: Array<{ name: string }> }
         skillGuidance: string
+        tools: Array<{ name: string; description: string; inputSchema: unknown }>
         subagentCatalog?: unknown
         subagentGuidance?: string | null
         subagentRefresh?: { status: string; diagnostics: string[] }
@@ -316,6 +317,10 @@ describe("v2 location HttpApi", () => {
     expect(initialResponse.skillCatalog.skills).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "activation-review" })]),
     )
+    expect(initialResponse.tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["read", "grep", "edit"]),
+    )
+    expect(initialResponse.tools.find((tool) => tool.name === "read")?.inputSchema).toMatchObject({ type: "object" })
     expect(initialResponse.skillGuidance.match(/<available_skills>/g)).toHaveLength(1)
     expect(initialResponse.skillGuidance).toContain("Review the first catalog")
     expect(initialResponse.skillGuidance).not.toContain("PRIVATE ACTIVATION BODY")
