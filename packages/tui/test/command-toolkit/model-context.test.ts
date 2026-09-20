@@ -160,7 +160,7 @@ describe("model context inspector", () => {
   })
 
   test("lists sources in structured sections with summaries", () => {
-    const options = modelContextOptions(generation, 40)
+    const options = modelContextOptions(generation)
     expect(options.map((option) => [option.category, option.title])).toEqual([
       ["SystemPrompt", "agent-system-prompt"],
       ["SystemPrompt", "environment"],
@@ -186,15 +186,12 @@ describe("model context inspector", () => {
   })
 
   test("reports disabled subagent economics without synthetic guidance", () => {
-    const options = modelContextOptions(
-      {
-        ...generation,
-        subagentCatalog: undefined,
-        subagentGuidance: undefined,
-        subagentRefresh: { status: "disabled", diagnostics: [] },
-      },
-      40,
-    )
+    const options = modelContextOptions({
+      ...generation,
+      subagentCatalog: undefined,
+      subagentGuidance: undefined,
+      subagentRefresh: { status: "disabled", diagnostics: [] },
+    })
     const available = options.find((option) => option.title === "available_subagents")
     expect(available?.footer).toBe("None")
     expect(available?.value.content).toBe("Subagent economics is disabled for this device.")

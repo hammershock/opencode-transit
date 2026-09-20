@@ -814,6 +814,7 @@ function Option(props: {
       </Show>
       <text
         flexGrow={1}
+        flexShrink={props.footer ? 0 : undefined}
         fg={text()}
         attributes={props.active && !props.muted ? TextAttributes.BOLD : undefined}
         overflow="hidden"
@@ -836,7 +837,7 @@ function Option(props: {
         </Show>
       </text>
       <Show when={props.footer}>
-        <box flexShrink={0} width={props.footerWidth}>
+        <box flexShrink={props.footerWidth ? 0 : 1} width={props.footerWidth}>
           <Show
             when={props.inspectFooter && typeof props.footer === "string" && props.footerWidth}
             fallback={
