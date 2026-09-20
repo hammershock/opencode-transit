@@ -8,7 +8,8 @@ import { PluginV2 } from "@opencode-ai/core/plugin"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SkillV2 } from "@opencode-ai/core/skill"
 import { SkillRegistry } from "@opencode-ai/core/skill/registry"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Skill } from "@opencode-ai/schema/skill"
+import { Context, Effect, Exit, Layer, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { escapeHtml } from "@/util/html"
 
@@ -89,6 +90,8 @@ const layer = Layer.effect(
             }),
           ),
         ),
+        Effect.exit,
+        Effect.map((exit) => (Exit.isSuccess(exit) ? exit.value : emptyCatalog())),
       )
     })
 
@@ -134,6 +137,26 @@ const layer = Layer.effect(
     })
   }),
 )
+
+function emptyCatalog(): SkillRegistry.Result {
+  const digest = Skill.Digest.make("0".repeat(64))
+  return {
+    entries: [],
+    snapshot: Skill.RegistrySnapshot.make({
+      revision: digest,
+      skills: [],
+      diagnostics: [
+        Skill.Diagnostic.make({
+          kind: "root-unavailable",
+          severity: "warning",
+          sourceLabel: "Skill catalog",
+          message: "Skill catalog is unavailable for this location.",
+        }),
+      ],
+      digest,
+    }),
+  }
+}
 
 function toInfo(entry: SkillRegistry.Entry): Info {
   return {

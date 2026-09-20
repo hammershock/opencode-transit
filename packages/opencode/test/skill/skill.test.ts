@@ -1,4 +1,5 @@
 import path from "path"
+import os from "node:os"
 import { describe, expect } from "bun:test"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -6,7 +7,7 @@ import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/l
 import { Effect, Layer } from "effect"
 import { Skill } from "../../src/skill"
 import { Permission } from "../../src/permission"
-import { provideTmpdirInstance, testInstanceStoreLayer } from "../fixture/fixture"
+import { provideInstance, provideTmpdirInstance, testInstanceStoreLayer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(
@@ -105,6 +106,17 @@ describe("legacy Skill compatibility adapter", () => {
         options: {},
       }
       expect(Permission.evaluate("skill", list[0]!.name, agent.permission).action).toBe("deny")
+    }),
+  )
+
+  it.live("degrades to an empty catalog when the location directory is missing", () =>
+    Effect.gen(function* () {
+      const missing = path.join(os.tmpdir(), `opencode-missing-${process.pid}-${Date.now()}`)
+      return yield* Effect.gen(function* () {
+        const skill = yield* Skill.Service
+        expect(yield* skill.all()).toEqual([])
+        expect(yield* skill.dirs()).toEqual([])
+      }).pipe(provideInstance(missing))
     }),
   )
 })
