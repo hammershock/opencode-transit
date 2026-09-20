@@ -26,7 +26,7 @@ import { Image } from "../../src/image/image"
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
-import { SessionContextEpochTable, SessionMessageTable } from "@opencode-ai/core/session/sql"
+import { SessionMessageTable } from "@opencode-ai/core/session/sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -655,46 +655,6 @@ withSessionActivation.instance("legacy loop receives Skill guidance changed by S
   }),
 )
 
-withSessionActivation.instance("legacy provider turns block explicit instruction application", () =>
-  Effect.gen(function* () {
-    const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
-    const sessions = yield* Session.Service
-    const session = yield* SessionV2.Service
-    const chat = yield* sessions.create({
-      title: "Pinned",
-      permission: [{ permission: "*", pattern: "*", action: "allow" }],
-    })
-    expect(yield* session.activate(chat.id)).toMatchObject({ status: "initialized" })
-    const before = yield* session.modelContext(chat.id)
-    yield* prompt.prompt({
-      sessionID: chat.id,
-      agent: "build",
-      noReply: true,
-      parts: [{ type: "text", text: "keep this turn active" }],
-    })
-    yield* llm.hang
-
-    const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
-    yield* llm.wait(1)
-    yield* waitForBusy(chat.id)
-
-    expect(yield* session.instructionApplyStatus(chat.id)).toMatchObject({
-      status: "busy",
-      blockers: ["process_execution"],
-    })
-    expect(yield* session.applyInstructions(chat.id).pipe(Effect.flip)).toMatchObject({
-      _tag: "Session.InstructionApplyBusyError",
-      blockers: ["process_execution"],
-    })
-    expect(yield* session.modelContext(chat.id)).toEqual(before)
-
-    yield* prompt.cancel(chat.id)
-    yield* Fiber.await(fiber)
-    expect(yield* session.instructionApplyStatus(chat.id)).toEqual({ status: "ready", blockers: [] })
-  }),
-)
-
 withSessionActivation.instance("QuickStart creation injects Skill guidance into the first legacy prompt", () =>
   Effect.gen(function* () {
     const { dir, llm } = yield* useServerConfig((url) => ({
@@ -805,9 +765,10 @@ it.instance("legacy prompt establishes canonical durable context before message 
     expect(seen).toContain(Session.Event.Updated.type)
     expect(seen).toContain(MessageV2.Event.Updated.type)
     expect(seen).toContain(MessageV2.Event.PartUpdated.type)
-    const next = seen.filter((type) => type.startsWith("session.next."))
-    expect(next[0]).toBe("session.next.context.generation.established")
-    expect(next.every((type) => type.startsWith("session.next.context."))).toBe(true)
+    // Durable context generation events were removed: no `session.next.context.*`
+    // events should fire from a legacy prompt path.
+    const next = seen.filter((type) => type.startsWith("session.next.context."))
+    expect(next).toEqual([])
   }),
 )
 
@@ -2057,29 +2018,32 @@ unix(
   30_000,
 )
 
-it.instance("successful init command establishes a new durable context generation", () =>
+it.instance("init command invalidates the runtime context cache", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
     const { prompt, chat } = yield* boot()
-    const database = yield* Database.Service
     yield* prompt.prompt({
       sessionID: chat.id,
       agent: "build",
       noReply: true,
       parts: [{ type: "text", text: "seed" }],
     })
-    yield* llm.text("done")
 
+    // /init now invalidates the in-process RuntimeContext cache so the next
+    // prompt re-reads the instruction sources. The first run-loop still
+    // consumes the queued "done" reply.
+    yield* llm.text("done")
     yield* prompt.command({ sessionID: chat.id, command: "init", arguments: "" })
 
-    const epoch = yield* database.db
-      .select()
-      .from(SessionContextEpochTable)
-      .where(eq(SessionContextEpochTable.session_id, chat.id))
-      .get()
-      .pipe(Effect.orDie)
-    expect(epoch?.generation).toBe(2)
-    expect(epoch?.reason).toBe("init")
+    yield* llm.text("after-init")
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "after init" }],
+    })
+    yield* prompt.loop({ sessionID: chat.id })
+    expect(yield* llm.hits).toHaveLength(2)
   }),
 )
 

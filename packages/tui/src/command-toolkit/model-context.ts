@@ -1,18 +1,16 @@
 import { defineCommand, type InvocationContext, type RawArguments } from "@opencode-ai/command-kit"
+import type { ModelContextInstruction } from "@opencode-ai/sdk/v2"
 
-export type ModelContextGeneration = Omit<import("@opencode-ai/sdk/v2").ModelContextGeneration, "sources"> & {
-  sources: Readonly<
-    Record<string, { value: unknown; baseline?: string; removed?: string; refresh?: "generation" | "activation" }>
-  >
+export type ModelContextGeneration = {
   skillCatalog?: {
     digest: string
     skills: ReadonlyArray<{ id: string; name: string; sourceLabel: string; digest: string }>
   }
-  skillGuidance?: string
+  skillGuidance?: string | null
   runtimeParts?: ReadonlyArray<{ key: string; label: string; tag: string; text: string }> | null
   agentSystem?: string | null
   environmentText?: string | null
-  freshInstructions?: ReadonlyArray<ModelContextGeneration["instructions"][number]> | null
+  freshInstructions?: ReadonlyArray<ModelContextInstruction> | null
   model?: { id: string; providerID: string; variant?: string } | null
   headers?: Readonly<Record<string, string>> | null
   compaction?: { reason: "auto" | "manual"; summary: string; recent: string } | null

@@ -726,13 +726,12 @@ export function Session() {
           const response = await sdk.request(`/api/session/${encodeURIComponent(route.sessionID)}/model-context`)
           if (!response.ok) throw new Error(`Failed to inspect model context (HTTP ${response.status})`)
           const result = (await response.json()) as {
-            data: ModelContextGeneration | null
             skillCatalog: ModelContextGeneration["skillCatalog"] | null
             skillGuidance: string | null
             runtimeParts: ModelContextGeneration["runtimeParts"] | null
             agentSystem: string | null
             environment: string | null
-            instructions: ModelContextGeneration["instructions"] | null
+            instructions: ModelContextGeneration["freshInstructions"] | null
             model: { id: string; providerID: string; variant?: string } | null
             headers: Readonly<Record<string, string>> | null
             compaction: { reason: "auto" | "manual"; summary: string; recent: string } | null
@@ -740,9 +739,7 @@ export function Session() {
             subagentGuidance: string | null
             subagentRefresh: ModelContextGeneration["subagentRefresh"]
           }
-          if (!result.data) return null
           return {
-            ...result.data,
             ...(result.skillCatalog ? { skillCatalog: result.skillCatalog } : {}),
             ...(result.skillGuidance ? { skillGuidance: result.skillGuidance } : {}),
             ...(result.runtimeParts ? { runtimeParts: result.runtimeParts } : {}),
@@ -828,20 +825,7 @@ export function Session() {
           modelContext: {
             inspect: inspectModelContext,
           },
-          presentModelContext: (generation) => {
-            if (!generation || readOnly()) return showModelContext(dialog, generation)
-            return showModelContext(dialog, generation, async () => {
-              const applied = await sdk.client.v2.session.instructions.apply(
-                { sessionID: route.sessionID },
-                { throwOnError: true },
-              )
-              return {
-                ...generation,
-                ...applied.data,
-                sources: applied.data.sources as ModelContextGeneration["sources"],
-              }
-            })
-          },
+          presentModelContext: (generation) => showModelContext(dialog, generation),
           openSyncSettings: syncSettings.open,
         }
       },

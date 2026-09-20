@@ -11,7 +11,6 @@ import { useDialog, type DialogContext } from "../ui/dialog"
 import { DialogAlert } from "../ui/dialog-alert"
 import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
 import { useToast } from "../ui/toast"
-import { errorMessage } from "../util/error"
 
 type Preview = { title: string; content: string }
 
@@ -50,8 +49,7 @@ function renderConversationCheckpoint(compaction: { summary: string; recent: str
 }
 
 export function modelContextOptions(generation: ModelContextGeneration): DialogSelectOption<Preview>[] {
-  const environment = generation.environment
-  const sources = generation.sources
+  const parts = new Map((generation.runtimeParts ?? []).map((part) => [part.key, part]))
   const options: DialogSelectOption<Preview>[] = []
 
   if (generation.model) {
@@ -83,30 +81,30 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
     },
   })
 
-  if (generation.environmentText) {
+  const environmentText = parts.get("environment")?.text ?? generation.environmentText
+  if (environmentText) {
     options.push({
       category: "SystemPrompt",
       title: "environment",
-      footer: environment.targetName,
+      footer: parts.get("environment")?.tag,
       value: {
         title: "environment",
-        content: generation.environmentText,
+        content: environmentText,
       },
     })
   }
 
-  const dateSource = sources["core/date"]
-  if (dateSource) {
-    const date = (dateSource.value as { date?: string } | undefined)?.date ?? ""
+  const datePart = parts.get("date")
+  if (datePart) {
     options.push({
       category: "SystemPrompt",
       title: "date",
-      footer: date,
-      value: { title: "date", content: dateSource.baseline ?? JSON.stringify(dateSource.value, null, 2) },
+      footer: datePart.text,
+      value: { title: "date", content: datePart.text },
     })
   }
 
-  const instructions = [...(generation.freshInstructions ?? generation.instructions)].sort(
+  const instructions = [...(generation.freshInstructions ?? [])].sort(
     (a, b) => scopeOrder[a.scope] - scopeOrder[b.scope],
   )
   for (const instruction of instructions) {
@@ -124,22 +122,23 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
     })
   }
 
-  for (const [key, source] of Object.entries(sources)) {
-    if (key === "core/environment" || key === "core/date" || key === "core/instructions") continue
+  const referencesPart = parts.get("references")
+  if (referencesPart) {
     options.push({
       category: "SystemPrompt",
-      title: key,
-      value: { title: key, content: source.baseline ?? JSON.stringify(source.value, null, 2) },
+      title: "available_references",
+      footer: referencesPart.tag,
+      value: { title: "available_references", content: referencesPart.text },
     })
   }
 
-  if (generation.runtimeParts) {
-    const skillCount = generation.skillCatalog?.skills.length ?? generation.runtimeParts.length
+  const skillsPart = parts.get("skills")
+  if (skillsPart) {
     options.push({
       category: "SystemPrompt",
       title: "available_skills",
-      footer: `${skillCount}`,
-      value: { title: "available_skills", content: generation.runtimeParts.map((part) => part.text).join("\n\n") },
+      footer: generation.skillCatalog ? `${generation.skillCatalog.skills.length}` : undefined,
+      value: { title: "available_skills", content: skillsPart.text },
     })
   }
 
@@ -198,74 +197,23 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
   return options
 }
 
-export function showModelContext(
-  dialog: DialogContext,
-  generation: ModelContextGeneration | null,
-  refreshInstructions?: () => Promise<ModelContextGeneration | null>,
-) {
-  if (!generation) return DialogAlert.show(dialog, "Model context", "No context generation has been established yet.")
+export function showModelContext(dialog: DialogContext, generation: ModelContextGeneration | null) {
+  if (!generation) return DialogAlert.show(dialog, "Model context", "Model context is unavailable.")
   return new Promise<void>((resolve) => {
-    dialog.replace(
-      () => <DialogModelContext generation={generation} refreshInstructions={refreshInstructions} />,
-      resolve,
-    )
+    dialog.replace(() => <DialogModelContext generation={generation} />, resolve)
   })
 }
 
-export function DialogModelContext(props: {
-  generation: ModelContextGeneration
-  refreshInstructions?: () => Promise<ModelContextGeneration | null>
-}) {
+export function DialogModelContext(props: { generation: ModelContextGeneration }) {
   const dialog = useDialog()
-  const toast = useToast()
   dialog.setSize("xlarge")
-  const [generation, setGeneration] = createSignal(props.generation)
-  const [refreshing, setRefreshing] = createSignal(false)
-
-  const refresh = async () => {
-    if (!props.refreshInstructions || refreshing()) return
-    setRefreshing(true)
-    try {
-      const next = await props.refreshInstructions()
-      if (!next) throw new Error("No context generation was returned")
-      setGeneration(next)
-      toast.show({
-        title: "Instructions refreshed",
-        message: `Current Session now uses generation ${next.generation}`,
-        variant: "success",
-      })
-    } catch (error) {
-      toast.show({
-        title: "Instructions not refreshed",
-        message: `${errorMessage(error)} Nothing changed.`,
-        variant: "error",
-      })
-    } finally {
-      setRefreshing(false)
-    }
-  }
 
   return (
     <DialogSelect
-      title={`Model context · ${generation().generation} · ${generation().reason}`}
-      locked={refreshing()}
+      title="Model context"
       preserveSelection
-      options={modelContextOptions(generation())}
-      footer={<text>{`location ${generation().locationRevision} · ${generation().digest.slice(0, 12)}`}</text>}
+      options={modelContextOptions(props.generation)}
       footerHints={[{ title: "enter", label: "preview" }]}
-      actions={
-        props.refreshInstructions
-          ? [
-              {
-                command: "dialog.model_context.refresh_instructions",
-                title: refreshing() ? "refreshing instructions" : "refresh instructions",
-                side: "right",
-                disabled: refreshing(),
-                onTrigger: () => void refresh(),
-              },
-            ]
-          : undefined
-      }
       onSelect={(option) =>
         dialog.push(() => <DialogModelContextPreview title={option.value.title} content={option.value.content} />)
       }

@@ -49,10 +49,8 @@ import { SessionRunState } from "./run-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
-import { ModelContextAssembler } from "@opencode-ai/core/model-context-assembler"
-import { InstructionContext } from "@opencode-ai/core/instruction-context"
-import { SessionContextEpoch } from "@opencode-ai/core/session/context-epoch"
-import { SessionSkillCatalog } from "@opencode-ai/core/session/skill-catalog"
+import { RuntimeContext } from "@opencode-ai/core/runtime-context"
+import { AgentV2 } from "@opencode-ai/core/agent"
 import { SubagentEconomics } from "@/agent/economics"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -167,6 +165,7 @@ const layer = Layer.effect(
     const targetRegistry = yield* TargetRegistry.Service
     const locationAccess = yield* SessionLocationAccess.Service
     const activity = yield* SessionActivity.Service
+    const runtimeContext = yield* RuntimeContext.Service
     const { db } = database
     const sessionLocation = (sessionID: SessionID) => locationAccess.require(sessionID).pipe(Effect.catch(Effect.die))
     const contextAt = Effect.fn("SessionPrompt.contextAt")(function* (input: {
@@ -181,44 +180,22 @@ const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       if (!row) return yield* Effect.die(`Session not found: ${input.sessionID}`)
-      const assembler = yield* ModelContextAssembler.Service.pipe(Effect.provide(locations.get(input.location)))
       return {
         locationRevision: row.locationRevision,
-        assembler,
       }
     })
 
-    const establishContextBeforePrompt = Effect.fn("SessionPrompt.establishContextBeforePrompt")(function* (input: {
-      sessionID: SessionID
-      agent: string
-    }) {
-      const location = yield* sessionLocation(input.sessionID)
-      const selected = yield* contextAt({ ...input, location })
-      const existing = yield* db
-        .select({ id: MessageTable.id })
-        .from(MessageTable)
-        .where(eq(MessageTable.session_id, input.sessionID))
-        .limit(1)
-        .get()
-        .pipe(Effect.orDie)
-      if (!existing) {
-        yield* SessionContextEpoch.initialize(
-          db,
-          events,
-          selected.assembler.load(input.agent),
-          input.sessionID,
-          selected.locationRevision,
-        )
-        return
-      }
-      yield* SessionContextEpoch.prepare(
-        db,
-        events,
-        selected.assembler.load(input.agent),
-        input.sessionID,
-        selected.locationRevision,
-      )
-    })
+    const assembleRuntimeContext = (input: { sessionID: SessionID; agent: { name: string } }) =>
+      Effect.gen(function* () {
+        const location = yield* sessionLocation(input.sessionID)
+        return yield* Effect.gen(function* () {
+          const agentV2 = yield* AgentV2.Service
+          const selection = yield* agentV2.select(input.agent.name)
+          const runtime = yield* RuntimeContext.Service
+          return yield* runtime.assemble(input.sessionID, selection)
+        }).pipe(Effect.provide(locations.get(location)))
+      })
+
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -1167,11 +1144,6 @@ const layer = Layer.effect(
       yield* locationAccess.require(input.sessionID).pipe(Effect.catch(Effect.die))
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       yield* revert.cleanup(session)
-      const contextAgent = input.agent ? yield* agents.get(input.agent) : yield* agents.defaultInfo()
-      if (contextAgent)
-        yield* establishContextBeforePrompt({ sessionID: input.sessionID, agent: contextAgent.name }).pipe(
-          Effect.catch(Effect.die),
-        )
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
 
@@ -1230,7 +1202,7 @@ const layer = Layer.effect(
           Effect.provideService(TargetRegistry.Service, targetRegistry),
           Effect.provideService(LocationServiceMap.Service, locations),
         )
-        const locationContext = yield* contextAt({ sessionID, agent: session.agent ?? "build", location: loopLocation })
+        yield* contextAt({ sessionID, agent: session.agent ?? "build", location: loopLocation })
 
         while (true) {
           yield* status.set(sessionID, { type: "busy" })
@@ -1402,24 +1374,15 @@ const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [context, skillGuidance, economicsGuidance, mcpInstructions, modelMsgs] = yield* Effect.all([
-              SessionContextEpoch.forPrompt(
-                db,
-                events,
-                locationContext.assembler.load(agent.name),
-                sessionID,
-                locationContext.locationRevision,
-              ).pipe(Effect.catch(Effect.die)),
-              SessionSkillCatalog.guidance(db, sessionID),
+            const [parts, economicsGuidance, mcpInstructions, modelMsgs] = yield* Effect.all([
+              assembleRuntimeContext({ sessionID, agent }),
               economics.guidance(sessionID, agent),
               sys.mcp(agent, session.permission),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const system = [
               `You are powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}`,
-              context.baseline,
-              ...context.advances,
-              ...(skillGuidance ? [skillGuidance] : []),
+              ...parts.map((part) => part.text),
               ...(economicsGuidance ? [economicsGuidance] : []),
               ...(mcpInstructions ? [mcpInstructions] : []),
             ].filter((part) => part.length > 0)
@@ -1692,8 +1655,7 @@ const layer = Layer.effect(
       })
       if (input.command === Command.Default.INIT) {
         const location = yield* sessionLocation(input.sessionID)
-        const instructions = yield* InstructionContext.Service.pipe(Effect.provide(locations.get(location)))
-        yield* instructions.reload(input.sessionID)
+        yield* runtimeContext.invalidate(input.sessionID).pipe(Effect.provide(locations.get(location)))
       }
       yield* events.publish(Command.Event.Executed, {
         name: input.command,
@@ -1891,6 +1853,8 @@ export const node = LayerNode.make({
     TargetRegistry.node,
     SessionLocationAccess.node,
     SessionActivity.node,
+    RuntimeContext.node,
+    AgentV2.node,
   ],
 })
 

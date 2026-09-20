@@ -9,48 +9,6 @@ import {
 import { modelContextOptions } from "../../src/component/dialog-model-context"
 
 const generation: ModelContextGeneration = {
-  version: 1,
-  generation: 2,
-  reason: "init",
-  locationRevision: 1,
-  environment: {
-    harness: "OpenCode Transit",
-    entrypoint: "opencode-transit",
-    targetKind: "rexd",
-    targetName: "mywindows",
-    directory: "/workspace/project",
-    projectRoot: "/workspace/project",
-    platform: "linux",
-  },
-  environmentText: "environment body",
-  instructions: [
-    {
-      id: "global",
-      origin: "global-file",
-      scope: "global",
-      source: "/controller/AGENTS.md",
-      status: "loaded",
-      content: "global rules",
-      digest: "1111111111111111",
-    },
-    {
-      id: "target",
-      origin: "target-file",
-      scope: "target",
-      source: "<target-config>/AGENTS.md",
-      status: "loaded",
-      content: "target rules",
-      digest: "2222222222222222",
-    },
-    {
-      id: "project",
-      origin: "project-file",
-      scope: "project",
-      source: "/workspace/project/AGENTS.md",
-      status: "ignored",
-      failureStage: "read",
-    },
-  ],
   freshInstructions: [
     {
       id: "global",
@@ -79,14 +37,6 @@ const generation: ModelContextGeneration = {
       failureStage: "read",
     },
   ],
-  digest: "aaaaaaaaaaaaaaaa",
-  baseline: "baseline",
-  sources: {
-    "core/environment": { value: {}, baseline: "environment body" },
-    "core/date": { value: { date: "Sat Sep 20 2026", timezone: "UTC" }, baseline: "date body" },
-    "core/instructions": { value: [] },
-    "core/skills": { value: [], baseline: "skill body" },
-  },
   skillCatalog: {
     digest: "bbbbbbbbbbbbbbbb",
     skills: [
@@ -100,6 +50,30 @@ const generation: ModelContextGeneration = {
   },
   skillGuidance: "<available_skills>\n  <skill><name>review-agent</name></skill>\n</available_skills>",
   runtimeParts: [
+    {
+      key: "environment",
+      label: "Environment",
+      tag: "<environment>",
+      text: "environment body",
+    },
+    {
+      key: "date",
+      label: "Date",
+      tag: "<date>",
+      text: "Current date: Sat Sep 20 2026\nUser timezone: UTC",
+    },
+    {
+      key: "instructions",
+      label: "Instructions",
+      tag: "<instructions>",
+      text: "<instructions>\n  global rules\n  target rules\n</instructions>",
+    },
+    {
+      key: "references",
+      label: "References",
+      tag: "<available_references>",
+      text: "<available_references>\n  <reference><name>example</name></reference>\n</available_references>",
+    },
     {
       key: "skills",
       label: "Available skills",
@@ -188,7 +162,7 @@ describe("model context inspector", () => {
     expect(presented).toBeTrue()
   })
 
-  test("lists sources in structured sections with summaries", () => {
+  test("lists system prompt parts in structured sections with summaries", () => {
     const options = modelContextOptions(generation)
     expect(options.map((option) => [option.category, option.title])).toEqual([
       ["SystemPrompt", "agent-system-prompt"],
@@ -197,7 +171,7 @@ describe("model context inspector", () => {
       ["SystemPrompt", "global-instructions"],
       ["SystemPrompt", "target-instructions"],
       ["SystemPrompt", "project-instructions"],
-      ["SystemPrompt", "core/skills"],
+      ["SystemPrompt", "available_references"],
       ["SystemPrompt", "available_skills"],
       ["SystemPrompt", "available_subagents"],
       ["SystemPrompt", "  research"],
@@ -209,7 +183,7 @@ describe("model context inspector", () => {
     expect(options[5]?.value.content).toBe("Ignored during read.")
     expect(options[5]?.footer).toBe("/workspace/project/AGENTS.md")
     expect(options[7]?.footer).toBe("1")
-    expect(options[7]?.value.content).toBe(generation.runtimeParts![0]!.text)
+    expect(options[7]?.value.content).toBe(generation.runtimeParts![4]!.text)
     expect(options[8]?.footer).toBe("1")
     expect(options[8]?.value.content).toBe(generation.subagentGuidance!)
   })

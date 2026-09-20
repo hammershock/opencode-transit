@@ -50,7 +50,7 @@ import { ModelContext } from "@opencode-ai/schema/model-context"
 import { FileSystem } from "./filesystem"
 import { SessionLocationRuntime } from "./session/location-runtime"
 import { RuntimeContext } from "./runtime-context"
-import { RuntimeContextBuiltIns, buildEnvironment, renderEnvironment } from "./runtime-context/builtins"
+import { buildEnvironment, renderEnvironment } from "./runtime-context/builtins"
 import { SkillCatalogContextService } from "./skill/catalog-context-service"
 import { Skill } from "@opencode-ai/schema/skill"
 import { SkillSlashCompatibility } from "./skill/slash-compatibility"
@@ -810,17 +810,18 @@ const layer = Layer.effect(
       }),
       requestContext: Effect.fn("V2Session.requestContext")(function* (sessionID) {
         const session = yield* result.get(sessionID)
-        const guidance = yield* SessionSkillCatalog.guidance(db, sessionID)
 
         const contextAttempt = yield* Effect.gen(function* () {
           const locationRef = yield* requireLocation(sessionID)
           return yield* Effect.gen(function* () {
             const agents = yield* AgentV2.Service
             const agent = yield* agents.select(session.agent)
+            const runtime = yield* RuntimeContext.Service
             const instructions = yield* InstructionContext.Service
             const location = yield* Location.Service
             return {
               agentSystem: agent.info?.system ?? null,
+              runtimeParts: yield* runtime.assemble(sessionID, agent),
               environment: renderEnvironment(buildEnvironment(location)),
               instructions: yield* instructions.list(sessionID),
             }
@@ -844,10 +845,7 @@ const layer = Layer.effect(
           : undefined
 
         return {
-          runtimeParts:
-            guidance && guidance.length > 0
-              ? [{ key: RuntimeContextBuiltIns.skillsPart.key, label: RuntimeContextBuiltIns.skillsPart.label, tag: RuntimeContextBuiltIns.skillsPart.tag, text: guidance }]
-              : [],
+          runtimeParts: Exit.isSuccess(contextAttempt) ? contextAttempt.value.runtimeParts : [],
           agentSystem: Exit.isSuccess(contextAttempt) ? contextAttempt.value.agentSystem : null,
           environment: Exit.isSuccess(contextAttempt) ? contextAttempt.value.environment : null,
           instructions: Exit.isSuccess(contextAttempt) ? contextAttempt.value.instructions : [],
