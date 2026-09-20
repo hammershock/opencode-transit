@@ -17,7 +17,7 @@ function global(payload: GlobalEvent["payload"]): GlobalEvent {
   return { directory: "/tmp/other", project: "proj_test", payload }
 }
 
-test("a projection refresh that omits the session transiently drops it from the store", async () => {
+test("a projection refresh that omits a hydrated session retains it in the store", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")
 
@@ -45,7 +45,11 @@ test("a projection refresh that omits the session transiently drops it from the 
     emit(global({ id: "evt_projection", type: "sync.projection.updated", properties: { revision: 1 } }))
     await wait(() => getRequests === 2)
 
-    expect(sync.session.get(sessionID)).toBeUndefined()
+    // A hydrated session omitted by the scoped list must stay in the store while
+    // its re-sync is pending; dropping it flickered remote-target UI (footer and
+    // terminal title) back to local fallbacks.
+    expect(sync.session.get(sessionID)).toBeDefined()
+    expect(sync.session.get(sessionID)).toMatchObject({ id: sessionID, directory: session.directory })
   } finally {
     releaseGet(json(session))
     app.renderer.destroy()
