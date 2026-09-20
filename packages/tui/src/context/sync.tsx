@@ -346,10 +346,17 @@ export const {
           projectionRefreshRequested = false
           const hydrated = [...fullSyncedSessions]
           const sessions = await listSessions()
-          setStore("session", reconcile(sessions))
-          fullSyncedSessions.clear()
           // The list is scoped by Path/Project and age, so omission is not proof
-          // that a directly loaded Session was deleted.
+          // that a directly loaded Session was deleted. Retain hydrated sessions
+          // that the scoped list omits (e.g. remote-target sessions) so they do
+          // not drop out of the store and flash local fallbacks during the
+          // re-sync gap. Deletion remains event-driven via `session.deleted`.
+          const listed = new Set(sessions.map((session) => session.id))
+          const retained = store.session.filter(
+            (session) => hydrated.includes(session.id) && !listed.has(session.id),
+          )
+          setStore("session", reconcile([...sessions, ...retained]))
+          fullSyncedSessions.clear()
           await Promise.allSettled(hydrated.map(syncSession))
         }
       })().finally(() => {
