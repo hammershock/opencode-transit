@@ -741,6 +741,7 @@ export function Session() {
             environment: string | null
             environmentInfo: ModelContextGeneration["environmentInfo"] | null
             instructions: ModelContextGeneration["freshInstructions"] | null
+            tools: ModelContextGeneration["tools"] | null
             model: { id: string; providerID: string; variant?: string } | null
             headers: Readonly<Record<string, string>> | null
             compaction: { reason: "auto" | "manual"; summary: string; recent: string } | null
@@ -756,6 +757,7 @@ export function Session() {
             ...(result.environment ? { environmentText: result.environment } : {}),
             ...(result.environmentInfo ? { environmentInfo: result.environmentInfo } : {}),
             ...(result.instructions ? { freshInstructions: result.instructions } : {}),
+            ...(result.tools ? { tools: result.tools } : {}),
             ...(result.model ? { model: result.model } : {}),
             ...(result.headers ? { headers: result.headers } : {}),
             ...(result.compaction ? { compaction: result.compaction } : {}),

@@ -1006,6 +1006,12 @@ export type SessionsModelContextOutput = {
     readonly content?: string
     readonly digest?: string
   }>
+  readonly tools: ReadonlyArray<{
+    readonly name: string
+    readonly description: string
+    readonly inputSchema: JsonValue
+    readonly outputSchema?: JsonValue
+  }>
   readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
   readonly headers: { readonly [x: string]: string } | null
   readonly compaction: { readonly reason: "auto" | "manual"; readonly summary: string; readonly recent: string } | null

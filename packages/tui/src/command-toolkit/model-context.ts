@@ -12,6 +12,7 @@ export type ModelContextGeneration = {
   environmentText?: string | null
   environmentInfo?: ModelContextEnvironment | null
   freshInstructions?: ReadonlyArray<ModelContextInstruction> | null
+  tools?: ReadonlyArray<{ name: string; description: string; inputSchema: unknown; outputSchema?: unknown }> | null
   model?: { id: string; providerID: string; variant?: string } | null
   headers?: Readonly<Record<string, string>> | null
   compaction?: { reason: "auto" | "manual"; summary: string; recent: string } | null
