@@ -56,32 +56,28 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
   if (generation.model) {
     options.push({
       category: "Request",
-      title: "<model>",
+      title: "model",
+      footer: `${generation.model.providerID}/${generation.model.id}${generation.model.variant ? ` ${generation.model.variant}` : ""}`,
       value: { title: "model", content: JSON.stringify(generation.model, null, 2) },
     })
   }
-  options.push({
-    category: "Request",
-    title: "<params>",
-    value: {
-      title: "params",
-      content: "toolChoice: auto\ntemperature: resolved at request time\ntopP: resolved at request time\ntopK: resolved at request time",
-    },
-  })
   if (generation.headers) {
     const entries = Object.entries(generation.headers)
     options.push({
       category: "Request",
-      title: "<headers>",
+      title: "headers",
+      footer: `${entries.length} header${entries.length === 1 ? "" : "s"}`,
       value: { title: "headers", content: entries.map(([name, value]) => `${name}: ${value}`).join("\n") },
     })
   }
 
+  const agentSystem = generation.agentSystem ?? ""
   options.push({
     category: "SystemPrompt",
-    title: "<agent-system-prompt>",
+    title: "agent-system-prompt",
+    footer: `${agentSystem.length}chars`,
     value: {
-      title: "agent system prompt",
+      title: "agent-system-prompt",
       content: generation.agentSystem ?? "The agent base system prompt is unavailable for this Session.",
     },
   })
@@ -90,7 +86,8 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
   if (environmentSource) {
     options.push({
       category: "SystemPrompt",
-      title: "<environment>",
+      title: "environment",
+      footer: environment.targetName,
       value: {
         title: "environment",
         content: environmentSource.baseline ?? JSON.stringify(environment, null, 2),
@@ -100,9 +97,11 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
 
   const dateSource = sources["core/date"]
   if (dateSource) {
+    const date = (dateSource.value as { date?: string } | undefined)?.date ?? ""
     options.push({
       category: "SystemPrompt",
-      title: "<date>",
+      title: "date",
+      footer: date,
       value: { title: "date", content: dateSource.baseline ?? JSON.stringify(dateSource.value, null, 2) },
     })
   }
@@ -114,6 +113,7 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
     options.push({
       category: "SystemPrompt",
       title: instructionTitle(instruction.scope),
+      footer: instruction.source,
       value: {
         title: instruction.source,
         content:
@@ -128,28 +128,29 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
     if (key === "core/environment" || key === "core/date" || key === "core/instructions") continue
     options.push({
       category: "SystemPrompt",
-      title: `<${key}>`,
+      title: key,
       value: { title: key, content: source.baseline ?? JSON.stringify(source.value, null, 2) },
     })
   }
 
   if (generation.runtimeParts) {
-    for (const part of generation.runtimeParts) {
-      options.push({
-        category: "SystemPrompt",
-        title: "<available_skills>",
-        value: { title: part.label, content: part.text },
-      })
-    }
+    const skillCount = generation.skillCatalog?.skills.length ?? generation.runtimeParts.length
+    options.push({
+      category: "SystemPrompt",
+      title: "available_skills",
+      footer: `${skillCount}`,
+      value: { title: "available_skills", content: generation.runtimeParts.map((part) => part.text).join("\n\n") },
+    })
   }
 
   if (generation.subagentRefresh) {
     const catalog = generation.subagentCatalog
     options.push({
       category: "SystemPrompt",
-      title: "<available_subagents>",
+      title: "available_subagents",
+      footer: generation.subagentRefresh.status === "disabled" ? "None" : `${catalog?.agents.length ?? 0}`,
       value: {
-        title: "available subagents",
+        title: "available_subagents",
         content:
           generation.subagentGuidance ??
           (generation.subagentRefresh.status === "disabled"
@@ -160,7 +161,8 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
     for (const agent of catalog?.agents ?? []) {
       options.push({
         category: "SystemPrompt",
-        title: `  <subagent> ${agent.agent}`,
+        title: `  ${agent.agent}`,
+        footer: `${agent.model.providerID}/${agent.model.modelID}`,
         value: { title: agent.agent, content: JSON.stringify(agent, null, 2) },
       })
     }
@@ -169,18 +171,19 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
   if (generation.compaction) {
     options.push({
       category: "Messages",
-      title: "<conversation-checkpoint>",
+      title: "conversation-checkpoints",
+      footer: `${generation.compaction.summary.length + generation.compaction.recent.length}chars`,
       value: {
-        title: "conversation checkpoint",
+        title: "conversation-checkpoints",
         content: renderConversationCheckpoint(generation.compaction),
       },
     })
   } else {
     options.push({
       category: "Messages",
-      title: "<conversation-checkpoint>",
+      title: "conversation-checkpoints",
       value: {
-        title: "conversation checkpoint",
+        title: "conversation-checkpoints",
         content: "No compaction checkpoint has been produced for this Session.",
       },
     })
@@ -188,8 +191,8 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
 
   options.push({
     category: "Tools",
-    title: "<tool-definitions>",
-    value: { title: "tool definitions", content: "Tool definitions are not yet exposed for inspection." },
+    title: "tool-definitions",
+    value: { title: "tool-definitions", content: "Tool definitions are not yet exposed for inspection." },
   })
 
   return options
