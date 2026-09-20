@@ -271,6 +271,20 @@ const layer = Layer.effectDiscard(
         .run()
         .pipe(Effect.orDie)
     })
+    // Legacy revert is persisted separately from session metadata so a metadata
+    // update can never clear a staged revert boundary.
+    yield* events.project(SessionV1.Event.RevertUpdated, (event) =>
+      db
+        .update(SessionTable)
+        .set({
+          revert: event.data.revert
+            ? { ...event.data.revert, messageID: SessionMessage.ID.make(event.data.revert.messageID) }
+            : null,
+        })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie, Effect.asVoid),
+    )
     yield* events.project(SessionEvent.Moved, (event) =>
       Effect.gen(function* () {
         yield* db

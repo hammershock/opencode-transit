@@ -873,10 +873,15 @@ const layer: Layer.Layer<
         time: { updated: Date.now() },
         revert: input.revert,
       }).pipe(Effect.orDie)
+      yield* events.publish(SessionV1.Event.RevertUpdated, {
+        sessionID: input.sessionID,
+        ...(input.revert ? { revert: input.revert } : {}),
+      })
     })
 
     const clearRevert = Effect.fn("Session.clearRevert")(function* (sessionID: SessionID) {
       yield* patch(sessionID, { time: { updated: Date.now() }, revert: null }).pipe(Effect.orDie)
+      yield* events.publish(SessionV1.Event.RevertUpdated, { sessionID })
     })
 
     const setSummary = Effect.fn("Session.setSummary")(function* (input: {
