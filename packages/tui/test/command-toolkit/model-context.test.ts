@@ -54,7 +54,7 @@ const generation: ModelContextGeneration = {
   baseline: "baseline",
   sources: {
     "core/environment": { value: {}, baseline: "environment body" },
-    "core/date": { value: "date", baseline: "date body" },
+    "core/date": { value: { date: "Sat Sep 20 2026", timezone: "UTC" }, baseline: "date body" },
     "core/instructions": { value: [] },
     "core/skills": { value: [], baseline: "skill body" },
   },
@@ -70,6 +70,14 @@ const generation: ModelContextGeneration = {
     ],
   },
   skillGuidance: "<available_skills>\n  <skill><name>review-agent</name></skill>\n</available_skills>",
+  runtimeParts: [
+    {
+      key: "skills",
+      label: "Available skills",
+      tag: "<available_skills>",
+      text: "<available_skills>\n  <skill><name>review-agent</name></skill>\n</available_skills>",
+    },
+  ],
   subagentCatalog: {
     revision: "dddddddddddddddd",
     activatedAt: "2026-09-15T08:00:00.000Z",
@@ -151,40 +159,44 @@ describe("model context inspector", () => {
     expect(presented).toBeTrue()
   })
 
-  test("lists sources in their frozen injection order and exposes ignored diagnostics", () => {
-    const options = modelContextOptions(generation)
+  test("lists sources in structured sections with summaries", () => {
+    const options = modelContextOptions(generation, 40)
     expect(options.map((option) => [option.category, option.title])).toEqual([
-      ["Environment", "mywindows · rexd"],
-      ["Context", "core/date"],
-      ["Instructions", "/controller/AGENTS.md"],
-      ["Instructions", "<target-config>/AGENTS.md"],
-      ["Instructions", "/workspace/project/AGENTS.md"],
-      ["Context", "core/skills"],
-      ["Skills", "available_skills"],
-      ["Subagents", "available_subagents"],
-      ["Subagents", "research"],
+      ["SystemPrompt", "agent-system-prompt"],
+      ["SystemPrompt", "environment"],
+      ["SystemPrompt", "date"],
+      ["SystemPrompt", "global-instructions"],
+      ["SystemPrompt", "target-instructions"],
+      ["SystemPrompt", "target-instructions"],
+      ["SystemPrompt", "core/skills"],
+      ["SystemPrompt", "available_skills"],
+      ["SystemPrompt", "available_subagents"],
+      ["SystemPrompt", "  research"],
+      ["Messages", "conversation-checkpoints"],
+      ["Tools", "tool-definitions"],
     ])
-    expect(options[2]?.value.content).toBe("global rules")
-    expect(options[3]?.value.content).toBe("target rules")
-    expect(options[4]?.footer).toBe("read failed")
-    expect(options[6]?.description).toBe("1 available · controller-local")
-    expect(options[6]?.value.content).toBe(generation.skillGuidance!)
-    expect(options[7]?.description).toBe("partial · 1 available · device-local")
-    expect(options[7]?.details).toEqual(["renderer output truncated", "Usage data unavailable"])
-    expect(options[7]?.value.content).toBe(generation.subagentGuidance!)
-    expect(options[8]?.description).toBe("openai/gpt-5")
-    expect(options[8]?.details).toContain("ResearchBench 82% · stale · 2026-09-14T08:00:00.000Z")
+    expect(options[3]?.value.content).toBe("global rules")
+    expect(options[4]?.value.content).toBe("target rules")
+    expect(options[5]?.value.content).toBe("Ignored during read.")
+    expect(options[5]?.footer).toBe("/workspace/project/AGENTS.md")
+    expect(options[7]?.footer).toBe("1")
+    expect(options[7]?.value.content).toBe(generation.runtimeParts![0]!.text)
+    expect(options[8]?.footer).toBe("1")
+    expect(options[8]?.value.content).toBe(generation.subagentGuidance!)
   })
 
   test("reports disabled subagent economics without synthetic guidance", () => {
-    const options = modelContextOptions({
-      ...generation,
-      subagentCatalog: undefined,
-      subagentGuidance: undefined,
-      subagentRefresh: { status: "disabled", diagnostics: [] },
-    })
+    const options = modelContextOptions(
+      {
+        ...generation,
+        subagentCatalog: undefined,
+        subagentGuidance: undefined,
+        subagentRefresh: { status: "disabled", diagnostics: [] },
+      },
+      40,
+    )
     const available = options.find((option) => option.title === "available_subagents")
-    expect(available?.description).toBe("disabled · 0 available · device-local")
+    expect(available?.footer).toBe("None")
     expect(available?.value.content).toBe("Subagent economics is disabled for this device.")
   })
 
