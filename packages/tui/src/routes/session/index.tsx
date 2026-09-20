@@ -36,6 +36,7 @@ import type {
   UserMessage,
   TextPart,
   ReasoningPart,
+  Session,
   SessionMessageUser,
   SessionStatus,
 } from "@opencode-ai/sdk/v2"
@@ -244,7 +245,14 @@ export function Session() {
   const kv = useKV()
   const { theme } = useTheme()
   const promptRef = usePromptRef()
-  const session = createMemo(() => sync.session.get(route.sessionID))
+  // Keep the last known Session for the current ID across projection refreshes.
+  // `sync.session.get` transiently returns undefined when a scoped refresh omits
+  // the session, and dropping the value here remounts the whole transcript view
+  // (resetting scroll and flickering). Deletion is detected separately in app.tsx.
+  const session = createMemo<Session | undefined>((previous) => {
+    const current = sync.session.get(route.sessionID)
+    return current ?? (previous?.id === route.sessionID ? previous : undefined)
+  }, undefined)
   const locationNoticeKey = sessionLocationNoticeKey(route.sessionID)
   const locationNotice = createMemo(() => kv.get(locationNoticeKey) as SessionLocationNotice | null | undefined)
   const dismissLocationNotice = () => kv.set(locationNoticeKey, null)
@@ -1709,7 +1717,12 @@ export function Session() {
             </Show>
             <Show when={session()}>
               <scrollbox
-                ref={(r) => (scroll = r)}
+                ref={(r) => {
+                  scroll = r
+                  // `onMouseScroll` is not a real scrollbox prop; track every scroll
+                  // (wheel, key, and scrollbar drag) through the scrollbar's change event.
+                  r.verticalScrollBar.on("change", () => queueMicrotask(updateFollowOutput))
+                }}
                 viewportOptions={{
                   paddingRight: showScrollbar() ? 1 : 0,
                 }}
@@ -1725,7 +1738,6 @@ export function Session() {
                 stickyStart="bottom"
                 flexGrow={1}
                 scrollAcceleration={scrollAcceleration()}
-                onMouseScroll={() => queueMicrotask(updateFollowOutput)}
               >
                 <box height={1} />
                 <For each={messageIDs()}>
