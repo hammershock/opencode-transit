@@ -57,9 +57,9 @@ const builtIns = Layer.effectDiscard(
       order: 2,
       cache: "session",
       enabled: () => true,
-      render: () =>
+      render: (sessionID) =>
         Effect.gen(function* () {
-          const text = render(yield* instructions.list())
+          const text = render(yield* instructions.list(sessionID))
           return text.length > 0 ? text : undefined
         }),
     })
