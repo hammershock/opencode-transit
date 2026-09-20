@@ -14,7 +14,7 @@ import { PromptInput } from "@opencode-ai/schema/prompt-input"
 import { EventV2 } from "./event"
 import { Database } from "./database/database"
 import { SessionProjector } from "./session/projector"
-import { SessionContextEpochTable, SessionMessageTable, SessionTable } from "./session/sql"
+import { SessionMessageTable, SessionTable } from "./session/sql"
 import { SessionSchema } from "./session/schema"
 import { AbsolutePath, PositiveInt, RelativePath } from "./schema"
 import { AgentV2 } from "./agent"
@@ -46,12 +46,11 @@ import { SessionLocationAccess } from "./session/location-access"
 import { SessionLocationMutation } from "./session/location-mutation"
 import { SyncSetup } from "./sync/setup"
 import type { ApprovalMode } from "@opencode-ai/schema/approval-mode"
-import type { ModelContext } from "@opencode-ai/schema/model-context"
+import { ModelContext } from "@opencode-ai/schema/model-context"
 import { FileSystem } from "./filesystem"
 import { SessionLocationRuntime } from "./session/location-runtime"
-import { SystemContext } from "./system-context/index"
-import { SessionContextEpoch } from "./session/context-epoch"
-import { ModelContextAssembler } from "./model-context-assembler"
+import { RuntimeContext } from "./runtime-context"
+import { buildEnvironment, renderEnvironment } from "./runtime-context/builtins"
 import { SkillCatalogContextService } from "./skill/catalog-context-service"
 import { Skill } from "@opencode-ai/schema/skill"
 import { SkillSlashCompatibility } from "./skill/slash-compatibility"
@@ -140,13 +139,6 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
 export class LocationRebindError extends Schema.TaggedErrorClass<LocationRebindError>()("Session.LocationRebindError", {
   message: Schema.String,
 }) {}
-export class InstructionApplyBusyError extends Schema.TaggedErrorClass<InstructionApplyBusyError>()(
-  "Session.InstructionApplyBusyError",
-  { blockers: Schema.Array(Schema.String) },
-) {}
-export type InstructionApplyStatus =
-  | { readonly status: "ready"; readonly blockers: readonly [] }
-  | { readonly status: "busy" | "unresolved"; readonly blockers: readonly string[] }
 export const MessageNotFoundError = SessionRevert.MessageNotFoundError
 export type MessageNotFoundError = SessionRevert.MessageNotFoundError
 
@@ -181,13 +173,22 @@ export interface Interface {
   readonly modelContext: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<ModelContext.Generation | undefined, NotFoundError | ContextSnapshotDecodeError>
-  readonly applyInstructions: (
+  /** Inspect the per-turn prepared request parts without resolving the Session Location: runtime parts, agent prompt, model, request headers, and the latest compaction checkpoint. */
+  readonly requestContext: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<
-    ModelContext.Generation,
-    NotFoundError | OperationUnavailableError | InstructionApplyBusyError | InstructionContext.ApplyError
+    {
+      runtimeParts: ReadonlyArray<RuntimeContext.Rendered>
+      agentSystem: string | null
+      environment: string | null
+      environmentInfo: ModelContext.Environment | null
+      instructions: ModelContext.Instructions
+      model: ModelV2.Ref | null
+      headers: Readonly<Record<string, string>>
+      compaction: { reason: "auto" | "manual"; summary: string; recent: string } | null
+    },
+    NotFoundError
   >
-  readonly instructionApplyStatus: (sessionID: SessionSchema.ID) => Effect.Effect<InstructionApplyStatus, NotFoundError>
   /** Inspect the atomic controller-local Skill view appended to the next provider request. */
   readonly skillView: (
     sessionID: SessionSchema.ID,
@@ -318,16 +319,6 @@ const layer = Layer.effect(
       )
     })
     const syncSetup = yield* SyncSetup.Service
-    const contextInitialized = Effect.fn("V2Session.contextInitialized")(function* (sessionID: SessionSchema.ID) {
-      return (
-        (yield* db
-          .select({ sessionID: SessionContextEpochTable.session_id })
-          .from(SessionContextEpochTable)
-          .where(eq(SessionContextEpochTable.session_id, sessionID))
-          .get()
-          .pipe(Effect.orDie)) !== undefined
-      )
-    })
     const activateCatalog = Effect.fn("V2Session.activateCatalog")(function* (
       session: SessionSchema.Info,
       location: Location.Ref,
@@ -344,14 +335,6 @@ const layer = Layer.effect(
           selection.info ? SkillV2.available(loaded.snapshot.skills, selection.info) : [],
         )
         const guidance = yield* SkillGuidance.Service
-        const assembler = yield* ModelContextAssembler.Service
-        yield* SessionContextEpoch.initialize(
-          db,
-          events,
-          assembler.load(session.agent),
-          session.id,
-          session.locationRevision,
-        )
         return {
           loaded,
           admitted,
@@ -388,25 +371,10 @@ const layer = Layer.effect(
       session: SessionSchema.Info,
       location: Location.Ref,
     ) {
+      if ((yield* SessionSkillCatalog.view(db, session.id))?.guidance !== undefined) return
       const unavailable = () => new OperationUnavailableError({ operation: "modelContext" })
-      if (!(yield* contextInitialized(session.id))) {
-        const activation = yield* activateCatalog(session, location, true)
-        if (activation.status === "unavailable") return yield* unavailable()
-        return
-      }
-      if ((yield* SessionSkillCatalog.view(db, session.id))?.guidance === undefined) {
-        const activation = yield* activateCatalog(session, location, true)
-        if (activation.status === "unavailable") return yield* unavailable()
-        return
-      }
-      const assembler = yield* ModelContextAssembler.Service.pipe(Effect.provide(locations.get(location)))
-      yield* SessionContextEpoch.prepare(
-        db,
-        events,
-        assembler.load(session.agent),
-        session.id,
-        session.locationRevision,
-      ).pipe(Effect.catch(unavailable))
+      const activation = yield* activateCatalog(session, location, true)
+      if (activation.status === "unavailable") return yield* unavailable()
     })
     const runtimeBlockers = Effect.fn("V2Session.runtimeLocationBlockers")(function* (sessionID: SessionSchema.ID) {
       if (!(yield* store.get(sessionID))) return yield* new NotFoundError({ sessionID })
@@ -563,10 +531,6 @@ const layer = Layer.effect(
               }
 
               yield* ensureContextForAdmission(session, location)
-              const catalog = yield* SessionContextEpoch.inspect(db, input.sessionID).pipe(
-                Effect.catch(() => new OperationUnavailableError({ operation: "modelContext" })),
-              )
-              if (!catalog) return yield* new OperationUnavailableError({ operation: "modelContext" })
               const resolved = yield* Effect.gen(function* () {
                 const skills = yield* SkillV2.Service
                 const current = yield* skills.catalog()
@@ -681,12 +645,6 @@ const layer = Layer.effect(
 
               // Materialize the candidate and prove its root can actually be used before
               // committing. Service construction alone does not reject a missing local path.
-              const epoch = yield* db
-                .select({ generation: SessionContextEpochTable.generation })
-                .from(SessionContextEpochTable)
-                .where(eq(SessionContextEpochTable.session_id, input.sessionID))
-                .get()
-                .pipe(Effect.orDie)
               const revision = input.expectedRevision + 1
               const contextGeneration = yield* Effect.scoped(
                 Effect.gen(function* () {
@@ -705,19 +663,7 @@ const layer = Layer.effect(
                   const agents = Context.get(context, AgentV2.Service)
                   const selection = yield* agents.select(before.agent)
                   const guidance = Context.get(context, SkillGuidance.Service)
-                  const assembler = Context.get(context, ModelContextAssembler.Service)
-                  const assembled = yield* assembler.load(before.agent).pipe(
-                    Effect.flatMap(SystemContext.initialize),
-                    Effect.mapError(
-                      () => new LocationRebindError({ message: "Destination model context is unavailable" }),
-                    ),
-                  )
                   return {
-                    context: SessionContextEpoch.materialize(assembled, {
-                      generation: (epoch?.generation ?? 0) + 1,
-                      reason: "location-rebound",
-                      locationRevision: revision,
-                    }),
                     admitted: SessionSkillCatalog.make(
                       loaded.snapshot.revision,
                       selection.info ? SkillV2.available(loaded.snapshot.skills, selection.info) : [],
@@ -751,7 +697,6 @@ const layer = Layer.effect(
                 previous: current.location,
                 location: input.destination,
                 revision,
-                context: contextGeneration.context,
               })
               yield* SessionSkillCatalog.replace(db, input.sessionID, {
                 catalog: contextGeneration.admitted,
@@ -862,52 +807,67 @@ const layer = Layer.effect(
       }),
       modelContext: Effect.fn("V2Session.modelContext")(function* (sessionID) {
         yield* result.get(sessionID)
-        return yield* SessionContextEpoch.inspect(db, sessionID)
+        return undefined
       }),
-      applyInstructions: Effect.fn("V2Session.applyInstructions")((sessionID) =>
-        activity.withExclusive(
-          [sessionID],
-          Effect.gen(function* () {
-            const location = yield* requireLocation(sessionID)
-            const blockers = yield* locationBlockers(sessionID)
-            if (blockers.length) return yield* new InstructionApplyBusyError({ blockers })
-            const context = yield* Effect.scoped(
-              InstructionContext.Service.pipe(
-                Effect.flatMap((instructions) => instructions.prepareApply(sessionID)),
-                Effect.provide(locations.get(location)),
-              ),
-            )
-            const current = yield* store.get(sessionID)
-            if (!current) return yield* new NotFoundError({ sessionID })
-            if (current.locationRevision !== context.locationRevision)
-              return yield* new InstructionApplyBusyError({ blockers: ["location_changed"] })
-            const finalBlockers = yield* locationBlockers(sessionID)
-            if (finalBlockers.length) return yield* new InstructionApplyBusyError({ blockers: finalBlockers })
-            yield* events.publish(SessionEvent.ContextGenerationEstablished, {
-              sessionID,
-              timestamp: yield* DateTime.now,
-              context,
-            })
-            return context
-          }),
-        ),
-      ),
-      instructionApplyStatus: Effect.fn("V2Session.instructionApplyStatus")(function* (sessionID) {
-        if (!(yield* store.get(sessionID))) return yield* new NotFoundError({ sessionID })
-        const resolution = yield* locationAccess.resolve(sessionID).pipe(
-          Effect.catchTag("SessionLocationAccess.NotFoundError", () => new NotFoundError({ sessionID })),
-          Effect.catchTag("SessionLocationAccess.UnresolvedError", () =>
-            Effect.succeed({ status: "resolution_failed" as const, message: "Session Location resolution failed" }),
-          ),
-        )
-        if (resolution.status !== "resolved")
-          return { status: "unresolved" as const, blockers: ["location_unresolved"] }
-        const blockers = [
-          ...(yield* runtimeBlockers(sessionID)),
-          ...(yield* locationScopedBlockers(sessionID, resolution.location)),
-        ]
-        if (blockers.length) return { status: "busy" as const, blockers }
-        return { status: "ready" as const, blockers: [] }
+      requestContext: Effect.fn("V2Session.requestContext")(function* (sessionID) {
+        const session = yield* result.get(sessionID)
+
+        const contextAttempt = yield* Effect.gen(function* () {
+          const locationRef = yield* requireLocation(sessionID)
+          return yield* Effect.gen(function* () {
+            const agents = yield* AgentV2.Service
+            const agent = yield* agents.select(session.agent)
+            const runtime = yield* RuntimeContext.Service
+            const instructions = yield* InstructionContext.Service
+            const location = yield* Location.Service
+            const environment = buildEnvironment(location)
+            return {
+              agentSystem: agent.info?.system ?? null,
+              runtimeParts: yield* runtime.assemble(sessionID, agent),
+              environment: renderEnvironment(environment),
+              environmentInfo: environment,
+              instructions: yield* instructions.list(sessionID),
+            }
+          }).pipe(Effect.provide(locations.get(locationRef)))
+        }).pipe(Effect.exit)
+
+        const compactionRow = yield* db
+          .select({ id: SessionMessageTable.id, type: SessionMessageTable.type, data: SessionMessageTable.data })
+          .from(SessionMessageTable)
+          .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "compaction")))
+          .orderBy(desc(SessionMessageTable.seq))
+          .limit(1)
+          .get()
+          .pipe(Effect.orDie)
+        const compactionMessage = compactionRow
+          ? Schema.decodeUnknownOption(SessionMessage.Message)({
+              ...compactionRow.data,
+              id: compactionRow.id,
+              type: compactionRow.type,
+            }).valueOrUndefined
+          : undefined
+
+        return {
+          runtimeParts: Exit.isSuccess(contextAttempt) ? contextAttempt.value.runtimeParts : [],
+          agentSystem: Exit.isSuccess(contextAttempt) ? contextAttempt.value.agentSystem : null,
+          environment: Exit.isSuccess(contextAttempt) ? contextAttempt.value.environment : null,
+          environmentInfo: Exit.isSuccess(contextAttempt) ? contextAttempt.value.environmentInfo : null,
+          instructions: Exit.isSuccess(contextAttempt) ? contextAttempt.value.instructions : [],
+          model: session.model ?? null,
+          headers: {
+            "x-session-affinity": session.id,
+            "X-Session-Id": session.id,
+            ...(session.parentID ? { "x-parent-session-id": session.parentID } : {}),
+          },
+          compaction:
+            compactionMessage && compactionMessage.type === "compaction"
+              ? {
+                  reason: compactionMessage.reason,
+                  summary: compactionMessage.summary,
+                  recent: compactionMessage.recent,
+                }
+              : null,
+        }
       }),
       skillView: Effect.fn("V2Session.skillView")(function* (sessionID) {
         yield* result.get(sessionID)

@@ -24,7 +24,6 @@ import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
-import { SessionContextEpoch } from "@opencode-ai/core/session/context-epoch"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
@@ -32,7 +31,7 @@ import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionLocationRuntime } from "@opencode-ai/core/session/location-runtime"
-import { SessionContextEpochTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
@@ -138,180 +137,6 @@ const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const id = SessionV2.ID.create()
 
 describe("SessionV2.create", () => {
-  rebindIt.live("atomically replaces admitted target instructions during a real Session rebind", () =>
-    Effect.acquireRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-    ).pipe(
-      Effect.flatMap((tmp) =>
-        Effect.acquireRelease(
-          Effect.promise(() => tmpdir()),
-          (destination) => Effect.promise(() => destination[Symbol.asyncDispose]()),
-        ).pipe(
-          Effect.flatMap((destination) =>
-            Effect.gen(function* () {
-              rebindHarnessState.content = "target A policy"
-              const session = yield* SessionV2.Service
-              const database = (yield* Database.Service).db
-              const created = yield* session.create({
-                location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
-              })
-              const before = yield* SessionContextEpoch.inspect(database, created.id)
-              expect(before?.instructions).toMatchObject([
-                { scope: "target", source: "<target-instructions>", content: "target A policy" },
-              ])
-
-              rebindHarnessState.content = "target B policy"
-              expect(
-                yield* session.rebindLocation({
-                  sessionID: created.id,
-                  expectedRevision: created.locationRevision,
-                  destination: Location.Ref.make({ directory: AbsolutePath.make(destination.path) }),
-                }),
-              ).toMatchObject({ status: "rebound", revision: created.locationRevision + 1 })
-              const after = yield* SessionContextEpoch.inspect(database, created.id)
-              expect(after).toMatchObject({
-                generation: (before?.generation ?? 0) + 1,
-                reason: "location-rebound",
-                locationRevision: created.locationRevision + 1,
-              })
-              expect(after?.instructions).toMatchObject([
-                { scope: "target", source: "<target-instructions>", content: "target B policy" },
-              ])
-              expect(after?.baseline).not.toContain("target A policy")
-            }),
-          ),
-        ),
-      ),
-    ),
-  )
-
-  rebindIt.live("applies saved instructions to only the selected idle Session without model or project mutation", () =>
-    Effect.acquireRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-    ).pipe(
-      Effect.flatMap((tmp) =>
-        Effect.gen(function* () {
-          rebindHarnessState.content = "target A policy"
-          rebindHarnessState.status = "readable"
-          executionState.resumes = 0
-          executionState.wakes = 0
-          const projectFile = path.join(tmp.path, "AGENTS.md")
-          yield* Effect.promise(() => writeFile(projectFile, "project policy"))
-          const session = yield* SessionV2.Service
-          const first = yield* session.create({
-            location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
-          })
-          const second = yield* session.create({
-            location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
-          })
-          const firstBefore = yield* session.modelContext(first.id)
-          const secondBefore = yield* session.modelContext(second.id)
-          const skillBefore = yield* session.skillView(first.id)
-          expect(yield* session.instructionApplyStatus(first.id)).toEqual({ status: "ready", blockers: [] })
-
-          rebindHarnessState.content = "target B policy"
-          const applied = yield* session.applyInstructions(first.id)
-
-          expect(applied).toMatchObject({
-            generation: (firstBefore?.generation ?? 0) + 1,
-            reason: "instructions-applied",
-            locationRevision: first.locationRevision,
-          })
-          expect(applied.instructions).toMatchObject([
-            { scope: "target", content: "target B policy" },
-            { scope: "project", content: "project policy" },
-          ])
-          expect(
-            Object.fromEntries(Object.entries(applied.sources).filter(([key]) => key !== "core/instructions")),
-          ).toEqual(
-            Object.fromEntries(Object.entries(firstBefore!.sources).filter(([key]) => key !== "core/instructions")),
-          )
-          expect(yield* session.skillView(first.id)).toEqual(skillBefore)
-          expect(yield* session.modelContext(second.id)).toEqual(secondBefore)
-          expect(secondBefore?.baseline).toContain("target A policy")
-          expect(yield* Effect.promise(() => readFile(projectFile, "utf8"))).toBe("project policy")
-          expect(executionState).toEqual({ resumes: 0, wakes: 0 })
-        }),
-      ),
-    ),
-  )
-
-  rebindIt.live("keeps the admitted generation when explicit instruction application cannot read a source", () =>
-    Effect.acquireRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-    ).pipe(
-      Effect.flatMap((tmp) =>
-        Effect.gen(function* () {
-          rebindHarnessState.content = "admitted policy"
-          rebindHarnessState.status = "readable"
-          const session = yield* SessionV2.Service
-          const created = yield* session.create({
-            location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
-          })
-          const before = yield* session.modelContext(created.id)
-
-          rebindHarnessState.status = "missing"
-          expect(yield* session.applyInstructions(created.id).pipe(Effect.flip)).toMatchObject({
-            _tag: "InstructionContext.ApplyError",
-            kind: "unavailable-source",
-          })
-          expect(yield* session.modelContext(created.id)).toEqual(before)
-          rebindHarnessState.status = "readable"
-        }),
-      ),
-    ),
-  )
-
-  rebindIt.live("rejects instruction application while a turn is queued and when Location is unresolved", () =>
-    Effect.acquireRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-    ).pipe(
-      Effect.flatMap((tmp) =>
-        Effect.gen(function* () {
-          rebindHarnessState.content = "stable policy"
-          rebindHarnessState.status = "readable"
-          const session = yield* SessionV2.Service
-          const busy = yield* session.create({
-            location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
-          })
-          const busyBefore = yield* session.modelContext(busy.id)
-          yield* session.prompt({ sessionID: busy.id, prompt: Prompt.make({ text: "queued" }), resume: false })
-          expect(yield* session.instructionApplyStatus(busy.id)).toMatchObject({
-            status: "busy",
-            blockers: ["queued_turn"],
-          })
-          expect(yield* session.applyInstructions(busy.id).pipe(Effect.flip)).toMatchObject({
-            _tag: "Session.InstructionApplyBusyError",
-            blockers: ["queued_turn"],
-          })
-          expect(yield* session.modelContext(busy.id)).toEqual(busyBefore)
-
-          const unresolved = yield* session.create({
-            location: Location.Ref.make({
-              target: {
-                type: "rexd",
-                targetID: Location.TargetID.make("33333333-3333-4333-8333-333333333333"),
-              },
-              directory: AbsolutePath.make(tmp.path),
-            }),
-          })
-          expect(yield* session.applyInstructions(unresolved.id).pipe(Effect.flip)).toMatchObject({
-            _tag: "Session.OperationUnavailableError",
-            operation: "location",
-          })
-          expect(yield* session.instructionApplyStatus(unresolved.id)).toEqual({
-            status: "unresolved",
-            blockers: ["location_unresolved"],
-          })
-        }),
-      ),
-    ),
-  )
-
   it.effect("guards direct Core mutators when the Session Location is unresolved", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
@@ -374,26 +199,16 @@ describe("SessionV2.create", () => {
       expect((yield* session.get(created.id)).location).toEqual(destination)
       expect(reset).toEqual([created.id])
       const { db } = yield* Database.Service
-      expect(
-        yield* db
-          .select()
-          .from(SessionContextEpochTable)
-          .where(eq(SessionContextEpochTable.session_id, created.id))
-          .get(),
-      ).toMatchObject({
-        session_id: created.id,
-        generation: 1,
-        reason: "location-rebound",
-        location_revision: created.locationRevision + 1,
-      })
       const rebound = yield* db
         .select({ data: EventTable.data })
         .from(EventTable)
         .where(eq(EventTable.type, "session.next.location.rebound.1"))
         .get()
       expect(rebound?.data).toMatchObject({
-        context: { reason: "location-rebound", locationRevision: created.locationRevision + 1 },
+        location: destination,
+        revision: created.locationRevision + 1,
       })
+      expect(rebound?.data).not.toHaveProperty("context")
     }),
   )
 
@@ -634,21 +449,18 @@ describe("SessionV2.create", () => {
       yield* session.prompt({ sessionID: created.id, prompt: Prompt.make({ text: "Hello" }), resume: false })
       yield* SessionInput.promoteSteers(db, events, created.id, Number.MAX_SAFE_INTEGER)
 
-      expect(
-        Array.from(yield* session.events({ sessionID: created.id }).pipe(Stream.take(3), Stream.runCollect)),
-      ).toMatchObject([
-        {
-          durable: { seq: 1 },
-          type: "session.next.context.generation.established",
-          data: { context: { reason: "created", generation: 1 } },
-        },
-        { durable: { seq: 2 }, type: "session.next.prompt.admitted", data: { prompt: { text: "Hello" } } },
-        { durable: { seq: 3 }, type: "session.next.prompted" },
+      const streamed = Array.from(
+        yield* session.events({ sessionID: created.id }).pipe(Stream.take(2), Stream.runCollect),
+      )
+      expect(streamed.map((event) => event.type)).toEqual([
+        "session.next.prompt.admitted",
+        "session.next.prompted",
       ])
+      expect(streamed.map((event) => event.type)).not.toContain("session.next.context.generation.established")
     }),
   )
 
-  it.effect("establishes only one context generation for concurrent first prompts", () =>
+  it.effect("does not emit a context generation for concurrent first prompts", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
       const { db } = yield* Database.Service
@@ -672,7 +484,7 @@ describe("SessionV2.create", () => {
         events.filter(
           (event) => event.type === EventV2.versionedType(SessionEvent.ContextGenerationEstablished.type, 1),
         ),
-      ).toHaveLength(1)
+      ).toHaveLength(0)
     }),
   )
 
@@ -727,24 +539,24 @@ describe("SessionV2.create", () => {
           .pipe(Effect.orDie)
 
         expect(yield* store.get(created.id)).toBeUndefined()
-        expect(yield* events.replayAll(serialized.slice(0, 3))).toBe(created.id)
+        expect(yield* events.replayAll(serialized.slice(0, 2))).toBe(created.id)
         expect(yield* SessionInput.find(db, admitted.id)).toMatchObject({
           id: admitted.id,
           sessionID: created.id,
           prompt: { text: "Replay lifecycle" },
           delivery: "steer",
-          admittedSeq: 2,
+          admittedSeq: 1,
         })
         expect(yield* store.context(created.id)).toEqual([])
 
-        expect(yield* events.replayAll(serialized.slice(3))).toBe(created.id)
+        expect(yield* events.replayAll(serialized.slice(2))).toBe(created.id)
         expect(yield* SessionInput.find(db, admitted.id)).toMatchObject({
           id: admitted.id,
           sessionID: created.id,
           prompt: { text: "Replay lifecycle" },
           delivery: "steer",
-          admittedSeq: 2,
-          promotedSeq: 3,
+          admittedSeq: 1,
+          promotedSeq: 2,
         })
         expect(yield* store.context(created.id)).toMatchObject([
           { id: admitted.id, type: "user", text: "Replay lifecycle" },
@@ -759,9 +571,8 @@ describe("SessionV2.create", () => {
             .pipe(Effect.orDie)).map((event) => [event.seq, event.type]),
         ).toEqual([
           [0, EventV2.versionedType(SessionV1.Event.Created.type, 1)],
-          [1, EventV2.versionedType(SessionEvent.ContextGenerationEstablished.type, 1)],
-          [2, EventV2.versionedType(SessionEvent.PromptAdmitted.type, 1)],
-          [3, EventV2.versionedType(SessionEvent.Prompted.type, 1)],
+          [1, EventV2.versionedType(SessionEvent.PromptAdmitted.type, 1)],
+          [2, EventV2.versionedType(SessionEvent.Prompted.type, 1)],
         ])
       }).pipe(Effect.provide(Layer.fresh(targetLayer)))
     }),

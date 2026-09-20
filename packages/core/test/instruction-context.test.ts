@@ -19,7 +19,7 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { EventTable } from "@opencode-ai/core/event/sql"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
-import { SessionContextEpochTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { eq } from "drizzle-orm"
 import { Config } from "@opencode-ai/core/config"
@@ -79,8 +79,8 @@ describe("InstructionContext", () => {
             await fs.writeFile(packageFile, "package")
           })
 
-          const load = SystemContextRegistry.Service.pipe(
-            Effect.flatMap((service) => service.load()),
+          const loadInstructions = InstructionContext.Service.pipe(
+            Effect.flatMap((service) => service.list(SessionV2.ID.make("ses_instruction_test"))),
             Effect.provide(
               instructionLayer({
                 config: global,
@@ -97,8 +97,8 @@ describe("InstructionContext", () => {
             ),
           )
 
-          const initialized = yield* SystemContext.initialize(yield* load)
-          expect(initialized.baseline).toBe(
+          const instructions = yield* loadInstructions
+          expect(InstructionContext.render(instructions)).toBe(
             [
               "Instructions from: <user-config>/AGENTS.md\nglobal",
               "Instructions from: <target-instructions>\nlocal target",
@@ -106,24 +106,13 @@ describe("InstructionContext", () => {
               `Instructions from: ${packageFile}\npackage`,
             ].join("\n\n"),
           )
-          expect(initialized.baseline).not.toContain("outside")
-          expect(initialized.snapshot["core/instructions"].value).toMatchObject([
+          expect(InstructionContext.render(instructions)).not.toContain("outside")
+          expect(instructions).toMatchObject([
             { origin: "global-file", scope: "global" },
             { origin: "target-file", scope: "target", source: "<target-instructions>" },
             { origin: "project-file", scope: "project" },
             { origin: "project-file", scope: "project" },
           ])
-
-          yield* Effect.promise(() =>
-            Promise.all([fs.writeFile(targetFile, "changed target"), fs.writeFile(packageFile, "changed")]),
-          )
-          expect(yield* SystemContext.reconcile(yield* load, initialized.snapshot)).toEqual({ _tag: "Unchanged" })
-
-          yield* Effect.promise(() => Promise.all([fs.rm(targetFile), fs.rm(packageFile)]))
-          expect(yield* SystemContext.reconcile(yield* load, initialized.snapshot)).toEqual({ _tag: "Unchanged" })
-
-          yield* Effect.promise(() => Promise.all([fs.rm(globalFile), fs.rm(projectFile)]))
-          expect(yield* SystemContext.reconcile(yield* load, initialized.snapshot)).toEqual({ _tag: "Unchanged" })
         }),
       ),
     ),
@@ -147,9 +136,8 @@ describe("InstructionContext", () => {
               JSON.stringify({ version: 1, instructions: { global: "policies/global.md" } }),
             )
           })
-          const generation = yield* SystemContextRegistry.Service.pipe(
-            Effect.flatMap((service) => service.load()),
-            Effect.flatMap(SystemContext.initialize),
+          const instructions = yield* InstructionContext.Service.pipe(
+            Effect.flatMap((service) => service.list(SessionV2.ID.make("ses_instruction_test"))),
             Effect.provide(
               instructionLayer({
                 config: global,
@@ -176,16 +164,11 @@ describe("InstructionContext", () => {
             ),
           )
 
-          expect(
-            (generation.snapshot["core/instructions"].value as ModelContext.Instructions).map((item) => [
-              item.source,
-              item.content,
-            ]),
-          ).toEqual([
+          expect(instructions.map((item) => [item.source, item.content])).toEqual([
             ["<global-instructions>", "custom global"],
             ["<user-config>/configured.md", "configured global"],
           ])
-          expect(generation.baseline).not.toContain("default decoy")
+          expect(InstructionContext.render(instructions)).not.toContain("default decoy")
         }),
       ),
     ),
@@ -217,9 +200,8 @@ describe("InstructionContext", () => {
           globMatch: () => false,
         } as unknown as FSUtil.Interface)
         const load = (targetID: Location.TargetID) =>
-          SystemContextRegistry.Service.pipe(
-            Effect.flatMap((service) => service.load()),
-            Effect.flatMap(SystemContext.initialize),
+          InstructionContext.Service.pipe(
+            Effect.flatMap((service) => service.list(SessionV2.ID.make(`ses_${targetID}`))),
             Effect.provide(
               instructionLayer({
                 config: global,
@@ -263,25 +245,23 @@ describe("InstructionContext", () => {
 
           const first = yield* load(targetA)
           const second = yield* load(targetB)
-          const firstInstructions = first.snapshot["core/instructions"].value as ModelContext.Instructions
-          const secondInstructions = second.snapshot["core/instructions"].value as ModelContext.Instructions
-          expect(firstInstructions.map((item) => [item.scope, item.source, item.content])).toEqual([
+          expect(first.map((item) => [item.scope, item.source, item.content])).toEqual([
             ["global", "<user-config>/AGENTS.md", "controller global"],
             ["target", "<target-instructions>", "shared target"],
             ["project", projectFile, "target project"],
           ])
-          expect(secondInstructions.map((item) => [item.scope, item.source, item.content])).toEqual([
+          expect(second.map((item) => [item.scope, item.source, item.content])).toEqual([
             ["global", "<user-config>/AGENTS.md", "controller global"],
             ["target", "<target-instructions>", "shared target"],
             ["project", projectFile, "target project"],
           ])
-          expect(firstInstructions[1]?.id).toBe(secondInstructions[1]?.id)
-          expect(first.baseline).not.toContain("controller project decoy")
+          expect(first[1]?.id).toBe(second[1]?.id)
+          expect(InstructionContext.render(first)).not.toContain("controller project decoy")
           expect(reads).toEqual([projectFile, projectFile])
           expect(reads).not.toContain(path.join(global, "policies", "shared.md"))
-          expect(JSON.stringify(first.snapshot)).not.toContain(targetA)
-          expect(JSON.stringify(second.snapshot)).not.toContain(targetB)
-          expect(JSON.stringify(first.snapshot)).not.toContain(path.join(global, "policies"))
+          expect(JSON.stringify(first)).not.toContain(targetA)
+          expect(JSON.stringify(second)).not.toContain(targetB)
+          expect(JSON.stringify(first)).not.toContain(path.join(global, "policies"))
         })
       }),
     ),
@@ -311,9 +291,8 @@ describe("InstructionContext", () => {
             glob: () => Effect.succeed([]),
             globMatch: () => false,
           } as unknown as FSUtil.Interface)
-          const generation = yield* SystemContextRegistry.Service.pipe(
-            Effect.flatMap((service) => service.load()),
-            Effect.flatMap(SystemContext.initialize),
+          const instructions = yield* InstructionContext.Service.pipe(
+            Effect.flatMap((service) => service.list(SessionV2.ID.make("ses_instruction_test"))),
             Effect.provide(
               instructionLayer({
                 config: global,
@@ -327,7 +306,7 @@ describe("InstructionContext", () => {
             ),
           )
 
-          expect(generation.snapshot["core/instructions"].value).toMatchObject([
+          expect(instructions).toMatchObject([
             {
               origin: "target-file",
               scope: "target",
@@ -336,7 +315,7 @@ describe("InstructionContext", () => {
               failureStage: "read",
             },
           ])
-          expect(JSON.stringify(generation.snapshot)).not.toContain(targetFile)
+          expect(JSON.stringify(instructions)).not.toContain(targetFile)
         }),
       ),
     ),
@@ -351,8 +330,8 @@ describe("InstructionContext", () => {
         Effect.gen(function* () {
           const file = path.join(tmp.path, "AGENTS.md")
           yield* Effect.promise(() => fs.writeFile(file, ""))
-          const context = yield* SystemContextRegistry.Service.pipe(
-            Effect.flatMap((service) => service.load()),
+          const instructions = yield* InstructionContext.Service.pipe(
+            Effect.flatMap((service) => service.list(SessionV2.ID.make("ses_instruction_test"))),
             Effect.provide(
               instructionLayer({
                 config: path.join(tmp.path, "global"),
@@ -364,16 +343,9 @@ describe("InstructionContext", () => {
             ),
           )
 
-          const generation = yield* SystemContext.initialize(context)
-          expect(generation.baseline).toBe("")
-          expect(generation.snapshot["core/instructions"].value).toMatchObject([
-            { source: file, status: "loaded", content: "" },
-          ])
-          expect(
-            (generation.snapshot["core/instructions"].value as ModelContext.Instructions).some(
-              (item) => item.origin === "target-file",
-            ),
-          ).toBe(false)
+          expect(InstructionContext.render(instructions)).toBe("")
+          expect(instructions).toMatchObject([{ source: file, status: "loaded", content: "" }])
+          expect(instructions.some((item) => item.origin === "target-file")).toBe(false)
         }),
       ),
     ),
@@ -399,9 +371,8 @@ describe("InstructionContext", () => {
             await fs.writeFile(childClaude, "child claude")
           })
           const load = () =>
-            SystemContextRegistry.Service.pipe(
-              Effect.flatMap((service) => service.load()),
-              Effect.flatMap(SystemContext.initialize),
+            InstructionContext.Service.pipe(
+              Effect.flatMap((service) => service.list(SessionV2.ID.make("ses_instruction_test"))),
               Effect.provide(
                 instructionLayer({
                   config: global,
@@ -418,13 +389,19 @@ describe("InstructionContext", () => {
               ),
             )
 
-          expect((yield* load()).baseline).toContain(`Instructions from: ${rootClaude}\nroot claude`)
-          expect((yield* load()).baseline).toContain(`Instructions from: ${childClaude}\nchild claude`)
+          expect(InstructionContext.render(yield* load())).toContain(
+            `Instructions from: ${rootClaude}\nroot claude`,
+          )
+          expect(InstructionContext.render(yield* load())).toContain(
+            `Instructions from: ${childClaude}\nchild claude`,
+          )
           yield* Effect.promise(() => fs.writeFile(rootAgents, "canonical"))
           const canonical = yield* load()
-          expect(canonical.baseline).toContain(`Instructions from: ${rootAgents}\ncanonical`)
-          expect(canonical.baseline).not.toContain("root claude")
-          expect(canonical.baseline).not.toContain("child claude")
+          expect(InstructionContext.render(canonical)).toContain(
+            `Instructions from: ${rootAgents}\ncanonical`,
+          )
+          expect(InstructionContext.render(canonical)).not.toContain("root claude")
+          expect(InstructionContext.render(canonical)).not.toContain("child claude")
         })
       }),
     ),
@@ -462,9 +439,8 @@ describe("InstructionContext", () => {
           info: new Config.Info({ instructions: ["rules.md"] }),
         }),
       ]
-      const generation = yield* SystemContextRegistry.Service.pipe(
-        Effect.flatMap((service) => service.load()),
-        Effect.flatMap(SystemContext.initialize),
+      const instructions = yield* InstructionContext.Service.pipe(
+        Effect.flatMap((service) => service.list(SessionV2.ID.make("ses_instruction_test"))),
         Effect.provide(
           instructionLayer({
             config: "/controller",
@@ -486,7 +462,6 @@ describe("InstructionContext", () => {
           }),
         ),
       )
-      const instructions = generation.snapshot["core/instructions"]?.value as ModelContext.Instructions
       expect(instructions).toMatchObject([
         { scope: "global", source: "<user-config>/rules.md", content: "private global" },
         { scope: "project", source: "/target/rules.md", content: "remote project" },
@@ -537,9 +512,8 @@ describe("InstructionContext", () => {
               info: new Config.Info({ instructions: ["*.md"] }),
             }),
           ]
-          const generation = yield* SystemContextRegistry.Service.pipe(
-            Effect.flatMap((service) => service.load()),
-            Effect.flatMap(SystemContext.initialize),
+          const instructions = yield* InstructionContext.Service.pipe(
+            Effect.flatMap((service) => service.list(SessionV2.ID.make("ses_instruction_test"))),
             Effect.provide(
               instructionLayer({
                 config: "/controller",
@@ -564,7 +538,6 @@ describe("InstructionContext", () => {
               }),
             ),
           )
-          const instructions = generation.snapshot["core/instructions"]?.value as ModelContext.Instructions
           expect(instructions.map((item) => [item.scope, item.source, item.content])).toEqual([
             ["global", "<user-config>/a.md", "controller:a.md"],
             ["global", "<user-config>/z.md", "controller:z.md"],
@@ -587,8 +560,8 @@ describe("InstructionContext", () => {
           ),
         ),
       ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
-      const context = yield* SystemContextRegistry.Service.pipe(
-        Effect.flatMap((service) => service.load()),
+      const instructions = yield* InstructionContext.Service.pipe(
+        Effect.flatMap((service) => service.list(SessionV2.ID.make("ses_instruction_test"))),
         Effect.provide(
           instructionLayer({
             config: "/global",
@@ -601,14 +574,7 @@ describe("InstructionContext", () => {
         ),
       )
 
-      expect(
-        yield* SystemContext.reconcile(context, {
-          "core/instructions": {
-            value: [{ path: "/repo/AGENTS.md", content: "old" }],
-            removed: "Previously loaded instructions no longer apply.",
-          },
-        }),
-      ).toEqual({ _tag: "Unchanged" })
+      expect(instructions.some((item) => item.status === "loaded")).toBe(false)
     }),
   )
 
@@ -627,8 +593,8 @@ describe("InstructionContext", () => {
           ),
         ),
       ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
-      const context = yield* SystemContextRegistry.Service.pipe(
-        Effect.flatMap((service) => service.load()),
+      const instructions = yield* InstructionContext.Service.pipe(
+        Effect.flatMap((service) => service.list(SessionV2.ID.make("ses_instruction_test"))),
         Effect.provide(
           instructionLayer({
             config: "/global",
@@ -641,14 +607,7 @@ describe("InstructionContext", () => {
         ),
       )
 
-      expect(
-        yield* SystemContext.reconcile(context, {
-          "core/instructions": {
-            value: [{ path: file, content: "old" }],
-            removed: "Previously loaded instructions no longer apply.",
-          },
-        }),
-      ).toEqual({ _tag: "Unchanged" })
+      expect(instructions.some((item) => item.source === file && item.status === "ignored")).toBe(true)
     }),
   )
 
@@ -671,9 +630,8 @@ describe("InstructionContext", () => {
         ),
       ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
 
-      yield* SystemContextRegistry.Service.pipe(
-        Effect.flatMap((service) => service.load()),
-        Effect.flatMap(SystemContext.initialize),
+      yield* InstructionContext.Service.pipe(
+        Effect.flatMap((service) => service.list(SessionV2.ID.make("ses_instruction_test"))),
         Effect.provide(
           instructionLayer({
             config: "/global",
@@ -702,8 +660,8 @@ describe("InstructionContext", () => {
       let scanned = false
       process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "1"
 
-      yield* SystemContextRegistry.Service.pipe(
-        Effect.flatMap((service) => service.load()),
+      yield* InstructionContext.Service.pipe(
+        Effect.flatMap((service) => service.list(SessionV2.ID.make("ses_instruction_test"))),
         Effect.provide(
           instructionLayer({
             config: "/global",
@@ -734,8 +692,8 @@ describe("InstructionContext", () => {
   it.effect("does not discover project instructions outside the canonical project root", () =>
     Effect.gen(function* () {
       let scanned = false
-      yield* SystemContextRegistry.Service.pipe(
-        Effect.flatMap((service) => service.load()),
+      yield* InstructionContext.Service.pipe(
+        Effect.flatMap((service) => service.list(SessionV2.ID.make("ses_instruction_test"))),
         Effect.provide(
           instructionLayer({
             config: "/global",
@@ -762,7 +720,7 @@ describe("InstructionContext", () => {
     }),
   )
 
-  it.live("durably appends nested target instructions before deeper content is consumed", () =>
+  it.live("appends nested target instructions in-memory without publishing a durable context event", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
@@ -786,9 +744,7 @@ describe("InstructionContext", () => {
           const sessionID = SessionV2.ID.make("ses_nested_instruction")
           yield* Effect.gen(function* () {
             const { db } = yield* Database.Service
-            const registry = yield* SystemContextRegistry.Service
             const instructions = yield* InstructionContext.Service
-            const initial = yield* registry.load().pipe(Effect.flatMap(SystemContext.initialize))
             yield* db
               .insert(ProjectTable)
               .values({ id: Project.ID.global, worktree: AbsolutePath.make(project), sandboxes: [] })
@@ -804,43 +760,18 @@ describe("InstructionContext", () => {
                 version: "test",
               })
               .run()
-            yield* db
-              .insert(SessionContextEpochTable)
-              .values({
-                session_id: sessionID,
-                baseline: initial.baseline,
-                snapshot: initial.snapshot,
-                baseline_seq: 0,
-                generation: 1,
-                reason: "created",
-                location_revision: 0,
-                digest: "initial",
-              })
-              .run()
+
+            const initial = yield* instructions.list(sessionID)
+            expect(initial.some((item) => item.source === projectFile)).toBe(true)
+            expect(initial.some((item) => item.source === nestedFile)).toBe(false)
 
             yield* instructions.extend({ sessionID, path: target, kind: "file" })
-            const event = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).get()
-            expect(event?.type).toBe("session.next.context.advanced.1")
-            expect(event?.data).toMatchObject({
-              cause: "nested-instructions",
-              text: `Instructions from: ${nestedFile}\nnested`,
-            })
-            if (!event) return yield* Effect.die("ContextAdvanced event missing")
-            const sources = (event.data as { sources: SystemContext.Snapshot }).sources
-            expect(sources["core/instructions"]?.value).toMatchObject([
-              { source: projectFile, origin: "project-file", content: "project" },
-              { source: nestedFile, origin: "nested-file", content: "nested" },
-            ])
-
-            yield* db
-              .update(SessionContextEpochTable)
-              .set({ snapshot: sources })
-              .where(eq(SessionContextEpochTable.session_id, sessionID))
-              .run()
-            yield* instructions.extend({ sessionID, path: target, kind: "file" })
+            const extended = yield* instructions.list(sessionID)
+            expect(extended.some((item) => item.source === projectFile)).toBe(true)
+            expect(extended.some((item) => item.source === nestedFile)).toBe(true)
             expect(
               yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all(),
-            ).toHaveLength(1)
+            ).toHaveLength(0)
           }).pipe(
             Effect.provide(
               instructionLayer({

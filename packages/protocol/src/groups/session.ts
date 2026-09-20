@@ -385,6 +385,29 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           data: Schema.NullOr(ModelContext.Generation),
           skillCatalog: Schema.NullOr(Skill.AdmittedCatalog),
           skillGuidance: Schema.NullOr(Schema.String),
+          runtimeParts: Schema.NullOr(
+            Schema.Array(
+              Schema.Struct({
+                key: Schema.String,
+                label: Schema.String,
+                tag: Schema.String,
+                text: Schema.String,
+              }),
+            ),
+          ),
+          agentSystem: Schema.NullOr(Schema.String),
+          environment: Schema.NullOr(Schema.String),
+          environmentInfo: Schema.NullOr(ModelContext.Environment),
+          instructions: Schema.Array(ModelContext.Instruction),
+          model: Schema.NullOr(Model.Ref),
+          headers: Schema.NullOr(Schema.Record(Schema.String, Schema.String)),
+          compaction: Schema.NullOr(
+            Schema.Struct({
+              reason: Schema.Literals(["auto", "manual"]),
+              summary: Schema.String,
+              recent: Schema.String,
+            }),
+          ),
           subagentCatalog: Schema.optional(Schema.NullOr(SubagentEconomicsCatalog)),
           subagentGuidance: Schema.optional(Schema.NullOr(Schema.String)),
           subagentRefresh: Schema.optional(SubagentEconomicsRefresh),
@@ -396,35 +419,6 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           summary: "Inspect session model context",
           description:
             "Return the frozen canonical model-context generation plus device-local Skill and subagent economics inspection data without connecting to or reading from the Session target.",
-        }),
-      ),
-    )
-    .add(
-      HttpApiEndpoint.get("session.instructionsStatus", "/api/session/:sessionID/instructions/status", {
-        params: { sessionID: Session.ID },
-        success: Schema.Struct({
-          status: Schema.Literals(["ready", "busy", "unresolved"]),
-          blockers: Schema.Array(Schema.String),
-        }).annotate({ identifier: "SessionInstructionApplyStatus" }),
-        error: SessionNotFoundError,
-      }).annotateMerge(
-        OpenApi.annotations({
-          identifier: "v2.session.instructions.status",
-          summary: "Inspect whether one Session can apply saved instructions",
-        }),
-      ),
-    )
-    .add(
-      HttpApiEndpoint.post("session.instructionsApply", "/api/session/:sessionID/instructions/apply", {
-        params: { sessionID: Session.ID },
-        success: ModelContext.Generation,
-        error: [SessionNotFoundError, ConflictError, InvalidRequestError, ServiceUnavailableError, UnknownError],
-      }).annotateMerge(
-        OpenApi.annotations({
-          identifier: "v2.session.instructions.apply",
-          summary: "Apply saved harness instructions to one idle Session",
-          description:
-            "Rereads instructions and atomically establishes one durable generation without invoking the model or editing project files.",
         }),
       ),
     )

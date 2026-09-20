@@ -183,6 +183,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               ),
             ),
           )
+          const requestContext = yield* session.requestContext(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) =>
+              Effect.fail(
+                new SessionNotFoundError({
+                  sessionID: error.sessionID,
+                  message: `Session not found: ${error.sessionID}`,
+                }),
+              ),
+            ),
+          )
           return {
             data:
               (yield* session.modelContext(ctx.params.sessionID).pipe(
@@ -202,63 +212,18 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               )) ?? null,
             skillCatalog: skillView?.catalog ?? null,
             skillGuidance: skillView?.guidance ?? null,
+            runtimeParts: requestContext?.runtimeParts ?? null,
+            agentSystem: requestContext?.agentSystem ?? null,
+            environment: requestContext?.environment ?? null,
+            environmentInfo: requestContext?.environmentInfo ?? null,
+            instructions: requestContext?.instructions ?? [],
+            model: requestContext?.model ?? null,
+            headers: requestContext?.headers ?? null,
+            compaction: requestContext?.compaction ?? null,
             subagentCatalog: subagent?.subagentCatalog,
             subagentGuidance: subagent?.subagentGuidance,
             subagentRefresh: subagent?.subagentRefresh,
           }
-        }),
-      )
-      .handle(
-        "session.instructionsStatus",
-        Effect.fn(function* (ctx) {
-          return yield* session.instructionApplyStatus(ctx.params.sessionID).pipe(
-            Effect.catchTag("Session.NotFoundError", (error) =>
-              Effect.fail(
-                new SessionNotFoundError({
-                  sessionID: error.sessionID,
-                  message: `Session not found: ${error.sessionID}`,
-                }),
-              ),
-            ),
-          )
-        }),
-      )
-      .handle(
-        "session.instructionsApply",
-        Effect.fn(function* (ctx) {
-          return yield* session.applyInstructions(ctx.params.sessionID).pipe(
-            Effect.catchTag("Session.NotFoundError", (error) =>
-              Effect.fail(
-                new SessionNotFoundError({
-                  sessionID: error.sessionID,
-                  message: `Session not found: ${error.sessionID}`,
-                }),
-              ),
-            ),
-            Effect.catchTag("Session.OperationUnavailableError", (error) =>
-              Effect.fail(
-                new ServiceUnavailableError({
-                  message: `Session ${error.operation} is not available yet`,
-                  service: `session.${error.operation}`,
-                }),
-              ),
-            ),
-            Effect.catchTag("Session.InstructionApplyBusyError", (error) =>
-              Effect.fail(
-                new ConflictError({
-                  message: `Session is not idle: ${error.blockers.join(", ")}`,
-                  resource: "session_activity",
-                }),
-              ),
-            ),
-            Effect.catchTag("InstructionContext.ApplyError", (error) =>
-              Effect.fail(
-                error.kind === "unavailable-source"
-                  ? new InvalidRequestError({ message: error.message, kind: "instruction_source" })
-                  : new ServiceUnavailableError({ message: error.message, service: "session.instructions" }),
-              ),
-            ),
-          )
         }),
       )
       .handle(

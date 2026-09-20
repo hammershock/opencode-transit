@@ -33,10 +33,6 @@ import type {
   SessionsContextOutput,
   SessionsModelContextInput,
   SessionsModelContextOutput,
-  SessionsInstructionsStatusInput,
-  SessionsInstructionsStatusOutput,
-  SessionsInstructionsApplyInput,
-  SessionsInstructionsApplyOutput,
   SessionsHistoryInput,
   SessionsHistoryOutput,
   SessionsEventsInput,
@@ -553,28 +549,6 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/model-context`,
             successStatus: 200,
             declaredStatuses: [404, 500, 401, 400],
-            empty: false,
-          },
-          requestOptions,
-        ),
-      instructionsStatus: (input: SessionsInstructionsStatusInput, requestOptions?: RequestOptions) =>
-        request<SessionsInstructionsStatusOutput>(
-          {
-            method: "GET",
-            path: `/api/session/${encodeURIComponent(input.sessionID)}/instructions/status`,
-            successStatus: 200,
-            declaredStatuses: [404, 401, 400],
-            empty: false,
-          },
-          requestOptions,
-        ),
-      instructionsApply: (input: SessionsInstructionsApplyInput, requestOptions?: RequestOptions) =>
-        request<SessionsInstructionsApplyOutput>(
-          {
-            method: "POST",
-            path: `/api/session/${encodeURIComponent(input.sessionID)}/instructions/apply`,
-            successStatus: 200,
-            declaredStatuses: [404, 409, 400, 503, 500, 401],
             empty: false,
           },
           requestOptions,

@@ -293,12 +293,7 @@ describe("v2 location HttpApi", () => {
       const response = await request(`/api/session/${sessionID}/model-context`, tmp.path)
       expect(response.status, await response.clone().text()).toBe(200)
       return (await response.json()) as {
-        data: {
-          generation: number
-          locationRevision: number
-          baseline: string
-          sources: Record<string, { value: unknown; refresh?: string }>
-        }
+        data: null
         skillCatalog: { skills: Array<{ name: string }> }
         skillGuidance: string
         subagentCatalog?: unknown
@@ -314,18 +309,16 @@ describe("v2 location HttpApi", () => {
     }
 
     const initialResponse = await modelContext()
-    const initial = initialResponse.data
+    expect(initialResponse.data).toBeNull()
     expect(initialResponse.subagentCatalog).toBeNull()
     expect(initialResponse.subagentGuidance).toBeNull()
     expect(initialResponse.subagentRefresh).toEqual({ status: "disabled", diagnostics: [] })
-    expect(initial.sources["core/skill-guidance"]).toBeUndefined()
     expect(initialResponse.skillCatalog.skills).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "activation-review" })]),
     )
     expect(initialResponse.skillGuidance.match(/<available_skills>/g)).toHaveLength(1)
     expect(initialResponse.skillGuidance).toContain("Review the first catalog")
     expect(initialResponse.skillGuidance).not.toContain("PRIVATE ACTIVATION BODY")
-    expect(JSON.stringify(initial)).not.toContain("PRIVATE ACTIVATION BODY")
     expect(await activate()).toMatchObject({ data: { status: "unchanged" } })
     expect(await advances()).toHaveLength(0)
 
@@ -344,13 +337,7 @@ describe("v2 location HttpApi", () => {
     )
     expect(await activate()).toMatchObject({ data: { status: "advanced" } })
     const advancedResponse = await modelContext()
-    const advanced = advancedResponse.data
-    expect(advanced).toMatchObject({
-      generation: initial.generation,
-      locationRevision: initial.locationRevision,
-      baseline: initial.baseline,
-    })
-    expect(advanced.sources["core/skill-guidance"]).toBeUndefined()
+    expect(advancedResponse.data).toBeNull()
     expect(advancedResponse.skillCatalog.skills).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "activation-added" })]),
     )
@@ -413,8 +400,12 @@ describe("v2 location HttpApi", () => {
 
     const contextResponse = await request(`/api/session/${sessionID}/model-context`, tmp.path)
     expect(contextResponse.status, await contextResponse.clone().text()).toBe(200)
-    const context = (await contextResponse.json()) as { data: { sources: Record<string, unknown> } }
-    expect(context.data.sources["core/skill-guidance"]).toBeUndefined()
+    const context = (await contextResponse.json()) as {
+      data: null
+      skillCatalog: { skills: Array<{ name: string }> }
+    }
+    expect(context.data).toBeNull()
+    expect(context.skillCatalog.skills.filter((skill) => skill.name.startsWith("bounded-"))).toHaveLength(70)
   })
 
   test("admits portable Skill snapshots atomically and reuses them for exact retries", async () => {
@@ -556,7 +547,7 @@ describe("v2 location HttpApi", () => {
     const contextResponse = await request(`/api/session/${sessionID}/model-context`, tmp.path)
     expect(contextResponse.status, await contextResponse.clone().text()).toBe(200)
     const context = (await contextResponse.json()) as {
-      data: unknown
+      data: null
       skillCatalog: { skills: Array<{ id: string; name: string }> }
     }
     expect(
@@ -565,7 +556,7 @@ describe("v2 location HttpApi", () => {
         .map((skill) => skill.id)
         .toSorted(),
     ).toEqual(collisions.map((skill) => skill.id).toSorted())
-    expect(JSON.stringify(context.data)).not.toContain("skl_")
+    expect(context.data).toBeNull()
 
     const admitted = await request(`/api/session/${sessionID}/prompt`, tmp.path, {
       method: "POST",

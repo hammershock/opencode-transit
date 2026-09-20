@@ -15,20 +15,19 @@ import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
 import { Location } from "../../location"
 import { ModelV2 } from "../../model"
-import { ModelContextAssembler } from "../../model-context-assembler"
 import { PermissionV2 } from "../../permission"
 import { ProviderV2 } from "../../provider"
 import { QuestionV2 } from "../../question"
+import { RuntimeContext } from "../../runtime-context"
+import { RuntimeContextBuiltIns } from "../../runtime-context/builtins"
 import { ToolRegistry } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
-import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
-import { SessionSkillCatalog } from "../skill-catalog"
 import { SessionTurn } from "../turn"
 import { type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
@@ -99,9 +98,9 @@ const layer = Layer.effect(
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
     const location = yield* Location.Service
-    const modelContext = yield* ModelContextAssembler.Service
     const config = yield* Config.Service
     const snapshots = yield* Snapshot.Service
+    const runtime = yield* RuntimeContext.Service
     const db = (yield* Database.Service).db
     const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
@@ -177,13 +176,6 @@ const layer = Layer.effect(
       )
         return yield* Effect.interrupt
       const agent = yield* agents.select(session.agent)
-      const initialized = yield* SessionContextEpoch.initialize(
-        db,
-        events,
-        modelContext.load(agent.id),
-        session.id,
-        session.locationRevision,
-      )
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
       let currentStep = step
@@ -201,15 +193,6 @@ const layer = Layer.effect(
           currentStep = 1
         }
       }
-      const system =
-        initialized ??
-        (yield* SessionContextEpoch.prepare(
-          db,
-          events,
-          modelContext.load(agent.id),
-          session.id,
-          session.locationRevision,
-        ))
       const model = yield* models.resolve(session).pipe(
         Effect.tapError((error) =>
           createLLMEventPublisher(events, {
@@ -222,8 +205,8 @@ const layer = Layer.effect(
           }).failAssistant(error.message),
         ),
       )
-      const skillGuidance = yield* SessionSkillCatalog.guidance(db, session.id)
-      const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
+      const runtimeParts = yield* runtime.assemble(session.id, agent)
+      const entries = yield* SessionHistory.entriesForRunner(db, session.id)
       const context = entries.map((entry) => entry.message)
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
@@ -238,7 +221,7 @@ const layer = Layer.effect(
           },
         },
         providerOptions: { openai: { promptCacheKey } },
-        system: [agent.info?.system, system.baseline, skillGuidance]
+        system: [agent.info?.system, ...runtimeParts.map((part) => part.text)]
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
         messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
@@ -487,7 +470,8 @@ export const node = makeLocationNode({
     SessionRunnerModel.node,
     SessionStore.node,
     Location.node,
-    ModelContextAssembler.node,
+    RuntimeContext.node,
+    RuntimeContextBuiltIns.node,
     Config.node,
     Snapshot.node,
     Database.node,

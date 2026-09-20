@@ -15,42 +15,10 @@ import { SessionMessageUpdater } from "./message-updater"
 import { SessionInput } from "./input"
 import { SessionSchema } from "./schema"
 import { WorkspaceV2 } from "../workspace"
-import {
-  MessageTable,
-  PartTable,
-  SessionContextEpochTable,
-  SessionInputTable,
-  SessionMessageTable,
-  SessionTable,
-} from "./sql"
+import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
 import { AbsolutePath, type DeepMutable } from "../schema"
 
 type DatabaseService = Database.Interface["db"]
-
-const shouldReplaceContext = Effect.fnUntraced(function* (
-  db: DatabaseService,
-  input: {
-    readonly sessionID: SessionSchema.ID
-    readonly generation: number
-    readonly locationRevision: number
-    readonly seq: number
-  },
-) {
-  const current = yield* db
-    .select({
-      generation: SessionContextEpochTable.generation,
-      locationRevision: SessionContextEpochTable.location_revision,
-      baselineSeq: SessionContextEpochTable.baseline_seq,
-    })
-    .from(SessionContextEpochTable)
-    .where(eq(SessionContextEpochTable.session_id, input.sessionID))
-    .get()
-    .pipe(Effect.orDie)
-  if (!current) return true
-  if (input.locationRevision !== current.locationRevision) return input.locationRevision > current.locationRevision
-  if (input.generation !== current.generation) return input.generation > current.generation
-  return input.seq >= current.baselineSeq
-})
 
 const decodeMessage = Schema.decodeUnknownSync(SessionMessage.Message)
 const encodeMessage = Schema.encodeSync(SessionMessage.Message)
@@ -338,44 +306,6 @@ const layer = Layer.effectDiscard(
           )
           .run()
           .pipe(Effect.orDie)
-        const context = event.data.context
-        if (!context) return
-        const seq = event.durable?.seq ?? 0
-        if (
-          !(yield* shouldReplaceContext(db, {
-            sessionID: event.data.sessionID,
-            generation: context.generation,
-            locationRevision: context.locationRevision,
-            seq,
-          }))
-        )
-          return
-        yield* db
-          .insert(SessionContextEpochTable)
-          .values({
-            session_id: event.data.sessionID,
-            baseline: context.baseline,
-            snapshot: context.sources,
-            baseline_seq: seq,
-            generation: context.generation,
-            reason: context.reason,
-            location_revision: context.locationRevision,
-            digest: context.digest,
-          })
-          .onConflictDoUpdate({
-            target: SessionContextEpochTable.session_id,
-            set: {
-              baseline: context.baseline,
-              snapshot: context.sources,
-              baseline_seq: seq,
-              generation: context.generation,
-              reason: context.reason,
-              location_revision: context.locationRevision,
-              digest: context.digest,
-            },
-          })
-          .run()
-          .pipe(Effect.orDie)
       }),
     )
     yield* events.project(SessionV1.Event.Deleted, (event) =>
@@ -498,55 +428,6 @@ const layer = Layer.effectDiscard(
     )
     yield* events.project(SessionEvent.Turn.Settled, () => Effect.void)
     yield* events.project(SessionEvent.ContextUpdated, (event) => run(db, event))
-    yield* events.project(SessionEvent.ContextGenerationEstablished, (event) =>
-      Effect.gen(function* () {
-        if (event.durable === undefined) return yield* Effect.die("Durable Session event is missing aggregate sequence")
-        const context = event.data.context
-        if (
-          !(yield* shouldReplaceContext(db, {
-            sessionID: event.data.sessionID,
-            generation: context.generation,
-            locationRevision: context.locationRevision,
-            seq: event.durable.seq,
-          }))
-        )
-          return
-        yield* db
-          .insert(SessionContextEpochTable)
-          .values({
-            session_id: event.data.sessionID,
-            baseline: context.baseline,
-            snapshot: context.sources,
-            baseline_seq: event.durable.seq,
-            generation: context.generation,
-            reason: context.reason,
-            location_revision: context.locationRevision,
-            digest: context.digest,
-          })
-          .onConflictDoUpdate({
-            target: SessionContextEpochTable.session_id,
-            set: {
-              baseline: context.baseline,
-              snapshot: context.sources,
-              baseline_seq: event.durable.seq,
-              generation: context.generation,
-              reason: context.reason,
-              location_revision: context.locationRevision,
-              digest: context.digest,
-            },
-          })
-          .run()
-          .pipe(Effect.orDie)
-      }),
-    )
-    yield* events.project(SessionEvent.ContextAdvanced, (event) =>
-      db
-        .update(SessionContextEpochTable)
-        .set({ snapshot: event.data.sources, digest: event.data.digest })
-        .where(eq(SessionContextEpochTable.session_id, event.data.sessionID))
-        .run()
-        .pipe(Effect.orDie, Effect.andThen(run(db, event))),
-    )
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Ended, (event) => run(db, event))

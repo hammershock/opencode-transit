@@ -454,10 +454,6 @@ import type {
   V2SessionGetResponses,
   V2SessionHistoryErrors,
   V2SessionHistoryResponses,
-  V2SessionInstructionsApplyErrors,
-  V2SessionInstructionsApplyResponses,
-  V2SessionInstructionsStatusErrors,
-  V2SessionInstructionsStatusResponses,
   V2SessionInterruptErrors,
   V2SessionInterruptResponses,
   V2SessionListErrors,
@@ -5410,52 +5406,6 @@ export class Revert extends HeyApiClient {
   }
 }
 
-export class Instructions extends HeyApiClient {
-  /**
-   * Inspect whether one Session can apply saved instructions
-   */
-  public status<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
-    return (options?.client ?? this.client).get<
-      V2SessionInstructionsStatusResponses,
-      V2SessionInstructionsStatusErrors,
-      ThrowOnError
-    >({
-      url: "/api/session/{sessionID}/instructions/status",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Apply saved harness instructions to one idle Session
-   *
-   * Rereads instructions and atomically establishes one durable generation without invoking the model or editing project files.
-   */
-  public apply<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
-    return (options?.client ?? this.client).post<
-      V2SessionInstructionsApplyResponses,
-      V2SessionInstructionsApplyErrors,
-      ThrowOnError
-    >({
-      url: "/api/session/{sessionID}/instructions/apply",
-      ...options,
-      ...params,
-    })
-  }
-}
-
 export class Permission2 extends HeyApiClient {
   /**
    * List session permission requests
@@ -6192,11 +6142,6 @@ export class Session3 extends HeyApiClient {
   private _revert?: Revert
   get revert(): Revert {
     return (this._revert ??= new Revert({ client: this.client }))
-  }
-
-  private _instructions?: Instructions
-  get instructions(): Instructions {
-    return (this._instructions ??= new Instructions({ client: this.client }))
   }
 
   private _permission?: Permission2
@@ -7690,6 +7635,7 @@ export class Wizard extends HeyApiClient {
     parameters?: {
       input?: {
         name: string
+        description?: string
         transport: "ssh"
         connection:
           | {
@@ -7738,6 +7684,7 @@ export class Wizard extends HeyApiClient {
     parameters?: {
       input?: {
         name: string
+        description?: string
         transport: "ssh"
         connection:
           | {
@@ -7863,6 +7810,7 @@ export class Target extends HeyApiClient {
     parameters?: {
       input?: {
         name: string
+        description?: string
         transport: "ssh"
         connection:
           | {
@@ -7952,6 +7900,7 @@ export class Target extends HeyApiClient {
       targetID: string
       input?: {
         name: string
+        description?: string
         transport: "ssh"
         connection:
           | {
@@ -8009,6 +7958,7 @@ export class Target extends HeyApiClient {
       targetID: string
       input?: {
         name: string
+        description?: string
         transport: "ssh"
         connection:
           | {
@@ -8332,7 +8282,7 @@ export class Target2 extends HeyApiClient {
   }
 }
 
-export class Instructions2 extends HeyApiClient {
+export class Instructions extends HeyApiClient {
   /**
    * Read device-local harness instruction settings
    */
@@ -8440,9 +8390,9 @@ export class Instructions2 extends HeyApiClient {
 }
 
 export class Harness extends HeyApiClient {
-  private _instructions?: Instructions2
-  get instructions(): Instructions2 {
-    return (this._instructions ??= new Instructions2({ client: this.client }))
+  private _instructions?: Instructions
+  get instructions(): Instructions {
+    return (this._instructions ??= new Instructions({ client: this.client }))
   }
 }
 

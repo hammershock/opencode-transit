@@ -1807,6 +1807,7 @@ export type PermissionConfig =
 
 export type AgentConfig = {
   id?: string
+  schema_revision?: 1
   name?: string
   model?: string
   variant?: string
@@ -1833,6 +1834,7 @@ export type AgentConfig = {
   [key: string]:
     | unknown
     | string
+    | 1
     | number
     | {
         [key: string]: boolean
@@ -3012,11 +3014,6 @@ export type UnknownError1 = {
   _tag: "UnknownError"
   message: string
   ref?: string
-}
-
-export type SessionInstructionApplyStatus = {
-  status: "ready" | "busy" | "unresolved"
-  blockers: Array<string>
 }
 
 export type SessionDurableEvent =
@@ -6969,6 +6966,7 @@ export type SessionLocationRebindingResolution =
               trustedUntil: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
             }
         name: string
+        description?: string
         transport: "ssh"
         connection:
           | {
@@ -7025,6 +7023,7 @@ export type SessionLocationRebindingResolution =
               trustedUntil: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
             }
         name: string
+        description?: string
         transport: "ssh"
         connection:
           | {
@@ -7100,6 +7099,7 @@ export type SessionLocationRebindingRestoreResult = {
           trustedUntil: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
         }
     name: string
+    description?: string
     transport: "ssh"
     connection:
       | {
@@ -7142,6 +7142,7 @@ export type SessionLocationRebindingRestoreResult = {
             trustedUntil: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           }
       name: string
+      description?: string
       transport: "ssh"
       connection:
         | {
@@ -14746,6 +14747,25 @@ export type V2SessionModelContextResponses = {
     data: ModelContextGeneration
     skillCatalog: SkillAdmittedCatalog
     skillGuidance: string
+    runtimeParts: Array<{
+      key: string
+      label: string
+      tag: string
+      text: string
+    }>
+    agentSystem: string
+    environment: string
+    environmentInfo: ModelContextEnvironment
+    instructions: Array<ModelContextInstruction>
+    model: ModelRef
+    headers: {
+      [key: string]: string
+    }
+    compaction: {
+      reason: "auto" | "manual"
+      summary: string
+      recent: string
+    }
     subagentCatalog?: {
       revision: string
       activatedAt: string
@@ -14804,91 +14824,6 @@ export type V2SessionModelContextResponses = {
 }
 
 export type V2SessionModelContextResponse = V2SessionModelContextResponses[keyof V2SessionModelContextResponses]
-
-export type V2SessionInstructionsStatusData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: never
-  url: "/api/session/{sessionID}/instructions/status"
-}
-
-export type V2SessionInstructionsStatusErrors = {
-  /**
-   * InvalidRequestError
-   */
-  400: InvalidRequestError
-  /**
-   * UnauthorizedError
-   */
-  401: UnauthorizedError
-  /**
-   * SessionNotFoundError
-   */
-  404: SessionNotFoundError
-}
-
-export type V2SessionInstructionsStatusError =
-  V2SessionInstructionsStatusErrors[keyof V2SessionInstructionsStatusErrors]
-
-export type V2SessionInstructionsStatusResponses = {
-  /**
-   * SessionInstructionApplyStatus
-   */
-  200: SessionInstructionApplyStatus
-}
-
-export type V2SessionInstructionsStatusResponse =
-  V2SessionInstructionsStatusResponses[keyof V2SessionInstructionsStatusResponses]
-
-export type V2SessionInstructionsApplyData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: never
-  url: "/api/session/{sessionID}/instructions/apply"
-}
-
-export type V2SessionInstructionsApplyErrors = {
-  /**
-   * InvalidRequestError
-   */
-  400: InvalidRequestError
-  /**
-   * UnauthorizedError
-   */
-  401: UnauthorizedError
-  /**
-   * SessionNotFoundError
-   */
-  404: SessionNotFoundError
-  /**
-   * ConflictError
-   */
-  409: ConflictError
-  /**
-   * UnknownError
-   */
-  500: UnknownError1
-  /**
-   * ServiceUnavailableError
-   */
-  503: ServiceUnavailableError
-}
-
-export type V2SessionInstructionsApplyError = V2SessionInstructionsApplyErrors[keyof V2SessionInstructionsApplyErrors]
-
-export type V2SessionInstructionsApplyResponses = {
-  /**
-   * ModelContext.Generation
-   */
-  200: ModelContextGeneration
-}
-
-export type V2SessionInstructionsApplyResponse =
-  V2SessionInstructionsApplyResponses[keyof V2SessionInstructionsApplyResponses]
 
 export type V2SessionHistoryData = {
   body?: never
@@ -17134,6 +17069,7 @@ export type V2TargetListResponses = {
             trustedUntil: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           }
       name: string
+      description?: string
       transport: "ssh"
       connection:
         | {
@@ -17171,6 +17107,7 @@ export type V2TargetCreateData = {
   body: {
     input: {
       name: string
+      description?: string
       transport: "ssh"
       connection:
         | {
@@ -17251,6 +17188,7 @@ export type V2TargetCreateResponses = {
             trustedUntil: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           }
       name: string
+      description?: string
       transport: "ssh"
       connection:
         | {
@@ -17293,6 +17231,7 @@ export type V2TargetCreateResponses = {
               trustedUntil: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
             }
         name: string
+        description?: string
         transport: "ssh"
         connection:
           | {
@@ -17572,6 +17511,7 @@ export type V2TargetWizardInspectData = {
   body: {
     input: {
       name: string
+      description?: string
       transport: "ssh"
       connection:
         | {
@@ -17643,6 +17583,7 @@ export type V2TargetWizardCompleteData = {
   body: {
     input: {
       name: string
+      description?: string
       transport: "ssh"
       connection:
         | {
@@ -17780,6 +17721,7 @@ export type V2TargetRemoveResponses = {
             trustedUntil: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           }
       name: string
+      description?: string
       transport: "ssh"
       connection:
         | {
@@ -17817,6 +17759,7 @@ export type V2TargetUpdateData = {
   body: {
     input: {
       name: string
+      description?: string
       transport: "ssh"
       connection:
         | {
@@ -17899,6 +17842,7 @@ export type V2TargetUpdateResponses = {
             trustedUntil: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           }
       name: string
+      description?: string
       transport: "ssh"
       connection:
         | {
@@ -17941,6 +17885,7 @@ export type V2TargetUpdateResponses = {
               trustedUntil: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
             }
         name: string
+        description?: string
         transport: "ssh"
         connection:
           | {
@@ -17979,6 +17924,7 @@ export type V2TargetRestoreData = {
   body: {
     input: {
       name: string
+      description?: string
       transport: "ssh"
       connection:
         | {
@@ -18277,6 +18223,7 @@ export type V2TargetLegacyPreviewResponses = {
             trustedUntil: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           }
       name: string
+      description?: string
       transport: "ssh"
       connection:
         | {
@@ -18371,6 +18318,7 @@ export type V2TargetLegacyImportResponses = {
             trustedUntil: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           }
       name: string
+      description?: string
       transport: "ssh"
       connection:
         | {
@@ -18413,6 +18361,7 @@ export type V2TargetLegacyImportResponses = {
               trustedUntil: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
             }
         name: string
+        description?: string
         transport: "ssh"
         connection:
           | {

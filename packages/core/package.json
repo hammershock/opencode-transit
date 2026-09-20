@@ -19,6 +19,7 @@
     "./effect/layer-node": "./src/effect/layer-node.ts",
     "./effect/app-node": "./src/effect/app-node.ts",
     "./session/runner": "./src/session/runner/index.ts",
+    "./runtime-context": "./src/runtime-context/index.ts",
     "./system-context": "./src/system-context/index.ts",
     "./*": "./src/*.ts"
   },

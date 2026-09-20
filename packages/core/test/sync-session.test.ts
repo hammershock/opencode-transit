@@ -5,7 +5,6 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventSequenceTable, EventTable } from "@opencode-ai/core/event/sql"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
-import { SessionContextEpoch } from "@opencode-ai/core/session/context-epoch"
 import { SessionActivity } from "@opencode-ai/core/session/activity"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SyncDatabase } from "@opencode-ai/core/sync/database"
@@ -435,7 +434,7 @@ describe("SessionSync", () => {
     expect(calls[1]).toEqual(["remove", "s1"])
   })
 
-  test("hydrates the complete frozen legacy model context body and order", async () => {
+  test("ignores legacy context establishment events after the durable epoch was removed", async () => {
     await using tmp = await tmpdir()
     const layer = LayerNode.compile(LayerNode.group([Database.node, EventV2.node, SessionProjector.node]), [
       [Database.node, Database.layerFromPath(path.join(tmp.path, "session.db"))],
@@ -501,7 +500,6 @@ describe("SessionSync", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const events = yield* EventV2.Service
-        const database = (yield* Database.Service).db
         const projector = SessionSync.projector(events)
         yield* projector.project({
           id: EventV2.ID.create(),
@@ -528,15 +526,6 @@ describe("SessionSync", () => {
           type: "session.next.context.generation.established.1",
           data: { sessionID, timestamp: 2, context },
         })
-
-        const hydrated = yield* SessionContextEpoch.inspect(database, sessionID)
-        expect(hydrated).toEqual(context)
-        expect(hydrated?.instructions.map((item) => item.content)).toEqual([
-          "controller rules",
-          "controller target rules",
-          "target rules",
-        ])
-        expect(JSON.stringify(hydrated)).not.toContain("targets/00000000")
       }).pipe(Effect.scoped, Effect.provide(layer)),
     )
   })

@@ -957,6 +957,58 @@ export type SessionsModelContextOutput = {
     readonly digest: string
   } | null
   readonly skillGuidance: string | null
+  readonly runtimeParts: ReadonlyArray<{
+    readonly key: string
+    readonly label: string
+    readonly tag: string
+    readonly text: string
+  }> | null
+  readonly agentSystem: string | null
+  readonly environment: string | null
+  readonly environmentInfo:
+    | (
+        | {
+            readonly harness: "OpenCode Transit"
+            readonly entrypoint: "opencode-transit"
+            readonly targetKind: "local" | "rexd"
+            readonly targetName: string
+            readonly directory: string
+            readonly projectRoot: string
+            readonly vcs?: string
+            readonly platform: string
+          }
+        | {
+            readonly harness: "OpenCode REXD"
+            readonly entrypoint: "opencode-rexd"
+            readonly targetKind: "local" | "rexd"
+            readonly targetName: string
+            readonly directory: string
+            readonly projectRoot: string
+            readonly vcs?: string
+            readonly platform: string
+          }
+      )
+    | null
+  readonly instructions: ReadonlyArray<{
+    readonly id: string
+    readonly origin:
+      | "global-file"
+      | "target-file"
+      | "project-file"
+      | "configured-file"
+      | "configured-url"
+      | "nested-file"
+    readonly scope: "global" | "target" | "project" | "nested"
+    readonly source: string
+    readonly declaredBy?: string
+    readonly status: "loaded" | "ignored"
+    readonly failureStage?: "discovery" | "read" | "fetch"
+    readonly content?: string
+    readonly digest?: string
+  }>
+  readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
+  readonly headers: { readonly [x: string]: string } | null
+  readonly compaction: { readonly reason: "auto" | "manual"; readonly summary: string; readonly recent: string } | null
   readonly subagentCatalog?: {
     readonly revision: string
     readonly activatedAt: string
@@ -1008,70 +1060,6 @@ export type SessionsModelContextOutput = {
     readonly completedAt?: string | null
     readonly diagnostics: ReadonlyArray<string>
   } | null
-}
-
-export type SessionsInstructionsStatusInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
-
-export type SessionsInstructionsStatusOutput = {
-  readonly status: "ready" | "busy" | "unresolved"
-  readonly blockers: ReadonlyArray<string>
-}
-
-export type SessionsInstructionsApplyInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
-
-export type SessionsInstructionsApplyOutput = {
-  readonly version: 1
-  readonly generation: number
-  readonly reason: "created" | "legacy-backfill" | "location-rebound" | "init" | "instructions-applied"
-  readonly locationRevision: number
-  readonly environment:
-    | {
-        readonly harness: "OpenCode Transit"
-        readonly entrypoint: "opencode-transit"
-        readonly targetKind: "local" | "rexd"
-        readonly targetName: string
-        readonly directory: string
-        readonly projectRoot: string
-        readonly vcs?: string
-        readonly platform: string
-      }
-    | {
-        readonly harness: "OpenCode REXD"
-        readonly entrypoint: "opencode-rexd"
-        readonly targetKind: "local" | "rexd"
-        readonly targetName: string
-        readonly directory: string
-        readonly projectRoot: string
-        readonly vcs?: string
-        readonly platform: string
-      }
-  readonly instructions: ReadonlyArray<{
-    readonly id: string
-    readonly origin:
-      | "global-file"
-      | "target-file"
-      | "project-file"
-      | "configured-file"
-      | "configured-url"
-      | "nested-file"
-    readonly scope: "global" | "target" | "project" | "nested"
-    readonly source: string
-    readonly declaredBy?: string
-    readonly status: "loaded" | "ignored"
-    readonly failureStage?: "discovery" | "read" | "fetch"
-    readonly content?: string
-    readonly digest?: string
-  }>
-  readonly digest: string
-  readonly baseline: string
-  readonly sources: {
-    readonly [x: string]: {
-      readonly value: JsonValue
-      readonly baseline?: string
-      readonly removed?: string
-      readonly refresh?: "generation" | "activation"
-    }
-  }
 }
 
 export type SessionsHistoryInput = {

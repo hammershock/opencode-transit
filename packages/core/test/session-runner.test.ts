@@ -40,21 +40,14 @@ import { AgentV2 } from "@opencode-ai/core/agent"
 import { Config } from "@opencode-ai/core/config"
 import { ConfigCompaction } from "@opencode-ai/core/config/compaction"
 import { Tool } from "@opencode-ai/core/tool/tool"
-import {
-  SessionContextEpochTable,
-  SessionInputTable,
-  SessionMessageTable,
-  SessionTable,
-} from "@opencode-ai/core/session/sql"
+import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { SessionSkillCatalog } from "@opencode-ai/core/session/skill-catalog"
 import { SessionTurn } from "@opencode-ai/core/session/turn"
 import { SystemContext } from "@opencode-ai/core/system-context"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
-import { SystemContextBuiltIns } from "@opencode-ai/core/system-context/builtins"
 import { InstructionContext } from "@opencode-ai/core/instruction-context"
 import { SkillGuidance } from "@opencode-ai/core/skill/guidance"
-import { ReferenceGuidance } from "@opencode-ai/core/reference/guidance"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Location } from "@opencode-ai/core/location"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -224,10 +217,9 @@ const systemContext = Layer.effectDiscard(
 const skillGuidance = Layer.mock(SkillGuidance.Service, {
   load: (agent) => Effect.succeed(skillBaselines.get(agent.id) ?? ""),
 })
-const referenceGuidance = Layer.mock(ReferenceGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const instructionContext = Layer.mock(InstructionContext.Service, {
   extend: () => Effect.void,
-  reload: () => Effect.void,
+  list: () => Effect.succeed(ModelContext.Instructions.make([])),
 })
 const testDirectory = AbsolutePath.make(process.cwd())
 const movedDirectory = AbsolutePath.make(`${process.cwd()}/test`)
@@ -254,10 +246,8 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [SessionRunnerModel.node, models],
   [SystemContextRegistry.node, systemContext],
   [InstructionContext.node, instructionContext],
-  [SystemContextBuiltIns.node, Layer.empty],
   [Location.node, Location.boundNode({ directory: testDirectory })],
   [SkillGuidance.node, skillGuidance],
-  [ReferenceGuidance.node, referenceGuidance],
   [PermissionV2.node, permission],
   [Config.node, config],
 ])
@@ -294,7 +284,6 @@ const it = testEffect(
       SessionRunnerModel.node,
       SystemContextRegistry.node,
       SkillGuidance.node,
-      ReferenceGuidance.node,
       Config.node,
       Snapshot.node,
       SessionRunnerLLM.node,
@@ -307,10 +296,8 @@ const it = testEffect(
       [SessionRunnerModel.node, models],
       [SystemContextRegistry.node, systemContext],
       [InstructionContext.node, instructionContext],
-      [SystemContextBuiltIns.node, Layer.empty],
       [Location.node, Location.boundNode({ directory: testDirectory })],
       [SkillGuidance.node, skillGuidance],
-      [ReferenceGuidance.node, referenceGuidance],
       [Snapshot.node, Snapshot.noopLayer],
       [SessionExecution.node, execution],
       [Config.node, config],
@@ -686,134 +673,6 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("retries the first provider turn after system context becomes available", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      const { db } = yield* Database.Service
-      const messageID = SessionMessage.ID.create()
-      requests.length = 0
-      systemUnavailable = true
-      const exit = yield* session
-        .prompt({ id: messageID, sessionID, prompt: Prompt.make({ text: "First" }), resume: false })
-        .pipe(Effect.exit)
-
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(SessionV2.OperationUnavailableError)
-      expect(requests).toHaveLength(0)
-      expect(yield* SessionInput.hasPending(db, sessionID, "steer")).toBe(false)
-      expect(
-        yield* db
-          .select()
-          .from(SessionContextEpochTable)
-          .where(eq(SessionContextEpochTable.session_id, sessionID))
-          .get(),
-      ).toBeUndefined()
-
-      systemUnavailable = false
-      yield* session.prompt({ id: messageID, sessionID, prompt: Prompt.make({ text: "First" }) })
-
-      expect(requests).toHaveLength(1)
-      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user"])
-    }),
-  )
-
-  it.effect("interrupts a source Location runner after a Session moves", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
-      const { db } = yield* Database.Service
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "First" }), resume: false })
-      requests.length = 0
-      response = []
-      yield* session.resume(sessionID)
-
-      yield* events.publish(SessionEvent.Moved, {
-        sessionID,
-        timestamp: DateTime.makeUnsafe(1),
-        location: Location.Ref.make({ directory: movedDirectory }),
-      })
-
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Second" }), resume: false })
-      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
-
-      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
-      expect(requests).toHaveLength(1)
-      expect(yield* SessionInput.hasPending(db, sessionID, "steer")).toBe(true)
-    }),
-  )
-
-  it.effect("fails gracefully when a stored context snapshot cannot be decoded", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      const { db } = yield* Database.Service
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "First" }), resume: false })
-      response = []
-      yield* session.resume(sessionID)
-      yield* db
-        .update(SessionContextEpochTable)
-        .set({ snapshot: { invalid: { value: "bad" } } })
-        .where(eq(SessionContextEpochTable.session_id, sessionID))
-        .run()
-        .pipe(Effect.orDie)
-      requests.length = 0
-
-      const exit = yield* session
-        .prompt({ sessionID, prompt: Prompt.make({ text: "Second" }), resume: false })
-        .pipe(Effect.exit)
-
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(SessionV2.OperationUnavailableError)
-      expect(requests).toHaveLength(0)
-    }),
-  )
-
-  it.effect("reuses one durable baseline after the context producer changes", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "First" }), resume: false })
-
-      requests.length = 0
-      response = []
-      yield* session.resume(sessionID)
-      systemBaseline = "Changed context"
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Second" }), resume: false })
-      yield* session.resume(sessionID)
-
-      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context"],
-        ["Initial context"],
-      ])
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "system", "user"])
-      expect(requests[1]?.messages.findLast((message) => message.role === "system")?.content).toEqual([
-        { type: "text", text: "Changed context" },
-      ])
-      expect(yield* session.messages({ sessionID })).toHaveLength(3)
-      const { db } = yield* Database.Service
-      expect(
-        yield* db
-          .select({ id: EventTable.id })
-          .from(EventTable)
-          .where(eq(EventTable.type, "session.next.context.advanced.1"))
-          .all()
-          .pipe(Effect.orDie),
-      ).toHaveLength(1)
-      expect(
-        yield* db
-          .select({ id: EventTable.id })
-          .from(EventTable)
-          .where(eq(EventTable.type, "session.next.context.generation.established.1"))
-          .all()
-          .pipe(Effect.orDie),
-      ).toHaveLength(1)
-      yield* replaySessionProjection(sessionID)
-      expect(yield* session.messages({ sessionID })).toHaveLength(3)
-    }),
-  )
-
   it.effect("delivers device-local Skill startup guidance without adding Session history", () =>
     Effect.gen(function* () {
       yield* setup
@@ -862,7 +721,7 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-build", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Build agent instructions", "Initial context"])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Build agent instructions", expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")])
     }),
   )
 
@@ -888,7 +747,7 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-reviewer", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", "Initial context"])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")])
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
   )
@@ -917,7 +776,7 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-selected", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", "Initial context"])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")])
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
   )
@@ -944,42 +803,10 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context", "Build skills"],
-        ["Initial context", "Reviewer skills"],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), "Build skills"],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), "Reviewer skills"],
       ])
       expect((yield* session.messages({ sessionID })).filter((message) => message.type === "system")).toHaveLength(0)
-    }),
-  )
-
-  it.effect("keeps the sampled agent when selection changes during observation", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
-      skillBaselines.set(AgentV2.ID.make("build"), "Build skills")
-      skillBaselines.set(AgentV2.ID.make("reviewer"), "Reviewer skills")
-      let switched = false
-      systemLoadHook = Effect.suspend(() => {
-        if (switched) return Effect.void
-        switched = true
-        return events
-          .publish(SessionEvent.AgentSwitched, {
-            sessionID,
-            messageID: SessionMessage.ID.create(),
-            timestamp: DateTime.makeUnsafe(1),
-            agent: "reviewer",
-          })
-          .pipe(Effect.asVoid)
-      })
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "First" }), resume: false })
-
-      requests.length = 0
-      response = []
-      yield* session.resume(sessionID)
-
-      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context", "Reviewer skills"],
-      ])
     }),
   )
 
@@ -1007,7 +834,7 @@ describe("SessionRunnerLLM", () => {
       response = []
       yield* session.resume(sessionID)
       expect(requests.map((request) => request.model)).toEqual([model])
-      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([["Initial context"]])
+      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([[expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")]])
     }),
   )
 
@@ -1037,72 +864,6 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("admits removed context as a chronological System message", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "First" }), resume: false })
-
-      requests.length = 0
-      response = []
-      yield* session.resume(sessionID)
-      systemRemoved = true
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Second" }), resume: false })
-      yield* session.resume(sessionID)
-
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "system", "user"])
-      expect(requests[1]?.messages.findLast((message) => message.role === "system")?.content).toEqual([
-        { type: "text", text: "System context source removed: test/context" },
-      ])
-      expect(yield* session.messages({ sessionID })).toHaveLength(3)
-    }),
-  )
-
-  it.effect("keeps the baseline and chronological System updates after a model switch", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "First" }), resume: false })
-
-      requests.length = 0
-      response = []
-      yield* session.resume(sessionID)
-      systemBaseline = "Changed context"
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Second" }), resume: false })
-      yield* session.resume(sessionID)
-      yield* events.publish(SessionEvent.ModelSwitched, {
-        sessionID,
-        messageID: SessionMessage.ID.create(),
-        timestamp: DateTime.makeUnsafe(1),
-        model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
-      })
-      systemBaseline = "Replacement context"
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Third" }), resume: false })
-      yield* session.resume(sessionID)
-
-      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context"],
-        ["Initial context"],
-        ["Initial context"],
-      ])
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "system", "user"])
-      expect(requests[2]?.messages.filter((message) => message.role === "system")).toHaveLength(2)
-      expect((yield* session.context(sessionID)).map((message) => message.type)).toEqual([
-        "user",
-        "system",
-        "user",
-        "model-switched",
-        "system",
-        "user",
-      ])
-      yield* replaySessionProjection(sessionID)
-      expect(yield* session.messages({ sessionID })).toHaveLength(6)
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Fourth" }), resume: false })
-      yield* session.resume(sessionID)
-    }),
-  )
-
   it.effect("preserves the baseline while context is temporarily unavailable", () =>
     Effect.gen(function* () {
       yield* setup
@@ -1128,9 +889,9 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context"],
-        ["Initial context"],
-        ["Initial context"],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")],
       ])
     }),
   )
@@ -1165,8 +926,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context"],
-        ["Initial context"],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")],
       ])
       yield* replaySessionProjection(sessionID)
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Third" }), resume: false })
@@ -1465,7 +1226,10 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Third" }), resume: false })
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Changed context"])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
+        expect.stringContaining("Execution harness:"),
+        expect.stringContaining("Current date:"),
+      ])
       expect(systemTexts(requests.at(-1)!)).not.toContain("Changed context")
     }),
   )
@@ -1630,51 +1394,6 @@ describe("SessionRunnerLLM", () => {
       expect(yield* SessionTurn.find((yield* Database.Service).db, { sessionID, messageID: admitted.id })).toBe(
         "completed",
       )
-    }),
-  )
-
-  it.effect("reloads a model switch before a tool-driven continuation turn", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Echo this" }), resume: false })
-
-      requests.length = 0
-      responses = [
-        [
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.toolCall({ id: "call-echo", name: "echo", input: { text: "hello" } }),
-          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
-          LLMEvent.finish({ reason: "tool-calls" }),
-        ],
-        [
-          LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-          LLMEvent.finish({ reason: "stop" }),
-        ],
-      ]
-      toolExecutionGate = yield* Deferred.make<void>()
-      toolExecutionsStarted = yield* Deferred.make<void>()
-      toolExecutionsReady = 1
-      const run = yield* Effect.forkChild(session.resume(sessionID))
-      yield* Deferred.await(toolExecutionsStarted)
-      yield* events.publish(SessionEvent.ModelSwitched, {
-        sessionID,
-        messageID: SessionMessage.ID.create(),
-        timestamp: DateTime.makeUnsafe(1),
-        model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
-      })
-      systemBaseline = "Replacement context"
-      yield* Deferred.succeed(toolExecutionGate, undefined)
-      yield* Fiber.join(run)
-
-      expect(requests.map((request) => request.model)).toEqual([model, replacementModel])
-      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context"],
-        ["Initial context"],
-      ])
-      expect(systemTexts(requests[1]!)).toContain("Replacement context")
     }),
   )
 
