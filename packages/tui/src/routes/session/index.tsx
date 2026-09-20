@@ -731,6 +731,8 @@ export function Session() {
             skillGuidance: string | null
             runtimeParts: ModelContextGeneration["runtimeParts"] | null
             agentSystem: string | null
+            environment: string | null
+            instructions: ModelContextGeneration["instructions"] | null
             model: { id: string; providerID: string; variant?: string } | null
             headers: Readonly<Record<string, string>> | null
             compaction: { reason: "auto" | "manual"; summary: string; recent: string } | null
@@ -745,6 +747,8 @@ export function Session() {
             ...(result.skillGuidance ? { skillGuidance: result.skillGuidance } : {}),
             ...(result.runtimeParts ? { runtimeParts: result.runtimeParts } : {}),
             ...(result.agentSystem ? { agentSystem: result.agentSystem } : {}),
+            ...(result.environment ? { environmentText: result.environment } : {}),
+            ...(result.instructions ? { freshInstructions: result.instructions } : {}),
             ...(result.model ? { model: result.model } : {}),
             ...(result.headers ? { headers: result.headers } : {}),
             ...(result.compaction ? { compaction: result.compaction } : {}),

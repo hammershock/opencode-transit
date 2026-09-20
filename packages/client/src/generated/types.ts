@@ -964,6 +964,24 @@ export type SessionsModelContextOutput = {
     readonly text: string
   }> | null
   readonly agentSystem: string | null
+  readonly environment: string | null
+  readonly instructions: ReadonlyArray<{
+    readonly id: string
+    readonly origin:
+      | "global-file"
+      | "target-file"
+      | "project-file"
+      | "configured-file"
+      | "configured-url"
+      | "nested-file"
+    readonly scope: "global" | "target" | "project" | "nested"
+    readonly source: string
+    readonly declaredBy?: string
+    readonly status: "loaded" | "ignored"
+    readonly failureStage?: "discovery" | "read" | "fetch"
+    readonly content?: string
+    readonly digest?: string
+  }>
   readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
   readonly headers: { readonly [x: string]: string } | null
   readonly compaction: { readonly reason: "auto" | "manual"; readonly summary: string; readonly recent: string } | null

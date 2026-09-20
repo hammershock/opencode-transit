@@ -83,15 +83,14 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
     },
   })
 
-  const environmentSource = sources["core/environment"]
-  if (environmentSource) {
+  if (generation.environmentText) {
     options.push({
       category: "SystemPrompt",
       title: "environment",
       footer: environment.targetName,
       value: {
         title: "environment",
-        content: environmentSource.baseline ?? JSON.stringify(environment, null, 2),
+        content: generation.environmentText,
       },
     })
   }
@@ -107,7 +106,7 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
     })
   }
 
-  const instructions = [...generation.instructions].sort(
+  const instructions = [...(generation.freshInstructions ?? generation.instructions)].sort(
     (a, b) => scopeOrder[a.scope] - scopeOrder[b.scope],
   )
   for (const instruction of instructions) {

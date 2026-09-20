@@ -46,7 +46,7 @@ import { SessionLocationAccess } from "./session/location-access"
 import { SessionLocationMutation } from "./session/location-mutation"
 import { SyncSetup } from "./sync/setup"
 import type { ApprovalMode } from "@opencode-ai/schema/approval-mode"
-import type { ModelContext } from "@opencode-ai/schema/model-context"
+import { ModelContext } from "@opencode-ai/schema/model-context"
 import { FileSystem } from "./filesystem"
 import { SessionLocationRuntime } from "./session/location-runtime"
 import { SystemContext } from "./system-context/index"
@@ -190,6 +190,8 @@ export interface Interface {
     {
       runtimeParts: ReadonlyArray<RuntimeContext.Rendered>
       agentSystem: string | null
+      environment: string | null
+      instructions: ModelContext.Instructions
       model: ModelV2.Ref | null
       headers: Readonly<Record<string, string>>
       compaction: { reason: "auto" | "manual"; summary: string; recent: string } | null
@@ -883,12 +885,23 @@ const layer = Layer.effect(
         const session = yield* result.get(sessionID)
         const guidance = yield* SessionSkillCatalog.guidance(db, sessionID)
 
-        const agentAttempt = yield* Effect.gen(function* () {
+        const contextAttempt = yield* Effect.gen(function* () {
           const location = yield* requireLocation(sessionID)
           return yield* Effect.gen(function* () {
             const agents = yield* AgentV2.Service
             const agent = yield* agents.select(session.agent)
-            return agent.info?.system ?? null
+            const assembler = yield* ModelContextAssembler.Service
+            const fresh = yield* SystemContext.initialize(yield* assembler.load())
+            const environmentSource = fresh.snapshot[SystemContext.Key.make("core/environment")]
+            const instructionSource = fresh.snapshot[SystemContext.Key.make("core/instructions")]
+            return {
+              agentSystem: agent.info?.system ?? null,
+              environment: environmentSource?.baseline ?? null,
+              instructions:
+                instructionSource === undefined
+                  ? []
+                  : (Schema.decodeUnknownOption(ModelContext.Instructions)(instructionSource.value).valueOrUndefined ?? []),
+            }
           }).pipe(Effect.provide(locations.get(location)))
         }).pipe(Effect.exit)
 
@@ -913,7 +926,9 @@ const layer = Layer.effect(
             guidance && guidance.length > 0
               ? [{ key: RuntimeContextBuiltIns.skillsPart.key, label: RuntimeContextBuiltIns.skillsPart.label, tag: RuntimeContextBuiltIns.skillsPart.tag, text: guidance }]
               : [],
-          agentSystem: Exit.isSuccess(agentAttempt) ? agentAttempt.value : null,
+          agentSystem: Exit.isSuccess(contextAttempt) ? contextAttempt.value.agentSystem : null,
+          environment: Exit.isSuccess(contextAttempt) ? contextAttempt.value.environment : null,
+          instructions: Exit.isSuccess(contextAttempt) ? contextAttempt.value.instructions : [],
           model: session.model ?? null,
           headers: {
             "x-session-affinity": session.id,

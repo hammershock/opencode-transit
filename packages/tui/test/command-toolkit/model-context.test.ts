@@ -22,7 +22,36 @@ const generation: ModelContextGeneration = {
     projectRoot: "/workspace/project",
     platform: "linux",
   },
+  environmentText: "environment body",
   instructions: [
+    {
+      id: "global",
+      origin: "global-file",
+      scope: "global",
+      source: "/controller/AGENTS.md",
+      status: "loaded",
+      content: "global rules",
+      digest: "1111111111111111",
+    },
+    {
+      id: "target",
+      origin: "target-file",
+      scope: "target",
+      source: "<target-config>/AGENTS.md",
+      status: "loaded",
+      content: "target rules",
+      digest: "2222222222222222",
+    },
+    {
+      id: "project",
+      origin: "project-file",
+      scope: "project",
+      source: "/workspace/project/AGENTS.md",
+      status: "ignored",
+      failureStage: "read",
+    },
+  ],
+  freshInstructions: [
     {
       id: "global",
       origin: "global-file",
