@@ -281,6 +281,26 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
+  it.effect("stages a chat-only revert without capturing a snapshot", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const original = yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "chat-only turn" }),
+        resume: false,
+      })
+      yield* SessionInput.promoteSteers((yield* Database.Service).db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      yield* session.revert.stage({ sessionID, messageID: original.id, files: false })
+
+      const staged = (yield* session.get(sessionID)).revert
+      expect(staged).toBeDefined()
+      expect(staged!.snapshot).toBeUndefined()
+      expect(staged!.files ?? []).toEqual([])
+    }),
+  )
+
   it.effect("returns the original recorded message when the ID is retried", () =>
     Effect.gen(function* () {
       yield* setup
