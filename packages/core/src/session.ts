@@ -58,6 +58,7 @@ import { SkillV2 } from "./skill"
 import { SkillGuidance } from "./skill/guidance"
 import { SessionSkillCatalog } from "./session/skill-catalog"
 import { InstructionContext } from "./instruction-context"
+import { ToolRegistry } from "./tool/registry"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -183,6 +184,7 @@ export interface Interface {
       environment: string | null
       environmentInfo: ModelContext.Environment | null
       instructions: ModelContext.Instructions
+      tools: ModelContext.Tools
       model: ModelV2.Ref | null
       headers: Readonly<Record<string, string>>
       compaction: { reason: "auto" | "manual"; summary: string; recent: string } | null
@@ -820,6 +822,8 @@ const layer = Layer.effect(
             const runtime = yield* RuntimeContext.Service
             const instructions = yield* InstructionContext.Service
             const location = yield* Location.Service
+            const tools = yield* ToolRegistry.Service
+            const materialization = yield* tools.materialize(agent.info?.permissions)
             const environment = buildEnvironment(location)
             return {
               agentSystem: agent.info?.system ?? null,
@@ -827,6 +831,12 @@ const layer = Layer.effect(
               environment: renderEnvironment(environment),
               environmentInfo: environment,
               instructions: yield* instructions.list(sessionID),
+              tools: materialization.definitions.map((definition) => ({
+                name: definition.name,
+                description: definition.description,
+                inputSchema: definition.inputSchema,
+                ...(definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
+              })),
             }
           }).pipe(Effect.provide(locations.get(locationRef)))
         }).pipe(Effect.exit)
@@ -853,6 +863,7 @@ const layer = Layer.effect(
           environment: Exit.isSuccess(contextAttempt) ? contextAttempt.value.environment : null,
           environmentInfo: Exit.isSuccess(contextAttempt) ? contextAttempt.value.environmentInfo : null,
           instructions: Exit.isSuccess(contextAttempt) ? contextAttempt.value.instructions : [],
+          tools: Exit.isSuccess(contextAttempt) ? contextAttempt.value.tools : [],
           model: session.model ?? null,
           headers: {
             "x-session-affinity": session.id,
