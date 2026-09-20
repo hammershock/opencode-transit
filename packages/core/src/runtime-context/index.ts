@@ -9,16 +9,18 @@ import { SessionSchema } from "../session/schema"
  * Per-turn reconstructed, never-persisted model-visible context.
  *
  * Runtime context parts are the counterpart to durable `SystemContext` sources:
- * they are computed fresh on every provider turn, injected as separate system
- * parts, and never written into the Context Epoch, Session events, sync, or
- * compaction. Both the runner and the `/context` inspector read the same
- * `assemble` output so the injected text and the inspection preview cannot drift.
+ * they are computed fresh, injected as separate system parts, and never written
+ * into the Context Epoch, Session events, sync, or compaction. Parts declared
+ * `cache: "session"` are built once per Session and reused in-process; parts
+ * declared `cache: "turn"` (the default) are rebuilt on every provider turn.
+ * Both the runner and the `/context` inspector read the same `assemble` output.
  */
 export interface Part {
   readonly key: string
   readonly label: string
   readonly tag: string
   readonly order: number
+  readonly cache?: "turn" | "session"
   readonly enabled: (agent: AgentV2.Selection) => boolean
   readonly render: (sessionID: SessionSchema.ID, agent: AgentV2.Selection) => Effect.Effect<string | undefined>
 }
@@ -36,6 +38,7 @@ export interface Interface {
     sessionID: SessionSchema.ID,
     agent: AgentV2.Selection,
   ) => Effect.Effect<ReadonlyArray<Rendered>>
+  readonly invalidate: (sessionID: SessionSchema.ID) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/RuntimeContext") {}
@@ -44,6 +47,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const parts = yield* Ref.make<ReadonlyArray<Part>>([])
+    const cache = yield* Ref.make<Map<string, Rendered>>(new Map())
 
     const register = Effect.fn("RuntimeContext.register")(function* (part: Part) {
       yield* Effect.acquireRelease(
@@ -59,6 +63,15 @@ const layer = Layer.effect(
       )
     })
 
+    const invalidate = Effect.fn("RuntimeContext.invalidate")(function* (sessionID: SessionSchema.ID) {
+      yield* Ref.update(cache, (current) => {
+        const prefix = `${sessionID}\u0000`
+        const next = new Map<string, Rendered>()
+        for (const [key, value] of current) if (!key.startsWith(prefix)) next.set(key, value)
+        return next
+      })
+    })
+
     const assemble = Effect.fn("RuntimeContext.assemble")(function* (
       sessionID: SessionSchema.ID,
       agent: AgentV2.Selection,
@@ -69,15 +82,26 @@ const layer = Layer.effect(
       const rendered = yield* Effect.forEach(
         enabled,
         (part) =>
-          Effect.map(part.render(sessionID, agent), (text) =>
-            text && text.length > 0 ? ({ key: part.key, label: part.label, tag: part.tag, text }) : undefined,
-          ),
+          Effect.gen(function* () {
+            const cacheKey = `${sessionID}\u0000${part.key}`
+            if (part.cache === "session") {
+              const cached = (yield* Ref.get(cache)).get(cacheKey)
+              if (cached) return cached
+            }
+            const text = yield* part.render(sessionID, agent)
+            const result =
+              text && text.length > 0 ? { key: part.key, label: part.label, tag: part.tag, text } : undefined
+            if (part.cache === "session" && result) {
+              yield* Ref.update(cache, (current) => new Map(current).set(cacheKey, result))
+            }
+            return result
+          }),
         { concurrency: "unbounded" },
       )
       return rendered.filter((item): item is Rendered => item !== undefined)
     })
 
-    return Service.of({ register, assemble })
+    return Service.of({ register, assemble, invalidate })
   }),
 )
 
