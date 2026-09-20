@@ -229,7 +229,7 @@ export const Definitions = {
   "dialog.harness.home": keybind("home", "Jump to the start of instruction preview"),
   "dialog.harness.end": keybind("end", "Jump to the end of instruction preview"),
   "dialog.harness.copy": keybind("c", "Copy instruction preview"),
-  "dialog.model_context.refresh_instructions": keybind("ctrl+r", "Refresh Session instructions"),
+  "dialog.model_context.reload": keybind("ctrl+r", "Reload model context"),
   "dialog.model_context.line_up": keybind("up", "Scroll model context up one line"),
   "dialog.model_context.line_down": keybind("down", "Scroll model context down one line"),
   "dialog.model_context.page_up": keybind("pageup", "Scroll model context up one page"),

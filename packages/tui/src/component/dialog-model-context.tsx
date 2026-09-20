@@ -198,23 +198,56 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
   return options
 }
 
-export function showModelContext(dialog: DialogContext, generation: ModelContextGeneration | null) {
+export function showModelContext(
+  dialog: DialogContext,
+  generation: ModelContextGeneration | null,
+  reload?: () => Promise<ModelContextGeneration | null>,
+) {
   if (!generation) return DialogAlert.show(dialog, "Model context", "Model context is unavailable.")
   return new Promise<void>((resolve) => {
-    dialog.replace(() => <DialogModelContext generation={generation} />, resolve)
+    dialog.replace(() => <DialogModelContext generation={generation} reload={reload} />, resolve)
   })
 }
 
-export function DialogModelContext(props: { generation: ModelContextGeneration }) {
+export function DialogModelContext(props: {
+  generation: ModelContextGeneration
+  reload?: () => Promise<ModelContextGeneration | null>
+}) {
   const dialog = useDialog()
   dialog.setSize("xlarge")
+  const [generation, setGeneration] = createSignal(props.generation)
+  const [reloading, setReloading] = createSignal(false)
+
+  const reload = async () => {
+    if (!props.reload || reloading()) return
+    setReloading(true)
+    try {
+      const next = await props.reload()
+      if (next) setGeneration(next)
+    } finally {
+      setReloading(false)
+    }
+  }
 
   return (
     <DialogSelect
       title="Model context"
       preserveSelection
-      options={modelContextOptions(props.generation)}
+      options={modelContextOptions(generation())}
       footerHints={[{ title: "enter", label: "preview" }]}
+      actions={
+        props.reload
+          ? [
+              {
+                command: "dialog.model_context.reload",
+                title: reloading() ? "reloading" : "reload",
+                side: "right",
+                disabled: reloading(),
+                onTrigger: () => void reload(),
+              },
+            ]
+          : undefined
+      }
       onSelect={(option) =>
         dialog.push(() => <DialogModelContextPreview title={option.value.title} content={option.value.content} />)
       }

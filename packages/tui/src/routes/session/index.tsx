@@ -835,7 +835,7 @@ export function Session() {
           modelContext: {
             inspect: inspectModelContext,
           },
-          presentModelContext: (generation) => showModelContext(dialog, generation),
+          presentModelContext: (generation) => showModelContext(dialog, generation, () => inspectModelContext()),
           openSyncSettings: syncSettings.open,
         }
       },

@@ -6,7 +6,7 @@ import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { onCleanup } from "solid-js"
-import { DialogModelContextPreview } from "../../src/component/dialog-model-context"
+import { DialogModelContext, DialogModelContextPreview } from "../../src/component/dialog-model-context"
 import { TuiConfigProvider } from "../../src/config"
 import { ClipboardProvider } from "../../src/context/clipboard"
 import { KVProvider } from "../../src/context/kv"
@@ -126,3 +126,63 @@ function findScroll(root: Renderable): ScrollBoxRenderable | undefined {
   if ("scrollTop" in root && "scrollHeight" in root && "viewport" in root) return root as ScrollBoxRenderable
   return root.getChildren().map(findScroll).find(Boolean)
 }
+
+test.serial("reloads model context through its reload shortcut", async () => {
+  await using tmp = await tmpdir()
+  const state = path.join(tmp.path, "state")
+  await mkdir(state, { recursive: true })
+  await Bun.write(path.join(state, "kv.json"), "{}")
+  let keymap!: OpenTuiKeymap
+  let reloads = 0
+
+  function Harness() {
+    const renderer = useRenderer()
+    keymap = createDefaultOpenTuiKeymap(renderer)
+    const config = createTuiResolvedConfig()
+    const off = registerOpencodeKeymap(keymap, renderer, config)
+    onCleanup(off)
+
+    return (
+      <TestTuiContexts directory={tmp.path} paths={{ home: tmp.path, state, worktree: tmp.path }}>
+        <ClipboardProvider value={{}}>
+          <OpencodeKeymapProvider keymap={keymap}>
+            <TuiConfigProvider config={config}>
+              <KVProvider>
+                <ThemeProvider mode="dark">
+                  <ToastProvider>
+                    <DialogProvider>
+                      <DialogModelContext
+                        generation={{}}
+                        reload={async () => {
+                          reloads++
+                          return {}
+                        }}
+                      />
+                    </DialogProvider>
+                    <Toast />
+                  </ToastProvider>
+                </ThemeProvider>
+              </KVProvider>
+            </TuiConfigProvider>
+          </OpencodeKeymapProvider>
+        </ClipboardProvider>
+      </TestTuiContexts>
+    )
+  }
+
+  const app = await testRender(() => <Harness />, { width: 86, height: 24, kittyKeyboard: true })
+  try {
+    await app.renderOnce()
+    await Bun.sleep(25)
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("reload ctrl+r")
+    expect(reloads).toBe(0)
+
+    app.mockInput.pressKey("r", { ctrl: true })
+    await Bun.sleep(10)
+    await app.renderOnce()
+    expect(reloads).toBe(1)
+  } finally {
+    app.renderer.destroy()
+  }
+})
