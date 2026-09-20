@@ -40,8 +40,9 @@ const scopeOrder = { global: 0, target: 1, project: 2, nested: 3 } as const
 
 function instructionTitle(scope: "global" | "target" | "project" | "nested") {
   if (scope === "global") return "global-instructions"
-  if (scope === "nested") return "  project-instructions"
-  return "target-instructions"
+  if (scope === "target") return "target-instructions"
+  if (scope === "project") return "project-instructions"
+  return "  project-instructions"
 }
 
 function renderConversationCheckpoint(compaction: { summary: string; recent: string }) {
@@ -113,7 +114,7 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
     options.push({
       category: "SystemPrompt",
       title: instructionTitle(instruction.scope),
-      footer: instruction.source,
+      footer: instruction.declaredBy ?? instruction.source,
       value: {
         title: instruction.source,
         content:

@@ -167,7 +167,7 @@ describe("model context inspector", () => {
       ["SystemPrompt", "date"],
       ["SystemPrompt", "global-instructions"],
       ["SystemPrompt", "target-instructions"],
-      ["SystemPrompt", "target-instructions"],
+      ["SystemPrompt", "project-instructions"],
       ["SystemPrompt", "core/skills"],
       ["SystemPrompt", "available_skills"],
       ["SystemPrompt", "available_subagents"],

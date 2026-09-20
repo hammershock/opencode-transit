@@ -218,6 +218,7 @@ const layer = Layer.effect(
           scope,
           source: source.resolved,
           displaySource: custom ? label : undefined,
+          declaredBy: display(source.resolved, "controller"),
           content: source.content,
         }),
       ]
