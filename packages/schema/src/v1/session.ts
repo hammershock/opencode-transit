@@ -640,6 +640,16 @@ const events = {
       partID: PartID,
     },
   }),
+  RevertUpdated: define({
+    type: "session.revert.updated",
+    ...options,
+    schema: {
+      sessionID: SessionID,
+      // This event only describes a revert mutation, so an omitted revert means
+      // the legacy boundary was cleared.
+      revert: optional(SessionRevert),
+    },
+  }),
 }
 
 export const PartDelta = define({
@@ -682,6 +692,7 @@ export const Event = {
     events.MessageRemoved,
     events.PartUpdated,
     events.PartRemoved,
+    events.RevertUpdated,
     PartDelta,
     Diff,
     Error,

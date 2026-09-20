@@ -170,6 +170,33 @@ describe("SessionProjector", () => {
         snapshot: "tree",
         files: [],
       })
+      yield* events.publish(SessionV1.Event.RevertUpdated, {
+        sessionID,
+        revert: { messageID: SessionV1.MessageID.make("msg_legacy"), snapshot: "legacy-tree", diff: "legacy-patch" },
+      })
+      expect((yield* db.select({ revert: SessionTable.revert }).from(SessionTable).get())?.revert).toMatchObject({
+        messageID: "msg_legacy",
+        snapshot: "legacy-tree",
+        diff: "legacy-patch",
+      })
+      yield* events.publish(SessionV1.Event.Updated, {
+        sessionID,
+        info: {
+          id: sessionID,
+          projectID: Project.ID.global,
+          slug: "test",
+          directory: "/project",
+          title: "legacy metadata only",
+          version: "test",
+          time: { created: 0, updated: 3 },
+        },
+      })
+      expect((yield* db.select({ revert: SessionTable.revert }).from(SessionTable).get())?.revert).toMatchObject({
+        messageID: "msg_legacy",
+        snapshot: "legacy-tree",
+      })
+      yield* events.publish(SessionV1.Event.RevertUpdated, { sessionID })
+      expect((yield* db.select({ revert: SessionTable.revert }).from(SessionTable).get())?.revert).toBeNull()
       yield* events.publish(SessionEvent.RevertEvent.Cleared, { sessionID, timestamp: DateTime.makeUnsafe(2) })
       expect((yield* db.select({ revert: SessionTable.revert }).from(SessionTable).get())?.revert).toBeNull()
       yield* events.publish(SessionEvent.RevertEvent.Staged, {
