@@ -14755,6 +14755,7 @@ export type V2SessionModelContextResponses = {
     }>
     agentSystem: string
     environment: string
+    environmentInfo: ModelContextEnvironment
     instructions: Array<ModelContextInstruction>
     model: ModelRef
     headers: {

@@ -731,6 +731,7 @@ export function Session() {
             runtimeParts: ModelContextGeneration["runtimeParts"] | null
             agentSystem: string | null
             environment: string | null
+            environmentInfo: ModelContextGeneration["environmentInfo"] | null
             instructions: ModelContextGeneration["freshInstructions"] | null
             model: { id: string; providerID: string; variant?: string } | null
             headers: Readonly<Record<string, string>> | null
@@ -745,6 +746,7 @@ export function Session() {
             ...(result.runtimeParts ? { runtimeParts: result.runtimeParts } : {}),
             ...(result.agentSystem ? { agentSystem: result.agentSystem } : {}),
             ...(result.environment ? { environmentText: result.environment } : {}),
+            ...(result.environmentInfo ? { environmentInfo: result.environmentInfo } : {}),
             ...(result.instructions ? { freshInstructions: result.instructions } : {}),
             ...(result.model ? { model: result.model } : {}),
             ...(result.headers ? { headers: result.headers } : {}),

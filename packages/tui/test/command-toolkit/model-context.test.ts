@@ -81,6 +81,15 @@ const generation: ModelContextGeneration = {
       text: "<available_skills>\n  <skill><name>review-agent</name></skill>\n</available_skills>",
     },
   ],
+  environmentInfo: {
+    harness: "OpenCode Transit",
+    entrypoint: "opencode-transit",
+    targetKind: "rexd",
+    targetName: "mywindows",
+    directory: "/workspace/project",
+    projectRoot: "/workspace/project",
+    platform: "linux",
+  },
   subagentCatalog: {
     revision: "dddddddddddddddd",
     activatedAt: "2026-09-15T08:00:00.000Z",
@@ -182,6 +191,7 @@ describe("model context inspector", () => {
     expect(options[4]?.value.content).toBe("target rules")
     expect(options[5]?.value.content).toBe("Ignored during read.")
     expect(options[5]?.footer).toBe("/workspace/project/AGENTS.md")
+    expect(options[1]?.footer).toBe("mywindows linux")
     expect(options[7]?.footer).toBe("1")
     expect(options[7]?.value.content).toBe(generation.runtimeParts![4]!.text)
     expect(options[8]?.footer).toBe("1")

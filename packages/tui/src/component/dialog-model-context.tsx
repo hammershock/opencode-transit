@@ -83,10 +83,11 @@ export function modelContextOptions(generation: ModelContextGeneration): DialogS
 
   const environmentText = parts.get("environment")?.text ?? generation.environmentText
   if (environmentText) {
+    const environmentInfo = generation.environmentInfo
     options.push({
       category: "SystemPrompt",
       title: "environment",
-      footer: parts.get("environment")?.tag,
+      footer: environmentInfo ? `${environmentInfo.targetName} ${environmentInfo.platform}` : undefined,
       value: {
         title: "environment",
         content: environmentText,

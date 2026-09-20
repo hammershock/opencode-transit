@@ -181,6 +181,7 @@ export interface Interface {
       runtimeParts: ReadonlyArray<RuntimeContext.Rendered>
       agentSystem: string | null
       environment: string | null
+      environmentInfo: ModelContext.Environment | null
       instructions: ModelContext.Instructions
       model: ModelV2.Ref | null
       headers: Readonly<Record<string, string>>
@@ -819,10 +820,12 @@ const layer = Layer.effect(
             const runtime = yield* RuntimeContext.Service
             const instructions = yield* InstructionContext.Service
             const location = yield* Location.Service
+            const environment = buildEnvironment(location)
             return {
               agentSystem: agent.info?.system ?? null,
               runtimeParts: yield* runtime.assemble(sessionID, agent),
-              environment: renderEnvironment(buildEnvironment(location)),
+              environment: renderEnvironment(environment),
+              environmentInfo: environment,
               instructions: yield* instructions.list(sessionID),
             }
           }).pipe(Effect.provide(locations.get(locationRef)))
@@ -848,6 +851,7 @@ const layer = Layer.effect(
           runtimeParts: Exit.isSuccess(contextAttempt) ? contextAttempt.value.runtimeParts : [],
           agentSystem: Exit.isSuccess(contextAttempt) ? contextAttempt.value.agentSystem : null,
           environment: Exit.isSuccess(contextAttempt) ? contextAttempt.value.environment : null,
+          environmentInfo: Exit.isSuccess(contextAttempt) ? contextAttempt.value.environmentInfo : null,
           instructions: Exit.isSuccess(contextAttempt) ? contextAttempt.value.instructions : [],
           model: session.model ?? null,
           headers: {

@@ -965,6 +965,30 @@ export type SessionsModelContextOutput = {
   }> | null
   readonly agentSystem: string | null
   readonly environment: string | null
+  readonly environmentInfo:
+    | (
+        | {
+            readonly harness: "OpenCode Transit"
+            readonly entrypoint: "opencode-transit"
+            readonly targetKind: "local" | "rexd"
+            readonly targetName: string
+            readonly directory: string
+            readonly projectRoot: string
+            readonly vcs?: string
+            readonly platform: string
+          }
+        | {
+            readonly harness: "OpenCode REXD"
+            readonly entrypoint: "opencode-rexd"
+            readonly targetKind: "local" | "rexd"
+            readonly targetName: string
+            readonly directory: string
+            readonly projectRoot: string
+            readonly vcs?: string
+            readonly platform: string
+          }
+      )
+    | null
   readonly instructions: ReadonlyArray<{
     readonly id: string
     readonly origin:
