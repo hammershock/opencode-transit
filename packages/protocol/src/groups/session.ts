@@ -399,6 +399,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           environment: Schema.NullOr(Schema.String),
           environmentInfo: Schema.NullOr(ModelContext.Environment),
           instructions: Schema.Array(ModelContext.Instruction),
+          tools: Schema.Array(ModelContext.Tool),
           model: Schema.NullOr(Model.Ref),
           headers: Schema.NullOr(Schema.Record(Schema.String, Schema.String)),
           compaction: Schema.NullOr(

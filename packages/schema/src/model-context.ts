@@ -77,6 +77,18 @@ export type Instruction = typeof Instruction.Type
 export const Instructions = Schema.Array(Instruction).annotate({ identifier: "ModelContext.Instructions" })
 export type Instructions = typeof Instructions.Type
 
+export const Tool = Schema.Struct({
+  name: Schema.NonEmptyString,
+  description: Schema.String,
+  // Opaque JSON Schema documents passed through for inspection; their structure is owned by the tool registry.
+  inputSchema: Schema.Unknown,
+  outputSchema: optional(Schema.Unknown),
+}).annotate({ identifier: "ModelContext.Tool" })
+export type Tool = typeof Tool.Type
+
+export const Tools = Schema.Array(Tool).annotate({ identifier: "ModelContext.Tools" })
+export type Tools = typeof Tools.Type
+
 export const GenerationReason = Schema.Literals([
   "created",
   "legacy-backfill",
