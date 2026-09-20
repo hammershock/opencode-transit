@@ -31,7 +31,7 @@ import { Location } from "@opencode-ai/core/location"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
 import { SystemContext } from "@opencode-ai/core/system-context"
 import { SkillGuidance } from "@opencode-ai/core/skill/guidance"
-import { ReferenceGuidance } from "@opencode-ai/core/reference/guidance"
+import { RuntimeContextBuiltIns } from "@opencode-ai/core/runtime-context/builtins"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
@@ -71,7 +71,6 @@ const models = SessionRunnerModel.layerWith(() => Effect.succeed(model))
 const directory = AbsolutePath.make(process.cwd())
 const systemContext = AppNodeBuilder.build(SystemContextRegistry.node)
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed("") })
-const referenceGuidance = Layer.mock(ReferenceGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Snapshot.node, Snapshot.noopLayer],
@@ -80,7 +79,7 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [SystemContextRegistry.node, systemContext],
   [Location.node, Location.boundNode({ directory })],
   [SkillGuidance.node, skillGuidance],
-  [ReferenceGuidance.node, referenceGuidance],
+  [RuntimeContextBuiltIns.node, Layer.empty],
   [Config.node, config],
   [PermissionV2.node, permission],
   [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
@@ -113,7 +112,6 @@ const it = testEffect(
       SessionRunnerModel.node,
       SystemContextRegistry.node,
       SkillGuidance.node,
-      ReferenceGuidance.node,
       Config.node,
       Snapshot.node,
       SessionRunnerLLM.node,
@@ -127,7 +125,7 @@ const it = testEffect(
       [SystemContextRegistry.node, systemContext],
       [Location.node, Location.boundNode({ directory })],
       [SkillGuidance.node, skillGuidance],
-      [ReferenceGuidance.node, referenceGuidance],
+      [RuntimeContextBuiltIns.node, Layer.empty],
       [Config.node, config],
       [Snapshot.node, Snapshot.noopLayer],
       [SessionExecution.node, execution],
@@ -183,7 +181,6 @@ describe("SessionRunnerLLM recorded", () => {
           .orderBy(EventTable.seq)
           .all()).map((event) => event.type),
       ).toEqual([
-        "session.next.context.generation.established.1",
         "session.next.prompt.admitted.1",
         "session.next.prompted.1",
         "session.next.step.started.1",

@@ -15,7 +15,6 @@ import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
 import { Location } from "../../location"
 import { ModelV2 } from "../../model"
-import { ModelContextAssembler } from "../../model-context-assembler"
 import { PermissionV2 } from "../../permission"
 import { ProviderV2 } from "../../provider"
 import { QuestionV2 } from "../../question"
@@ -23,7 +22,6 @@ import { RuntimeContext } from "../../runtime-context"
 import { RuntimeContextBuiltIns } from "../../runtime-context/builtins"
 import { ToolRegistry } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
-import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
@@ -100,7 +98,6 @@ const layer = Layer.effect(
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
     const location = yield* Location.Service
-    const modelContext = yield* ModelContextAssembler.Service
     const config = yield* Config.Service
     const snapshots = yield* Snapshot.Service
     const runtime = yield* RuntimeContext.Service
@@ -179,13 +176,6 @@ const layer = Layer.effect(
       )
         return yield* Effect.interrupt
       const agent = yield* agents.select(session.agent)
-      const initialized = yield* SessionContextEpoch.initialize(
-        db,
-        events,
-        modelContext.load(agent.id),
-        session.id,
-        session.locationRevision,
-      )
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
       let currentStep = step
@@ -203,15 +193,6 @@ const layer = Layer.effect(
           currentStep = 1
         }
       }
-      const system =
-        initialized ??
-        (yield* SessionContextEpoch.prepare(
-          db,
-          events,
-          modelContext.load(agent.id),
-          session.id,
-          session.locationRevision,
-        ))
       const model = yield* models.resolve(session).pipe(
         Effect.tapError((error) =>
           createLLMEventPublisher(events, {
@@ -225,7 +206,7 @@ const layer = Layer.effect(
         ),
       )
       const runtimeParts = yield* runtime.assemble(session.id, agent)
-      const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
+      const entries = yield* SessionHistory.entriesForRunner(db, session.id)
       const context = entries.map((entry) => entry.message)
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
@@ -489,7 +470,6 @@ export const node = makeLocationNode({
     SessionRunnerModel.node,
     SessionStore.node,
     Location.node,
-    ModelContextAssembler.node,
     RuntimeContext.node,
     RuntimeContextBuiltIns.node,
     Config.node,

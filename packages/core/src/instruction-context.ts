@@ -1,8 +1,7 @@
 export * as InstructionContext from "./instruction-context"
 
 import path from "node:path"
-import { Array, Context, DateTime, Effect, Exit, Layer, Ref, Schema } from "effect"
-import { eq } from "drizzle-orm"
+import { Array, Context, Effect, Exit, Layer, Ref } from "effect"
 import { ModelContext } from "@opencode-ai/schema/model-context"
 import { ModelContextOperationEvent } from "@opencode-ai/schema/model-context-operation-event"
 import { Config } from "./config"
@@ -14,19 +13,11 @@ import { Global } from "./global"
 import { HarnessInstructions } from "./harness/instructions"
 import { Location } from "./location"
 import { RuntimeContext } from "./runtime-context"
-import { SystemContext } from "./system-context/index"
-import { SystemContextRegistry } from "./system-context/registry"
 import { Hash } from "./util/hash"
-import { Database } from "./database/database"
 import { EventV2 } from "./event"
-import { SessionContextEpoch } from "./session/context-epoch"
-import { SessionEvent } from "./session/event"
-import { SessionMessage } from "./session/message"
 import { SessionSchema } from "./session/schema"
-import { SessionContextEpochTable } from "./session/sql"
 import { KeyedMutex } from "./effect/keyed-mutex"
 
-const key = SystemContext.Key.make("core/instructions")
 const fallbackNames = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"] as const
 
 type Side = "controller" | "target"
@@ -40,20 +31,11 @@ export interface Interface {
     readonly path: string
     readonly kind: "file" | "directory"
   }) => Effect.Effect<void>
-  /** Explicit generation boundary used only after a successful `/init` workflow. */
-  readonly reload: (sessionID: SessionSchema.ID) => Effect.Effect<void>
-  /** Prepare one strict replacement for an explicit current-Session instruction application. */
-  readonly prepareApply: (sessionID: SessionSchema.ID) => Effect.Effect<ModelContext.Generation, ApplyError>
   /** Observe the current full instruction chain for a Session, including in-memory nested additions. */
   readonly list: (sessionID: SessionSchema.ID) => Effect.Effect<ModelContext.Instructions>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/InstructionContext") {}
-
-export class ApplyError extends Schema.TaggedErrorClass<ApplyError>()("InstructionContext.ApplyError", {
-  kind: Schema.Literals(["missing-generation", "unavailable-source", "unavailable-context"]),
-  message: Schema.String,
-}) {}
 
 const layer = Layer.effect(
   Service,
@@ -64,29 +46,10 @@ const layer = Layer.effect(
     const global = yield* Global.Service
     const harness = yield* HarnessInstructions.Service
     const location = yield* Location.Service
-    const registry = yield* SystemContextRegistry.Service
-    const { db } = yield* Database.Service
     const events = yield* EventV2.Service
     const runtime = yield* RuntimeContext.Service
     const extended = yield* Ref.make<Map<SessionSchema.ID, ReadonlyArray<ModelContext.Instruction>>>(new Map())
     const locks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
-
-    const source = (load: Effect.Effect<ModelContext.Instructions>) =>
-      SystemContext.make({
-        key,
-        refresh: "generation",
-        allowEmpty: true,
-        codec: Schema.toCodecJson(ModelContext.Instructions),
-        load,
-        baseline: render,
-        update: (_previous, current) => {
-          const text = render(current)
-          return text.length === 0
-            ? "Previously loaded ambient instructions no longer apply."
-            : `These instructions replace all previously loaded ambient instructions.\n\n${text}`
-        },
-        removed: () => "Previously loaded ambient instructions no longer apply.",
-      })
 
     const display = (value: string, side: Side) => {
       if (value.startsWith("https://") || value.startsWith("http://")) return value
@@ -454,11 +417,6 @@ const layer = Layer.effect(
       )
     })
 
-    yield* registry.register({
-      key,
-      load: Effect.succeed(source(observe())),
-    })
-
     const extendOnce = Effect.fn("InstructionContext.extendOnce")(function* (input: {
       readonly sessionID: SessionSchema.ID
       readonly path: string
@@ -522,92 +480,6 @@ const layer = Layer.effect(
           ),
         )
 
-    const prepareReplacement = Effect.fn("InstructionContext.prepareReplacement")(function* (
-      sessionID: SessionSchema.ID,
-      reason: Extract<ModelContext.GenerationReason, "init" | "instructions-applied">,
-      strict: boolean,
-    ) {
-      const row = yield* db
-        .select()
-        .from(SessionContextEpochTable)
-        .where(eq(SessionContextEpochTable.session_id, sessionID))
-        .get()
-        .pipe(Effect.orDie)
-      if (!row)
-        return yield* new ApplyError({
-          kind: "missing-generation",
-          message: "The Session has no admitted model context",
-        })
-      const snapshot = yield* Schema.decodeUnknownEffect(SystemContext.Snapshot)(row.snapshot).pipe(
-        Effect.mapError(
-          () => new ApplyError({ kind: "unavailable-context", message: "The admitted context is unreadable" }),
-        ),
-      )
-      const previous = snapshot[key]
-        ? yield* Schema.decodeUnknownEffect(ModelContext.Instructions)(snapshot[key]!.value).pipe(
-            Effect.mapError(
-              () =>
-                new ApplyError({ kind: "unavailable-context", message: "The admitted instructions are unreadable" }),
-            ),
-          )
-        : ModelContext.Instructions.make([])
-      // Initial-chain replacement preserves admitted nested rules unless their file
-      // no longer exists in this Location. It never rereads nested rule bodies.
-      const nested = yield* Effect.filter(
-        previous.filter((item) => item.origin === "nested-file"),
-        (item) => targetFS.existsSafe(item.source),
-        { concurrency: "unbounded" },
-      )
-      const initial = yield* observe()
-      const unavailable = strict ? initial.find((item) => item.status === "ignored") : undefined
-      if (unavailable)
-        return yield* new ApplyError({
-          kind: "unavailable-source",
-          message: `Instruction source is unavailable: ${unavailable.source}`,
-        })
-      const known = new Set(initial.map((item) => item.id))
-      const instructions = ModelContext.Instructions.make([...initial, ...nested.filter((item) => !known.has(item.id))])
-      const rendered = yield* SystemContext.initialize(source(Effect.succeed(instructions))).pipe(
-        Effect.mapError(
-          () => new ApplyError({ kind: "unavailable-context", message: "Instructions could not be rendered" }),
-        ),
-      )
-      const replacement = SystemContext.rebaseline(yield* registry.load(), {
-        ...snapshot,
-        [key]: rendered.snapshot[key]!,
-      })
-      if (replacement._tag === "ReplacementBlocked")
-        return yield* new ApplyError({
-          kind: "unavailable-context",
-          message: "An admitted context source is unavailable",
-        })
-      return SessionContextEpoch.materialize(replacement.generation, {
-        generation: row.generation + 1,
-        reason,
-        locationRevision: row.location_revision,
-      })
-    })
-
-    const reload = (sessionID: SessionSchema.ID) =>
-      locks
-        .withLock(sessionID)(
-          prepareReplacement(sessionID, "init", false).pipe(
-            Effect.flatMap((context) =>
-              events.publish(SessionEvent.ContextGenerationEstablished, {
-                sessionID,
-                timestamp: DateTime.makeUnsafe(Date.now()),
-                context,
-              }),
-            ),
-          ),
-        )
-        .pipe(
-          Effect.catchCause((cause) => Effect.logWarning("instruction context reload ignored", { sessionID, cause })),
-        )
-
-    const prepareApply = (sessionID: SessionSchema.ID) =>
-      locks.withLock(sessionID)(prepareReplacement(sessionID, "instructions-applied", true))
-
     const list = Effect.fn("InstructionContext.list")(function* (sessionID: SessionSchema.ID) {
       const initial = yield* observe()
       const added = (yield* Ref.get(extended)).get(sessionID) ?? []
@@ -615,7 +487,7 @@ const layer = Layer.effect(
       return ModelContext.Instructions.make([...initial, ...added.filter((item) => !known.has(item.id))])
     })
 
-    return Service.of({ extend, reload, prepareApply, list })
+    return Service.of({ extend, list })
   }),
 )
 
@@ -625,14 +497,12 @@ export const node = makeLocationNode({
   deps: [
     Config.node,
     ControllerFileSystem.node,
-    Database.node,
     EventV2.node,
     FSUtil.locationNode,
     Global.node,
     HarnessInstructions.node,
     Location.node,
     RuntimeContext.node,
-    SystemContextRegistry.node,
   ],
 })
 

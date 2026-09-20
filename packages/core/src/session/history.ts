@@ -1,10 +1,10 @@
-import { and, asc, desc, eq, gt, gte, ne, or } from "drizzle-orm"
+import { and, asc, desc, eq, gte, ne, or } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import { Database } from "../database/database"
 import { MessageDecodeError } from "./error"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
-import { SessionContextEpochTable, SessionMessageTable } from "./sql"
+import { SessionMessageTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -25,7 +25,6 @@ const messageRows = Effect.fnUntraced(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   compaction: { readonly seq: number } | undefined,
-  baselineSeq?: number,
 ) {
   const rows = yield* db
     .select()
@@ -33,17 +32,8 @@ const messageRows = Effect.fnUntraced(function* (
     .where(
       and(
         eq(SessionMessageTable.session_id, sessionID),
-        compaction
-          ? or(
-              gte(SessionMessageTable.seq, compaction.seq),
-              baselineSeq === undefined
-                ? undefined
-                : and(eq(SessionMessageTable.type, "system"), gt(SessionMessageTable.seq, baselineSeq)),
-            )
-          : undefined,
-        baselineSeq === undefined
-          ? undefined
-          : or(ne(SessionMessageTable.type, "system"), gt(SessionMessageTable.seq, baselineSeq)),
+        ne(SessionMessageTable.type, "system"),
+        compaction ? gte(SessionMessageTable.seq, compaction.seq) : undefined,
       ),
     )
     .orderBy(asc(SessionMessageTable.seq))
@@ -64,35 +54,22 @@ const decodeMessageRow = (row: typeof SessionMessageTable.$inferSelect) =>
   )
 
 export const load = Effect.fn("SessionHistory.load")(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
-  const [epoch, compaction] = yield* Effect.all(
-    [
-      db
-        .select({ baselineSeq: SessionContextEpochTable.baseline_seq })
-        .from(SessionContextEpochTable)
-        .where(eq(SessionContextEpochTable.session_id, sessionID))
-        .get()
-        .pipe(Effect.orDie),
-      latestCompaction(db, sessionID),
-    ],
-    { concurrency: "unbounded" },
-  )
-  return yield* Effect.forEach(yield* messageRows(db, sessionID, compaction, epoch?.baselineSeq), decodeMessageRow)
+  const compaction = yield* latestCompaction(db, sessionID)
+  return yield* Effect.forEach(yield* messageRows(db, sessionID, compaction), decodeMessageRow)
 })
 
 export const loadForRunner = Effect.fn("SessionHistory.loadForRunner")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
-  baselineSeq: number,
 ) {
-  return (yield* entriesForRunner(db, sessionID, baselineSeq)).map((entry) => entry.message)
+  return (yield* entriesForRunner(db, sessionID)).map((entry) => entry.message)
 })
 
 export const entriesForRunner = Effect.fn("SessionHistory.entriesForRunner")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
-  baselineSeq: number,
 ) {
-  const rows = yield* messageRows(db, sessionID, yield* latestCompaction(db, sessionID), baselineSeq)
+  const rows = yield* messageRows(db, sessionID, yield* latestCompaction(db, sessionID))
   return yield* Effect.forEach(rows, (row) =>
     decodeMessageRow(row).pipe(Effect.map((message) => ({ seq: row.seq, message }))),
   )

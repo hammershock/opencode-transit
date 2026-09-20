@@ -20,7 +20,6 @@ import { LocationEnvironment } from "./location-environment"
 import { LocationProcess } from "./location-process"
 import { LocationFormatter } from "./location-formatter"
 import { LocationServiceMap } from "./location-service-map"
-import { ModelContextAssembler } from "./model-context-assembler"
 import { PermissionV2 } from "./permission"
 import { PluginV2 } from "./plugin"
 import { PluginInternal } from "./plugin/internal"
@@ -29,7 +28,6 @@ import { ProjectCopy } from "./project/copy"
 import { Pty } from "./pty"
 import { QuestionV2 } from "./question"
 import { Reference } from "./reference"
-import { ReferenceGuidance } from "./reference/guidance"
 import { RuntimeContext } from "./runtime-context"
 import { RuntimeContextBuiltIns } from "./runtime-context/builtins"
 import * as SessionRunnerLLM from "./session/runner/llm"
@@ -40,8 +38,6 @@ import { SkillGuidance } from "./skill/guidance"
 import { SkillCatalogContext } from "./skill/catalog-context"
 import { SkillPackageAccess } from "./skill/package-access"
 import { Snapshot } from "./snapshot"
-import { SystemContextBuiltIns } from "./system-context/builtins"
-import { SystemContextRegistry } from "./system-context/registry"
 import { BuiltInTools } from "./tool/builtins"
 import { ReadToolFileSystem } from "./tool/read-filesystem"
 import { ToolRegistry } from "./tool/registry"
@@ -71,9 +67,7 @@ export const locationServices = LayerNode.group([
   SkillV2.node,
   SkillPackageAccess.node,
   SkillCatalogContext.node,
-  SystemContextRegistry.node,
   InstructionContext.node,
-  SystemContextBuiltIns.node,
   LocationMutation.node,
   LocationEnvironment.node,
   LocationProcess.node,
@@ -85,10 +79,8 @@ export const locationServices = LayerNode.group([
   ToolRegistry.toolsNode,
   Image.node,
   SkillGuidance.node,
-  ReferenceGuidance.node,
   RuntimeContext.node,
   RuntimeContextBuiltIns.node,
-  ModelContextAssembler.node,
   SessionTodo.node,
   QuestionV2.node,
   ReadToolFileSystem.node,

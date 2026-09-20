@@ -99,7 +99,7 @@ export const node = makeLocationNode({
   deps: [Database.node, Location.node, InstructionContext.node, Reference.node, RuntimeContext.node],
 })
 
-function buildEnvironment(location: Location.Interface) {
+export function buildEnvironment(location: Location.Interface) {
   return ModelContext.Environment.make({
     harness: "OpenCode Transit",
     entrypoint: "opencode-transit",
@@ -113,7 +113,7 @@ function buildEnvironment(location: Location.Interface) {
   })
 }
 
-function renderEnvironment(environment: ModelContext.Environment) {
+export function renderEnvironment(environment: ModelContext.Environment) {
   return [
     `Execution harness: ${environment.harness} (${environment.entrypoint})`,
     "<environment>",
