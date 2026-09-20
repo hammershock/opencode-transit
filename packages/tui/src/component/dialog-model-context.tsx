@@ -218,6 +218,7 @@ export function DialogModelContext(props: {
 }) {
   const dialog = useDialog()
   const toast = useToast()
+  dialog.setSize("xlarge")
   const [generation, setGeneration] = createSignal(props.generation)
   const [refreshing, setRefreshing] = createSignal(false)
 
