@@ -64,20 +64,27 @@ export const stage = Effect.fn("SessionRevert.stage")(function* (input: {
 }) {
   const snapshot = yield* Snapshot.Service
   const events = yield* EventV2.Service
+  const next = yield* plan({ sessionID: input.session.id, messageID: input.messageID })
+  const priorFiles = input.session.revert?.files ?? []
+  const paths = input.files === false ? [] : Array.from(next.keys())
+  // Snapshot capture/restore and per-file diffs traverse the (possibly remote)
+  // filesystem, so only capture when the reverted boundary actually needs it:
+  // restoring prior files, restoring this turn's files, or producing the diff.
   const original = input.session.revert?.snapshot
     ? Snapshot.ID.make(input.session.revert.snapshot)
-    : yield* snapshot.capture()
-  const next = yield* plan({ sessionID: input.session.id, messageID: input.messageID })
+    : priorFiles.length > 0 || paths.length > 0
+      ? yield* snapshot.capture()
+      : undefined
   const restore = new Map<RelativePath, Snapshot.ID>()
   if (original) {
-    for (const file of input.session.revert?.files ?? []) restore.set(file.path, original)
+    for (const file of priorFiles) restore.set(file.path, original)
   }
   if (input.files !== false) for (const [file, tree] of next) restore.set(file, tree)
   if (restore.size) yield* snapshot.restore({ files: restore })
-  const paths = input.files === false ? [] : Array.from(next.keys())
-  const files = original
-    ? yield* snapshot.diff({ from: original, to: (yield* snapshot.capture()) ?? original, paths })
-    : []
+  const files =
+    original && paths.length > 0
+      ? yield* snapshot.diff({ from: original, to: (yield* snapshot.capture()) ?? original, paths })
+      : []
   const revert = {
     messageID: input.messageID,
     snapshot: original,
