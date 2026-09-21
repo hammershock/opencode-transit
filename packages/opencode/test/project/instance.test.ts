@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { Location } from "@opencode-ai/core/location"
 import { Deferred, Effect, Fiber, Layer } from "effect"
 import { InstanceRef } from "../../src/effect/instance-ref"
 import { registerDisposer } from "../../src/effect/instance-registry"
@@ -47,6 +48,20 @@ describe("InstanceStore", () => {
 
       expect(ctx.directory).toBe(dir)
       expect(ctx.worktree).toBe(dir)
+    }),
+  )
+
+  it.live("preserves the target on the loaded instance context", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const target = Location.RexdTarget.make({
+        type: "rexd",
+        targetID: Location.TargetID.make("a20c4f65-7ad8-47ae-bc91-7f2b9476108d"),
+      })
+      const ctx = yield* store.load({ directory: dir, target })
+
+      expect(ctx.target).toEqual(target)
     }),
   )
 

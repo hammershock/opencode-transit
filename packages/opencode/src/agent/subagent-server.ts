@@ -1,25 +1,31 @@
 import { InstanceStore } from "@/project/instance-store"
 import { SessionID } from "@/session/schema"
 import { SubagentManager } from "@opencode-ai/server/subagent"
+import type { Location } from "@opencode-ai/core/location"
 import { Effect, Layer } from "effect"
 import { Subagent } from "./subagent"
+
+type Located = { directory: string; target?: Location.Target }
 
 export const subagentManagerLayer = Layer.effect(
   SubagentManager.Service,
   Effect.gen(function* () {
     const subagent = yield* Subagent.Service
     const instances = yield* InstanceStore.Service
-    const provide = <A, E, R>(directory: string, effect: Effect.Effect<A, E, R>) =>
-      instances.provide({ directory }, effect)
+    const provide = <A, E, R>(input: Located, effect: Effect.Effect<A, E, R>) =>
+      instances.provide(
+        { directory: input.directory, ...(input.target === undefined ? {} : { target: input.target }) },
+        effect,
+      )
     const mutation = <A>(
-      directory: string,
+      input: Located,
       effect: Effect.Effect<A, Subagent.ConflictError | Subagent.NotFoundError | Subagent.ReadonlyError>,
-    ) => provide(directory, effect).pipe(Effect.mapError(mutationFailure))
+    ) => provide(input, effect).pipe(Effect.mapError(mutationFailure))
 
     return SubagentManager.Service.of({
       catalog: (input) =>
         provide(
-          input.directory,
+          input,
           subagent.resolve({
             parentAgentID: input.parentAgentID,
             sessionID: input.sessionID ? SessionID.make(input.sessionID) : undefined,
@@ -28,7 +34,7 @@ export const subagentManagerLayer = Layer.effect(
         ),
       create: (input) =>
         mutation(
-          input.directory,
+          input,
           subagent.create({
             sessionID: SessionID.make(input.sessionID),
             parentAgentID: input.parentAgentID,
@@ -38,7 +44,7 @@ export const subagentManagerLayer = Layer.effect(
         ),
       update: (input) =>
         mutation(
-          input.directory,
+          input,
           subagent.update({
             sessionID: SessionID.make(input.sessionID),
             parentAgentID: input.parentAgentID,
@@ -49,7 +55,7 @@ export const subagentManagerLayer = Layer.effect(
         ),
       remove: (input) =>
         mutation(
-          input.directory,
+          input,
           subagent.remove({
             sessionID: SessionID.make(input.sessionID),
             parentAgentID: input.parentAgentID,
@@ -66,7 +72,7 @@ export const subagentManagerLayer = Layer.effect(
           expectedRevision: input.expectedRevision,
         }
         return mutation(
-          input.directory,
+          input,
           input.scope === "global" ? subagent.setGlobalAccess(access) : subagent.setSessionAccess(access),
         )
       },

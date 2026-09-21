@@ -9,12 +9,14 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Context, Deferred, Duration, Effect, Exit, Layer, Scope } from "effect"
 import { type InstanceContext } from "./instance-context"
 import { InstanceBootstrap } from "./bootstrap-service"
+import type { Location } from "@opencode-ai/core/location"
 import * as Project from "./project"
 
 export interface LoadInput {
   directory: string
   worktree?: string
   project?: Project.Info
+  target?: Location.Target
 }
 
 export interface Interface {
@@ -50,12 +52,14 @@ const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Ser
                 directory: input.directory,
                 worktree: input.worktree,
                 project: input.project,
+                ...(input.target === undefined ? {} : { target: input.target }),
               }
             : yield* project.fromDirectory(input.directory).pipe(
                 Effect.map((result) => ({
                   directory: input.directory,
                   worktree: result.sandbox,
                   project: result.project,
+                  ...(input.target === undefined ? {} : { target: input.target }),
                 })),
               )
         yield* bootstrap.run.pipe(Effect.provideService(InstanceRef, ctx))
