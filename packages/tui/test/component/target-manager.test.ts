@@ -2,21 +2,32 @@ import { describe, expect, test } from "bun:test"
 import {
   probeTargetHealth,
   targetHealthLabel,
+  targetInfoFields,
   targetListPresentation,
-  targetManagementActions,
   targetProbeGenerations,
 } from "../../src/component/target-manager"
 import { targetDescription } from "../../src/component/target-wizard"
 import { targetInput } from "../../src/component/location-directory-workflow"
 
 describe("target health presentation", () => {
-  test("offers a direct description editor", () => {
-    expect(targetManagementActions.map((action) => action.title)).toEqual([
-      "Test connection",
-      "Edit target",
-      "Edit description",
-      "Remove target",
+  test("lists editable target fields with their current values", () => {
+    const target = {
+      id: "target-1",
+      name: "a100-2gpu",
+      description: "Huawei ModelArts 2×A100 GPU server",
+      transport: "ssh" as const,
+      connection: { type: "ssh-config" as const, host: "modelarts" },
+      workspaceRoots: ["/home/ma-user/workspace"],
+      defaultDirectory: "/home/ma-user/workspace/project",
+    }
+    expect(targetInfoFields(target).map((field) => field.title)).toEqual([
+      "Target name",
+      "Description",
+      "Workspace root",
+      "Default working directory",
     ])
+    expect(targetInfoFields(target).map((field) => field.value)).toEqual(["name", "description", "roots", "directory"])
+    expect(targetInfoFields(target)[2]?.description).toBe("/home/ma-user/workspace")
   })
 
   test("preserves every target field while projecting a description update", () => {
