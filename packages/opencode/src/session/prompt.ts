@@ -32,6 +32,7 @@ import { SessionSummary } from "./summary"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
+import { runSlashCommand } from "@/tool/slash-command"
 import { Permission } from "@/permission"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
@@ -124,6 +125,7 @@ export interface Interface {
   ) => Effect.Effect<ShellCompletionResult, unknown>
   readonly resetShell: (sessionID: SessionID) => Effect.Effect<void>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  readonly slashCommand: (input: SlashCommandInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
 }
 
@@ -1652,6 +1654,100 @@ const layer = Layer.effect(
       return result
     })
 
+    const slashCommand = Effect.fn("SessionPrompt.slashCommand")(function* (input: SlashCommandInput) {
+      yield* locationAccess.require(input.sessionID).pipe(Effect.catch(Effect.die))
+      return yield* Effect.gen(function* () {
+        const ctx = yield* InstanceState.context
+        const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+        if (session.revert) yield* revert.cleanup(session)
+        const agent = yield* agents.get(input.agent)
+        if (!agent) {
+          const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
+          const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+          throw new NamedError.Unknown({ message: `Agent not found: "${input.agent}".${hint}` })
+        }
+        const model = input.model ?? agent.model ?? (yield* currentModel(input.sessionID))
+
+        const userMsg: SessionV1.User = {
+          id: input.messageID ?? MessageID.ascending(),
+          sessionID: input.sessionID,
+          time: { created: Date.now() },
+          role: "user",
+          agent: input.agent,
+          model: { providerID: model.providerID, modelID: model.modelID },
+        }
+        yield* sessions.updateMessage(userMsg)
+        yield* sessions.updatePart({
+          type: "text",
+          id: PartID.ascending(),
+          messageID: userMsg.id,
+          sessionID: input.sessionID,
+          text: input.command,
+        })
+
+        const msg: SessionV1.Assistant = {
+          id: MessageID.ascending(),
+          sessionID: input.sessionID,
+          parentID: userMsg.id,
+          mode: input.agent,
+          agent: input.agent,
+          cost: 0,
+          path: { cwd: ctx.directory, root: ctx.worktree },
+          time: { created: Date.now() },
+          role: "assistant",
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: model.modelID,
+          providerID: model.providerID,
+        }
+        yield* sessions.updateMessage(msg)
+        const started = Date.now()
+        const part: SessionV1.ToolPart = {
+          type: "tool",
+          id: PartID.ascending(),
+          messageID: msg.id,
+          sessionID: input.sessionID,
+          tool: "slash_command",
+          callID: ulid(),
+          state: {
+            status: "running",
+            time: { start: started },
+            input: { command: input.command },
+            metadata: {},
+          },
+        }
+        yield* sessions.updatePart(part)
+
+        const locationRef = yield* sessionLocation(input.sessionID)
+        const result = yield* Effect.flatMap(LocationEnvironment.Service, (environment) =>
+          runSlashCommand(input.command, targetRegistry, environment, locationRef.target),
+        ).pipe(Effect.provide(locations.get(locationRef)))
+
+        const completed = Date.now()
+        msg.time.completed = completed
+        yield* sessions.updateMessage(msg)
+        part.state =
+          result.status === "completed"
+            ? {
+                status: "completed",
+                time: { start: started, end: completed },
+                input: { command: input.command },
+                title: input.command,
+                metadata: result,
+                output: result.stdout || result.stderr,
+              }
+            : {
+                status: "error",
+                time: { start: started, end: completed },
+                input: { command: input.command },
+                error: result.stderr || result.stdout,
+                metadata: result,
+              }
+        yield* sessions.updatePart(part)
+
+        return { info: msg, parts: [part] }
+      })
+    })
+
     return Service.of({
       cancel,
       prompt,
@@ -1661,6 +1757,7 @@ const layer = Layer.effect(
       completeShellAtLocation,
       resetShell: userShell.reset,
       command,
+      slashCommand,
       resolvePromptParts,
     })
   }),
@@ -1707,6 +1804,15 @@ export const ShellInput = Schema.Struct({
   command: Schema.String,
 })
 export type ShellInput = Schema.Schema.Type<typeof ShellInput>
+
+export const SlashCommandInput = Schema.Struct({
+  sessionID: SessionID,
+  messageID: Schema.optional(MessageID),
+  agent: Schema.String,
+  model: Schema.optional(ModelRef),
+  command: Schema.String,
+})
+export type SlashCommandInput = Schema.Schema.Type<typeof SlashCommandInput>
 
 export const ShellCompletionInput = Schema.Struct({
   sessionID: SessionID,

@@ -29,7 +29,7 @@ function messageOf(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
-function targetList(snapshot: TargetRegistry.Snapshot, current?: Location.Target): CommandResult {
+export function targetList(snapshot: TargetRegistry.Snapshot, current?: Location.Target): CommandResult {
   const columns = ["selector", "name", "description", "status"] as const
   const currentSelector = current ? (current.type === "rexd" ? current.targetID : "local") : undefined
   const mark = (selector: string) => (currentSelector && selector === currentSelector ? `*${selector}` : selector)
@@ -55,6 +55,36 @@ function targetList(snapshot: TargetRegistry.Snapshot, current?: Location.Target
   return { status: "completed", stdout, stderr: "" }
 }
 
+export function runSlashCommand(
+  command: string,
+  targetRegistry: TargetRegistry.Interface,
+  environment: LocationEnvironment.Interface,
+  current?: Location.Target,
+): Effect.Effect<CommandResult> {
+  return Effect.gen(function* () {
+    const tokens = command.trim().split(/\s+/)
+    if (tokens[0] === "/target" && tokens[1] === "list") {
+      return yield* Effect.promise(() => targetRegistry.load()).pipe(
+        Effect.map((snapshot) => targetList(snapshot, current)),
+        Effect.catch((error) => Effect.succeed(fail("target_list_failed", messageOf(error)))),
+      )
+    }
+    if (tokens[0] === "/env" && tokens[1] === "reload") {
+      return yield* environment.reload().pipe(
+        Effect.map(
+          (snapshot): CommandResult => ({
+            status: "completed",
+            stdout: `Environment generation ${snapshot.generation} loaded`,
+            stderr: "",
+          }),
+        ),
+        Effect.catch((error) => Effect.succeed(fail("reload_failed", messageOf(error)))),
+      )
+    }
+    return fail("unknown_command", `Unknown or unavailable slash command: ${command}`)
+  })
+}
+
 export const SlashCommandTool = Tool.define<
   typeof Parameters,
   Metadata,
@@ -64,34 +94,6 @@ export const SlashCommandTool = Tool.define<
   Effect.gen(function* () {
     const targetRegistry = yield* TargetRegistry.Service
     const session = yield* Session.Service
-
-    const execute = (command: string, current?: Location.Target): Effect.Effect<CommandResult> =>
-      Effect.gen(function* () {
-        const tokens = command.trim().split(/\s+/)
-        if (tokens[0] === "/target" && tokens[1] === "list") {
-          return yield* Effect.promise(() => targetRegistry.load()).pipe(
-            Effect.map((snapshot) => targetList(snapshot, current)),
-            Effect.catch((error) => Effect.succeed(fail("target_list_failed", messageOf(error)))),
-          )
-        }
-        if (tokens[0] === "/env" && tokens[1] === "reload") {
-          const environment = yield* Effect.serviceOption(LocationEnvironment.Service)
-          if (Option.isNone(environment)) {
-            return fail("headless_unavailable", "Environment service is unavailable for this session")
-          }
-          return yield* environment.value.reload().pipe(
-            Effect.map(
-              (snapshot): CommandResult => ({
-                status: "completed",
-                stdout: `Environment generation ${snapshot.generation} loaded`,
-                stderr: "",
-              }),
-            ),
-            Effect.catch((error) => Effect.succeed(fail("reload_failed", messageOf(error)))),
-          )
-        }
-        return fail("unknown_command", `Unknown or unavailable slash command: ${command}`)
-      })
 
     return {
       description: DESCRIPTION,
@@ -103,7 +105,12 @@ export const SlashCommandTool = Tool.define<
             const denied = fail("subagent_forbidden", "Slash commands are only available to the primary session")
             return { title: params.command, output: denied.stderr, metadata: { ...denied, command: params.command } }
           }
-          const result = yield* execute(params.command, info?.target)
+          const environment = yield* Effect.serviceOption(LocationEnvironment.Service)
+          if (Option.isNone(environment)) {
+            const denied = fail("headless_unavailable", "Environment service is unavailable for this session")
+            return { title: params.command, output: denied.stderr, metadata: { ...denied, command: params.command } }
+          }
+          const result = yield* runSlashCommand(params.command, targetRegistry, environment.value, info?.target)
           return {
             title: params.command,
             output: result.stdout || result.stderr,

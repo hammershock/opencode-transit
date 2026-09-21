@@ -784,33 +784,12 @@ export function Session() {
           abortSignal: new AbortController().signal,
           openTargetManager: targetManager.open,
           listTargets: async () => {
-            const result = await sdk.client.v2.target.list({ throwOnError: true })
-            const currentTarget = location()?.target
-            const currentSelector = currentTarget?.type === "rexd" ? currentTarget.targetID : "local"
-            const mark = (selector: string) => (selector === currentSelector ? `*${selector}` : selector)
-            const rows = [
-              ["selector", "name", "description", "status"],
-              [mark("local"), "local", "Local execution target", "available"],
-              ...result.data.targets.map((target) => [
-                mark(target.id),
-                target.name,
-                target.description ?? "",
-                target.health?.status ?? "unknown",
-              ]),
-            ]
-            const widths = [0, 1, 2, 3].map((column) =>
-              Math.max(...rows.map((row) => Bun.stringWidth(String(row[column] ?? "")))),
-            )
-            const text = rows
-              .map((row) =>
-                [0, 1, 2, 3]
-                  .map((column) => String(row[column] ?? "").padEnd(widths[column] ?? 0))
-                  .join("  ")
-                  .trimEnd(),
-              )
-              .join("\n")
-            await sdk.client.v2.session.prompt(
-              { sessionID: route.sessionID, prompt: { text } },
+            await sdk.client.session.slashCommand(
+              {
+                sessionID: route.sessionID,
+                agent: local.agent.current()?.name ?? "build",
+                command: "/target list",
+              },
               { throwOnError: true },
             )
           },

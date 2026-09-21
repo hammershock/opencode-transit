@@ -281,6 +281,8 @@ import type {
   SessionShellCompletionResponses,
   SessionShellErrors,
   SessionShellResponses,
+  SessionSlashCommandErrors,
+  SessionSlashCommandResponses,
   SessionStatusErrors,
   SessionStatusResponses,
   SessionSummarizeErrors,
@@ -5012,6 +5014,56 @@ export class Session2 extends HeyApiClient {
         ...params.headers,
       },
     })
+  }
+
+  /**
+   * Run slash command
+   *
+   * Execute a slash command within the session without invoking the model.
+   */
+  public slashCommand<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      messageID?: string
+      agent?: string
+      model?: {
+        providerID: string
+        modelID: string
+      }
+      command?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "messageID" },
+            { in: "body", key: "agent" },
+            { in: "body", key: "model" },
+            { in: "body", key: "command" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionSlashCommandResponses, SessionSlashCommandErrors, ThrowOnError>(
+      {
+        url: "/session/{sessionID}/slash-command",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
   }
 
   /**
