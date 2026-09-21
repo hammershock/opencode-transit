@@ -281,7 +281,6 @@ const contextLayer = Layer.effect(
         agent,
         model: model.value,
         permission: session.permission,
-        economicsGuidance: economics.guidance(sessionID, agent),
       })
       return assembled.systemParts
     })

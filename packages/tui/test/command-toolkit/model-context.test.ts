@@ -194,8 +194,6 @@ describe("model context inspector", () => {
       ["SystemPrompt", "project-instructions"],
       ["SystemPrompt", "available_references"],
       ["SystemPrompt", "available_skills"],
-      ["SystemPrompt", "available_subagents"],
-      ["SystemPrompt", "  research"],
       ["Messages", "conversation-checkpoints"],
       ["Tools", "read"],
       ["Tools", "grep"],
@@ -207,11 +205,9 @@ describe("model context inspector", () => {
     expect(options[1]?.footer).toBe("mywindows linux")
     expect(options[7]?.footer).toBe("1")
     expect(options[7]?.value.content).toBe(generation.runtimeParts![4]!.text)
-    expect(options[8]?.footer).toBe("1")
-    expect(options[8]?.value.content).toBe(generation.subagentGuidance!)
-    expect(options[11]?.footer).toBe("Read a file from the local filesystem.")
-    expect(options[11]?.inspectFooter).toBe(true)
-    expect(options[11]?.value.content).toBe(
+    expect(options[9]?.footer).toBe("Read a file from the local filesystem.")
+    expect(options[9]?.inspectFooter).toBe(true)
+    expect(options[9]?.value.content).toBe(
       JSON.stringify(
         {
           name: "read",
@@ -222,7 +218,7 @@ describe("model context inspector", () => {
         2,
       ),
     )
-    expect(options[12]?.value.content).toBe(
+    expect(options[10]?.value.content).toBe(
       JSON.stringify(
         {
           name: "grep",
@@ -257,18 +253,6 @@ describe("model context inspector", () => {
     expect(systemParts[0]?.value.content).toBe(agentPrompt)
     expect(systemParts[1]?.value.content).toBe(modelIdentity)
     expect(systemParts[2]?.value.content).toBe(mcpText)
-  })
-
-  test("reports disabled subagent economics without synthetic guidance", () => {
-    const options = modelContextOptions({
-      ...generation,
-      subagentCatalog: undefined,
-      subagentGuidance: undefined,
-      subagentRefresh: { status: "disabled", diagnostics: [] },
-    })
-    const available = options.find((option) => option.title === "available_subagents")
-    expect(available?.footer).toBe("None")
-    expect(available?.value.content).toBe("Subagent economics is disabled for this device.")
   })
 
   test("reports an empty state when no tool definitions are available", () => {

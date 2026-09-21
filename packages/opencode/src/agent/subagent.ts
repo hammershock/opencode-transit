@@ -650,8 +650,8 @@ function escape(value: string) {
 }
 
 export function render(snapshot: Snapshot) {
-  const header = `<available_subagents revision="${escape(snapshot.revision)}">`
-  const close = "</available_subagents>"
+  const header = `<available-subagents revision="${escape(snapshot.revision)}">`
+  const close = "</available-subagents>"
   const selected: string[] = []
   const entries = snapshot.entries
     .filter((entry) => entry.effective === "active")

@@ -51,7 +51,6 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import { RuntimeContext } from "@opencode-ai/core/runtime-context"
 import { AgentV2 } from "@opencode-ai/core/agent"
-import { SubagentEconomics } from "@/agent/economics"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { eq } from "drizzle-orm"
@@ -136,7 +135,6 @@ const layer = Layer.effect(
     const status = yield* SessionStatus.Service
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
-    const economics = yield* SubagentEconomics.Service
     const provider = yield* Provider.Service
     const processor = yield* SessionProcessor.Service
     const compaction = yield* SessionCompaction.Service
@@ -1371,7 +1369,6 @@ const layer = Layer.effect(
                 agent,
                 model,
                 permission: session.permission,
-                economicsGuidance: economics.guidance(sessionID, agent),
               }),
             ])
             const system = [...assembled.system]
@@ -1813,7 +1810,6 @@ export const node = LayerNode.make({
     SessionStatus.node,
     Session.node,
     Agent.node,
-    SubagentEconomics.node,
     Provider.node,
     SessionProcessor.node,
     SessionCompaction.node,

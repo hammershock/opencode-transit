@@ -94,7 +94,6 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const config = yield* Config.Service
     const plugin = yield* Plugin.Service
-    const agents = yield* Agent.Service
     const subagents = Option.getOrUndefined(yield* Effect.serviceOption(Subagent.Service))
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
@@ -261,39 +260,6 @@ const layer = Layer.effect(
       return (yield* all()).map((tool) => tool.id)
     })
 
-    const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (input: {
-      agent: Agent.Info
-      sessionID?: import("@/session/schema").SessionID
-      catalog?: Subagent.Snapshot
-    }) {
-      const economics =
-        (yield* config.get()).experimental?.subagent_economics === true
-          ? "The current <available_subagents> system block contains device-local pricing and routing evidence; consider it when choosing an agent."
-          : undefined
-      if (!subagents) {
-        const description = (yield* agents.list())
-          .filter(
-            (item) =>
-              item.mode !== "primary" &&
-              Permission.evaluate("task", item.id ?? item.name, input.agent.permission).action !== "deny",
-          )
-          .toSorted((a, b) => a.name.localeCompare(b.name))
-          .map((item) => `- ${item.name}: ${item.description ?? "Call only when selected by the user."}`)
-          .join("\n")
-        return ["Available subagents:", description, economics].filter((part) => part !== undefined).join("\n")
-      }
-      const snapshot =
-        input.catalog ??
-        (yield* subagents.resolve({
-          parentAgentID: input.agent.id ?? input.agent.name,
-          sessionID: input.sessionID,
-          includeInactive: false,
-        }))
-      return ["Available subagents:", subagents.render(snapshot), economics]
-        .filter((part) => part !== undefined)
-        .join("\n")
-    })
-
     const describeCodeMode = Effect.fn("ToolRegistry.describeCodeMode")(function* (input: {
       agent: Agent.Info
       permission?: PermissionV1.Ruleset
@@ -348,11 +314,7 @@ const layer = Layer.effect(
           if (catalog?.entries.length === 0) return
           return {
             id: tool.id,
-            description: [
-              output.description,
-              tool.id === TaskTool.id ? yield* describeTask({ ...input, catalog }) : undefined,
-              tool.id === "execute" ? codeModeDescription : undefined,
-            ]
+            description: [output.description, tool.id === "execute" ? codeModeDescription : undefined]
               .filter(Boolean)
               .join("\n"),
             parameters: output.parameters,
