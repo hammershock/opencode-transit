@@ -4730,6 +4730,19 @@ export type SkillAdmittedCatalog = {
   digest: string
 }
 
+export type ModelContextSystemPart = {
+  key: string
+  label: string
+  tag: string
+  text: string
+}
+
+export type ModelContextTool = {
+  name: string
+  description: string
+  inputSchema: unknown
+}
+
 export type SessionNextAgentSwitched = {
   id: string
   metadata?: {
@@ -14826,10 +14839,12 @@ export type V2SessionModelContextResponses = {
       tag: string
       text: string
     }>
+    systemParts: Array<ModelContextSystemPart>
     agentSystem: string
     environment: string
     environmentInfo: ModelContextEnvironment
     instructions: Array<ModelContextInstruction>
+    tools: Array<ModelContextTool>
     model: ModelRef
     headers: {
       [key: string]: string

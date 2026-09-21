@@ -8,6 +8,7 @@ export type View = {
   readonly subagentGuidance: string | null
   readonly subagentRefresh: typeof SubagentEconomicsRefresh.Type
   readonly tools: ReadonlyArray<ModelContext.Tool>
+  readonly systemParts: ReadonlyArray<ModelContext.SystemPart> | null
 }
 
 export interface Interface {

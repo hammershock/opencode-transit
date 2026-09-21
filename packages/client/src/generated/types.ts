@@ -963,6 +963,12 @@ export type SessionsModelContextOutput = {
     readonly tag: string
     readonly text: string
   }> | null
+  readonly systemParts: ReadonlyArray<{
+    readonly key: string
+    readonly label: string
+    readonly tag: string
+    readonly text: string
+  }> | null
   readonly agentSystem: string | null
   readonly environment: string | null
   readonly environmentInfo:
