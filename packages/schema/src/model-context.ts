@@ -86,6 +86,15 @@ export const Tool = Schema.Struct({
 }).annotate({ identifier: "ModelContext.Tool" })
 export type Tool = typeof Tool.Type
 
+/** One system-prompt segment actually emitted to the model, with provenance for `/context` inspection. */
+export const SystemPart = Schema.Struct({
+  key: Schema.String,
+  label: Schema.String,
+  tag: Schema.String,
+  text: Schema.String,
+}).annotate({ identifier: "ModelContext.SystemPart" })
+export type SystemPart = typeof SystemPart.Type
+
 export const Tools = Schema.Array(Tool).annotate({ identifier: "ModelContext.Tools" })
 export type Tools = typeof Tools.Type
 

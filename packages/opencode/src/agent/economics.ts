@@ -13,6 +13,7 @@ import { SessionContextExtension } from "@opencode-ai/server/session-context-ext
 import { InstanceStore } from "@/project/instance-store"
 import { Session } from "@/session/session"
 import { resolveDefinitions } from "@/session/tools"
+import { SystemAssembly } from "@/session/system-assembly"
 import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { ToolRegistry as LocationToolRegistry } from "@opencode-ai/core/tool/registry"
@@ -258,6 +259,24 @@ const contextLayer = Layer.effect(
     const registry = yield* ToolRegistry.Service
     const mcp = yield* MCP.Service
     const flags = yield* RuntimeFlags.Service
+    const provider = yield* Provider.Service
+    const systemAssembly = yield* SystemAssembly.Service
+
+    const inspectSystem = Effect.fn("SubagentEconomics.inspectSystem")(function* (sessionID: SessionID) {
+      const session = yield* sessions.get(sessionID)
+      const agent = yield* agents.get(session.agent ?? "build")
+      if (!agent || !session.model) return null
+      const model = yield* provider.getModel(session.model.providerID, session.model.id).pipe(Effect.option)
+      if (Option.isNone(model)) return null
+      const assembled = yield* systemAssembly.assemble({
+        sessionID,
+        agent,
+        model: model.value,
+        permission: session.permission,
+        economicsGuidance: economics.guidance(sessionID, agent),
+      })
+      return assembled.systemParts
+    })
 
     const inspectTools = Effect.fn("SubagentEconomics.inspectTools")(function* (sessionID: SessionID) {
       const session = yield* sessions.get(sessionID)
@@ -292,6 +311,8 @@ const contextLayer = Layer.effect(
             inputSchema: tool.inputSchema,
           }))
         : []
+      const systemPartsAttempt = yield* inspectSystem(sessionID).pipe(Effect.exit)
+      const systemParts = Exit.isSuccess(systemPartsAttempt) ? systemPartsAttempt.value : null
 
       if ((yield* config.get()).experimental?.subagent_economics !== true) {
         return {
@@ -299,6 +320,7 @@ const contextLayer = Layer.effect(
           subagentGuidance: null,
           subagentRefresh: { status: "disabled" as const, diagnostics: [] },
           tools,
+          systemParts,
         }
       }
       const catalog = yield* economics.peek(sessionID)
@@ -308,6 +330,7 @@ const contextLayer = Layer.effect(
           subagentGuidance: null,
           subagentRefresh: { status: "loading" as const, diagnostics: [] },
           tools,
+          systemParts,
         }
       }
       return {
@@ -319,6 +342,7 @@ const contextLayer = Layer.effect(
           diagnostics: catalog.diagnostics,
         },
         tools,
+        systemParts,
       }
     })
 
@@ -364,5 +388,7 @@ export const contextNode = LayerNode.make({
     ToolRegistry.node,
     MCP.node,
     RuntimeFlags.node,
+    Provider.node,
+    SystemAssembly.node,
   ],
 })

@@ -235,6 +235,32 @@ describe("model context inspector", () => {
     )
   })
 
+  test("renders every emitted system part when a snapshot is available", () => {
+    const options = modelContextOptions({
+      ...generation,
+      systemParts: [
+        {
+          key: "model",
+          label: "Model identity",
+          tag: "<model>",
+          text: "You are powered by the model named deepseek-v4-pro.",
+        },
+        { key: "environment", label: "Environment", tag: "<environment>", text: "environment body" },
+        {
+          key: "mcp",
+          label: "MCP instructions",
+          tag: "<mcp_instructions>",
+          text: "<mcp_instructions><server name=\"s\">do</server></mcp_instructions>",
+        },
+      ],
+    })
+    const systemParts = options.filter((option) => option.category === "SystemPrompt")
+    expect(systemParts.map((option) => option.title)).toEqual(["Model identity", "Environment", "MCP instructions"])
+    expect(systemParts.map((option) => option.footer)).toEqual(["<model>", "<environment>", "<mcp_instructions>"])
+    expect(systemParts[0]?.value.content).toBe("You are powered by the model named deepseek-v4-pro.")
+    expect(systemParts[2]?.value.content).toBe("<mcp_instructions><server name=\"s\">do</server></mcp_instructions>")
+  })
+
   test("reports disabled subagent economics without synthetic guidance", () => {
     const options = modelContextOptions({
       ...generation,

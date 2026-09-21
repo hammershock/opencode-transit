@@ -70,101 +70,113 @@ export function modelContextOptions(generation: ModelContextGeneration, terminal
     })
   }
 
-  const agentSystem = generation.agentSystem ?? ""
-  options.push({
-    category: "SystemPrompt",
-    title: "agent-system-prompt",
-    footer: `${agentSystem.length}chars`,
-    value: {
-      title: "agent-system-prompt",
-      content: generation.agentSystem ?? "The agent base system prompt is unavailable for this Session.",
-    },
-  })
-
-  const environmentText = parts.get("environment")?.text ?? generation.environmentText
-  if (environmentText) {
-    const environmentInfo = generation.environmentInfo
-    options.push({
-      category: "SystemPrompt",
-      title: "environment",
-      footer: environmentInfo ? `${environmentInfo.targetName} ${environmentInfo.platform}` : undefined,
-      value: {
-        title: "environment",
-        content: environmentText,
-      },
-    })
-  }
-
-  const datePart = parts.get("date")
-  if (datePart) {
-    options.push({
-      category: "SystemPrompt",
-      title: "date",
-      footer: datePart.text,
-      value: { title: "date", content: datePart.text },
-    })
-  }
-
-  const instructions = [...(generation.freshInstructions ?? [])].sort(
-    (a, b) => scopeOrder[a.scope] - scopeOrder[b.scope],
-  )
-  for (const instruction of instructions) {
-    options.push({
-      category: "SystemPrompt",
-      title: instructionTitle(instruction.scope),
-      footer: instruction.declaredBy ?? instruction.source,
-      value: {
-        title: instruction.source,
-        content:
-          instruction.status === "ignored"
-            ? `Ignored during ${instruction.failureStage ?? "load"}.`
-            : instruction.content || "(empty instruction file)",
-      },
-    })
-  }
-
-  const referencesPart = parts.get("references")
-  if (referencesPart) {
-    options.push({
-      category: "SystemPrompt",
-      title: "available_references",
-      footer: referencesPart.tag,
-      value: { title: "available_references", content: referencesPart.text },
-    })
-  }
-
-  const skillsPart = parts.get("skills")
-  if (skillsPart) {
-    options.push({
-      category: "SystemPrompt",
-      title: "available_skills",
-      footer: generation.skillCatalog ? `${generation.skillCatalog.skills.length}` : undefined,
-      value: { title: "available_skills", content: skillsPart.text },
-    })
-  }
-
-  if (generation.subagentRefresh) {
-    const catalog = generation.subagentCatalog
-    options.push({
-      category: "SystemPrompt",
-      title: "available_subagents",
-      footer: generation.subagentRefresh.status === "disabled" ? "None" : `${catalog?.agents.length ?? 0}`,
-      value: {
-        title: "available_subagents",
-        content:
-          generation.subagentGuidance ??
-          (generation.subagentRefresh.status === "disabled"
-            ? "Subagent economics is disabled for this device."
-            : `Subagent economics catalog is ${generation.subagentRefresh.status}.`),
-      },
-    })
-    for (const agent of catalog?.agents ?? []) {
+  const systemParts = generation.systemParts
+  if (systemParts && systemParts.length > 0) {
+    for (const part of systemParts) {
       options.push({
         category: "SystemPrompt",
-        title: `  ${agent.agent}`,
-        footer: `${agent.model.providerID}/${agent.model.modelID}`,
-        value: { title: agent.agent, content: JSON.stringify(agent, null, 2) },
+        title: part.label,
+        footer: part.tag,
+        value: { title: part.label, content: part.text },
       })
+    }
+  } else {
+    const agentSystem = generation.agentSystem ?? ""
+    options.push({
+      category: "SystemPrompt",
+      title: "agent-system-prompt",
+      footer: `${agentSystem.length}chars`,
+      value: {
+        title: "agent-system-prompt",
+        content: generation.agentSystem ?? "The agent base system prompt is unavailable for this Session.",
+      },
+    })
+
+    const environmentText = parts.get("environment")?.text ?? generation.environmentText
+    if (environmentText) {
+      const environmentInfo = generation.environmentInfo
+      options.push({
+        category: "SystemPrompt",
+        title: "environment",
+        footer: environmentInfo ? `${environmentInfo.targetName} ${environmentInfo.platform}` : undefined,
+        value: {
+          title: "environment",
+          content: environmentText,
+        },
+      })
+    }
+
+    const datePart = parts.get("date")
+    if (datePart) {
+      options.push({
+        category: "SystemPrompt",
+        title: "date",
+        footer: datePart.text,
+        value: { title: "date", content: datePart.text },
+      })
+    }
+
+    const instructions = [...(generation.freshInstructions ?? [])].sort(
+      (a, b) => scopeOrder[a.scope] - scopeOrder[b.scope],
+    )
+    for (const instruction of instructions) {
+      options.push({
+        category: "SystemPrompt",
+        title: instructionTitle(instruction.scope),
+        footer: instruction.declaredBy ?? instruction.source,
+        value: {
+          title: instruction.source,
+          content:
+            instruction.status === "ignored"
+              ? `Ignored during ${instruction.failureStage ?? "load"}.`
+              : instruction.content || "(empty instruction file)",
+        },
+      })
+    }
+
+    const referencesPart = parts.get("references")
+    if (referencesPart) {
+      options.push({
+        category: "SystemPrompt",
+        title: "available_references",
+        footer: referencesPart.tag,
+        value: { title: "available_references", content: referencesPart.text },
+      })
+    }
+
+    const skillsPart = parts.get("skills")
+    if (skillsPart) {
+      options.push({
+        category: "SystemPrompt",
+        title: "available_skills",
+        footer: generation.skillCatalog ? `${generation.skillCatalog.skills.length}` : undefined,
+        value: { title: "available_skills", content: skillsPart.text },
+      })
+    }
+
+    if (generation.subagentRefresh) {
+      const catalog = generation.subagentCatalog
+      options.push({
+        category: "SystemPrompt",
+        title: "available_subagents",
+        footer: generation.subagentRefresh.status === "disabled" ? "None" : `${catalog?.agents.length ?? 0}`,
+        value: {
+          title: "available_subagents",
+          content:
+            generation.subagentGuidance ??
+            (generation.subagentRefresh.status === "disabled"
+              ? "Subagent economics is disabled for this device."
+              : `Subagent economics catalog is ${generation.subagentRefresh.status}.`),
+        },
+      })
+      for (const agent of catalog?.agents ?? []) {
+        options.push({
+          category: "SystemPrompt",
+          title: `  ${agent.agent}`,
+          footer: `${agent.model.providerID}/${agent.model.modelID}`,
+          value: { title: agent.agent, content: JSON.stringify(agent, null, 2) },
+        })
+      }
     }
   }
 

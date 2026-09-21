@@ -737,6 +737,7 @@ export function Session() {
             skillCatalog: ModelContextGeneration["skillCatalog"] | null
             skillGuidance: string | null
             runtimeParts: ModelContextGeneration["runtimeParts"] | null
+            systemParts: ModelContextGeneration["systemParts"] | null
             agentSystem: string | null
             environment: string | null
             environmentInfo: ModelContextGeneration["environmentInfo"] | null
@@ -753,6 +754,7 @@ export function Session() {
             ...(result.skillCatalog ? { skillCatalog: result.skillCatalog } : {}),
             ...(result.skillGuidance ? { skillGuidance: result.skillGuidance } : {}),
             ...(result.runtimeParts ? { runtimeParts: result.runtimeParts } : {}),
+            ...(result.systemParts ? { systemParts: result.systemParts } : {}),
             ...(result.agentSystem ? { agentSystem: result.agentSystem } : {}),
             ...(result.environment ? { environmentText: result.environment } : {}),
             ...(result.environmentInfo ? { environmentInfo: result.environmentInfo } : {}),

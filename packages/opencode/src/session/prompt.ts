@@ -58,6 +58,7 @@ import { eq } from "drizzle-orm"
 import { MessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
+import { SystemAssembly } from "./system-assembly"
 import { LLMEvent } from "@opencode-ai/llm"
 import { UserShellRuntime } from "./user-shell-runtime"
 import { UserShellLocal } from "./user-shell-local"
@@ -156,7 +157,6 @@ const layer = Layer.effect(
     const state = yield* SessionRunState.Service
     const revert = yield* SessionRevert.Service
     const summary = yield* SessionSummary.Service
-    const sys = yield* SystemPrompt.Service
     const llm = yield* LLM.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
@@ -166,6 +166,7 @@ const layer = Layer.effect(
     const locationAccess = yield* SessionLocationAccess.Service
     const activity = yield* SessionActivity.Service
     const runtimeContext = yield* RuntimeContext.Service
+    const systemAssembly = yield* SystemAssembly.Service
     const { db } = database
     const sessionLocation = (sessionID: SessionID) => locationAccess.require(sessionID).pipe(Effect.catch(Effect.die))
     const contextAt = Effect.fn("SessionPrompt.contextAt")(function* (input: {
@@ -184,17 +185,6 @@ const layer = Layer.effect(
         locationRevision: row.locationRevision,
       }
     })
-
-    const assembleRuntimeContext = (input: { sessionID: SessionID; agent: { name: string } }) =>
-      Effect.gen(function* () {
-        const location = yield* sessionLocation(input.sessionID)
-        return yield* Effect.gen(function* () {
-          const agentV2 = yield* AgentV2.Service
-          const selection = yield* agentV2.select(input.agent.name)
-          const runtime = yield* RuntimeContext.Service
-          return yield* runtime.assemble(input.sessionID, selection)
-        }).pipe(Effect.provide(locations.get(location)))
-      })
 
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
@@ -1374,18 +1364,17 @@ const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [parts, economicsGuidance, mcpInstructions, modelMsgs] = yield* Effect.all([
-              assembleRuntimeContext({ sessionID, agent }),
-              economics.guidance(sessionID, agent),
-              sys.mcp(agent, session.permission),
+            const [modelMsgs, assembled] = yield* Effect.all([
               MessageV2.toModelMessagesEffect(msgs, model),
+              systemAssembly.assemble({
+                sessionID,
+                agent,
+                model,
+                permission: session.permission,
+                economicsGuidance: economics.guidance(sessionID, agent),
+              }),
             ])
-            const system = [
-              `You are powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}`,
-              ...parts.map((part) => part.text),
-              ...(economicsGuidance ? [economicsGuidance] : []),
-              ...(mcpInstructions ? [mcpInstructions] : []),
-            ].filter((part) => part.length > 0)
+            const system = [...assembled.system]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({
@@ -1855,6 +1844,7 @@ export const node = LayerNode.make({
     SessionActivity.node,
     RuntimeContext.node,
     AgentV2.node,
+    SystemAssembly.node,
   ],
 })
 
