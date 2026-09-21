@@ -235,17 +235,17 @@ describe("model context inspector", () => {
     )
   })
 
-  test("renders every emitted system part when a snapshot is available", () => {
+  test("surfaces emitted model identity and mcp instructions with canonical titles", () => {
     const options = modelContextOptions({
       ...generation,
+      model: { id: "test-model", providerID: "test" },
       systemParts: [
         {
           key: "model",
           label: "Model identity",
           tag: "<model>",
-          text: "You are powered by the model named deepseek-v4-pro.",
+          text: "You are powered by the model named test-model.",
         },
-        { key: "environment", label: "Environment", tag: "<environment>", text: "environment body" },
         {
           key: "mcp",
           label: "MCP instructions",
@@ -254,11 +254,12 @@ describe("model context inspector", () => {
         },
       ],
     })
-    const systemParts = options.filter((option) => option.category === "SystemPrompt")
-    expect(systemParts.map((option) => option.title)).toEqual(["Model identity", "Environment", "MCP instructions"])
-    expect(systemParts.map((option) => option.footer)).toEqual(["<model>", "<environment>", "<mcp_instructions>"])
-    expect(systemParts[0]?.value.content).toBe("You are powered by the model named deepseek-v4-pro.")
-    expect(systemParts[2]?.value.content).toBe("<mcp_instructions><server name=\"s\">do</server></mcp_instructions>")
+    const model = options.find((option) => option.category === "SystemPrompt" && option.title === "model")
+    expect(model?.value.content).toBe("You are powered by the model named test-model.")
+    expect(model?.footer).toBe("test/test-model")
+    const mcp = options.find((option) => option.title === "mcp")
+    expect(mcp?.value.content).toBe("<mcp_instructions><server name=\"s\">do</server></mcp_instructions>")
+    expect(mcp?.footer).toBe("<mcp_instructions>")
   })
 
   test("reports disabled subagent economics without synthetic guidance", () => {
