@@ -1,0 +1,9 @@
+Invoke a slash command on behalf of the primary agent.
+
+Use this tool to run commands that have been explicitly opened to Agent access. It runs the same command logic a user would trigger with the same slash command, but the result is returned to you as plain text (stdout/stderr and a status code) instead of opening a UI.
+
+Available commands:
+- `/target list` — list configured execution targets (selector, name, description, cached status).
+- `/env reload` — reload target-side environment sources and report the new generation.
+
+Pass the exact slash command text. Do not add shell syntax, pipes, redirection, or multiple commands.
