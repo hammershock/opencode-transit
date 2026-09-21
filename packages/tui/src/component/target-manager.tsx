@@ -1,10 +1,11 @@
 import { createResource, createSignal, Match, Switch, untrack } from "solid-js"
+import { TextAttributes } from "@opentui/core"
 import { useDialog } from "../ui/dialog"
 import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
-import { DialogConfirm } from "../ui/dialog-confirm"
-import { DialogPrompt } from "../ui/dialog-prompt"
+import { DialogPrompt, type DialogPromptProps } from "../ui/dialog-prompt"
 import { useSDK } from "../context/sdk"
 import { useToast } from "../ui/toast"
+import { useBindings } from "../keymap"
 import { errorMessage } from "../util/error"
 import {
   completeWorkspaceRoots,
@@ -130,6 +131,56 @@ export function TargetHealth(props: { state: () => TargetHealthState }) {
   )
 }
 
+function RemoveTargetConfirm(props: { target: TargetDefinition; onRemove: () => void }) {
+  const dialog = useDialog()
+  const { theme } = useTheme()
+  useBindings(() => ({
+    priority: 1,
+    bindings: [
+      {
+        key: "return",
+        desc: "Remove target",
+        group: "Dialog",
+        cmd: () => {
+          dialog.pop()
+          props.onRemove()
+        },
+      },
+    ],
+  }))
+  return (
+    <box paddingLeft={2} paddingRight={2} gap={1}>
+      <box flexDirection="row" justifyContent="space-between">
+        <text attributes={TextAttributes.BOLD} fg={theme.text}>
+          Remove target
+        </text>
+        <text fg={theme.textMuted}>esc</text>
+      </box>
+      <box paddingBottom={1}>
+        <text fg={theme.textMuted}>
+          Remove {props.target.name} from this device? Referencing Sessions are preserved as unresolved.
+        </text>
+      </box>
+      <box flexDirection="row" justifyContent="flex-end" paddingBottom={1} gap={1}>
+        <box
+          paddingLeft={1}
+          paddingRight={1}
+          backgroundColor={theme.error}
+          onMouseUp={() => {
+            dialog.pop()
+            props.onRemove()
+          }}
+        >
+          <text fg={theme.selectedListItemText}>Remove</text>
+        </box>
+        <box paddingLeft={1} paddingRight={1} onMouseUp={() => dialog.pop()}>
+          <text fg={theme.textMuted}>Cancel</text>
+        </box>
+      </box>
+    </box>
+  )
+}
+
 export function useTargetManager() {
   const dialog = useDialog()
   const sdk = useSDK()
@@ -140,6 +191,7 @@ export function useTargetManager() {
   })
   const [health, setHealth] = createSignal<Record<string, TargetHealthResult | undefined>>({})
   const [checking, setChecking] = createSignal<ReadonlySet<string>>(new Set())
+  const [current, setCurrent] = createSignal<TargetDefinition>()
   const probeGeneration = targetProbeGenerations()
 
   const refreshHealth = async (force = false) => {
@@ -216,21 +268,58 @@ export function useTargetManager() {
     return targets()?.targets.find((item) => item.id === target.id) as TargetDefinition | undefined
   }
 
+  const prompt = (
+    title: string,
+    options: Omit<DialogPromptProps, "title" | "onConfirm" | "onCancel">,
+  ): Promise<string | null> => {
+    return new Promise((resolve) => {
+      let settled = false
+      const finish = (value: string | null) => {
+        if (settled) return
+        settled = true
+        resolve(value)
+      }
+      dialog.push(
+        () => (
+          <DialogPrompt
+            title={title}
+            {...options}
+            onConfirm={(value) => {
+              finish(value)
+              dialog.pop()
+            }}
+          />
+        ),
+        () => {
+          dialog.setSize("large")
+          finish(null)
+        },
+      )
+    })
+  }
+
   const remove = (target: TargetDefinition) => {
-    void (async () => {
-      const confirmed = await DialogConfirm.show(
-        dialog,
-        "Remove target",
-        `Remove ${target.name} from this device? Referencing Sessions are preserved as unresolved.`,
-      )
-      if (!confirmed || !targets()) return
-      await sdk.client.v2.target.remove(
-        { targetID: target.id, expectedRevision: targets()!.revision },
-        { throwOnError: true },
-      )
-      await controls.refetch()
-      open()
-    })().catch((error) => toast.show({ message: errorMessage(error), variant: "error" }))
+    dialog.push(
+      () => (
+        <RemoveTargetConfirm
+          target={target}
+          onRemove={() => {
+            void (async () => {
+              const snapshot = targets()
+              if (!snapshot) return
+              await sdk.client.v2.target.remove(
+                { targetID: target.id, expectedRevision: snapshot.revision },
+                { throwOnError: true },
+              )
+              await controls.refetch()
+              open()
+            })().catch((error) => toast.show({ message: errorMessage(error), variant: "error" }))
+          }}
+        />
+      ),
+      () => dialog.setSize("large"),
+    )
+    dialog.setSize("medium")
   }
 
   const save = () => {
@@ -262,28 +351,31 @@ export function useTargetManager() {
   }
 
   const inspect = (target: TargetDefinition) => {
-    dialog.replace(() => (
+    setCurrent(target)
+    dialog.push(() => (
       <DialogSelect<TargetField>
-        title={target.name}
-        options={targetInfoFields(target)}
-        actions={[{ command: "dialog.target.delete", title: "delete", onTrigger: () => remove(target) }]}
-        onSelect={(option) => editField(target, option.value)}
+        title={current()!.name}
+        options={targetInfoFields(current()!)}
+        actions={[{ command: "dialog.target.delete", title: "delete", onTrigger: () => remove(current()!) }]}
+        onSelect={(option) => editField(option.value)}
       />
     ))
     dialog.setSize("large")
   }
 
-  const editField = (target: TargetDefinition, field: TargetField) => {
+  const editField = (field: TargetField) => {
+    const target = current()
+    if (!target) return
     void (async () => {
       if (field === "name") {
-        const name = await DialogPrompt.show(dialog, "Target name", { value: target.name, placeholder: "gpu-server" })
+        const name = await prompt("Target name", { value: target.name, placeholder: "gpu-server" })
         if (name === null || !name.trim()) return
         const updated = await update(target, targetInput({ ...target, name: name.trim() }))
-        if (updated) inspect(updated)
+        if (updated) setCurrent(updated)
         return
       }
       if (field === "description") {
-        const description = await DialogPrompt.show(dialog, "Description", {
+        const description = await prompt("Description", {
           value: target.description,
           placeholder: "Huawei ModelArts 2×A100 GPU server",
         })
@@ -292,13 +384,13 @@ export function useTargetManager() {
           target,
           targetInput({ ...target, description: targetDescription(description).description }),
         )
-        if (updated) inspect(updated)
+        if (updated) setCurrent(updated)
         return
       }
       if (field === "roots") {
         const input = targetInput(target)
         const home = (await wizard.inspect(input))?.home ?? "/"
-        const roots = await DialogPrompt.show(dialog, "Workspace root", {
+        const roots = await prompt("Workspace root", {
           value: target.workspaceRoots.join(", "),
           placeholder: "/",
           complete: (value, cursor) => completeWorkspaceRoots(wizard.complete, input, value, cursor, home),
@@ -310,19 +402,19 @@ export function useTargetManager() {
           .filter(Boolean)
         if (!workspaceRoots.length) return
         const updated = await update(target, targetInput({ ...target, workspaceRoots }))
-        if (updated) inspect(updated)
+        if (updated) setCurrent(updated)
         return
       }
       const input = targetInput(target)
       const home = (await wizard.inspect(input))?.home ?? target.defaultDirectory ?? "/"
-      const directory = await DialogPrompt.show(dialog, "Default working directory", {
+      const directory = await prompt("Default working directory", {
         value: target.defaultDirectory ?? "",
         placeholder: home,
         complete: (value, cursor) => wizard.complete(input, value, cursor, home),
       })
       if (directory === null) return
       const updated = await update(target, targetInput({ ...target, defaultDirectory: directory.trim() || undefined }))
-      if (updated) inspect(updated)
+      if (updated) setCurrent(updated)
     })().catch((error) => toast.show({ title: "Target update failed", message: errorMessage(error), variant: "error" }))
   }
 
