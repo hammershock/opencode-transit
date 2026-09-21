@@ -215,7 +215,6 @@ export function modelContextOptions(generation: ModelContextGeneration, terminal
               name: tool.name,
               description: tool.description,
               inputSchema: tool.inputSchema,
-              ...(tool.outputSchema === undefined ? {} : { outputSchema: tool.outputSchema }),
             },
             null,
             2,

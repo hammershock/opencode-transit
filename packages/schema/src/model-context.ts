@@ -80,9 +80,9 @@ export type Instructions = typeof Instructions.Type
 export const Tool = Schema.Struct({
   name: Schema.NonEmptyString,
   description: Schema.String,
-  // Opaque JSON Schema documents passed through for inspection; their structure is owned by the tool registry.
+  // Opaque JSON Schema document passed through for inspection; its structure is owned by the tool registry.
+  // Only `inputSchema` is exposed: `outputSchema` is never injected into the model request.
   inputSchema: Schema.Unknown,
-  outputSchema: optional(Schema.Unknown),
 }).annotate({ identifier: "ModelContext.Tool" })
 export type Tool = typeof Tool.Type
 
