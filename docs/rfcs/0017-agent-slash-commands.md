@@ -6,7 +6,8 @@ authors:
   - hammershock
 created: 2026-09-19
 updated: 2026-09-21
-implemented-by: []
+implemented-by:
+  - https://github.com/hammershock/opencode-transit/pull/502
 depends-on:
   - 0002
   - 0003
