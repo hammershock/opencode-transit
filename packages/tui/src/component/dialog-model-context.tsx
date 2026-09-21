@@ -52,7 +52,7 @@ const systemPartTitles: Record<string, string> = {
   instructions: "instructions",
   references: "available_references",
   skills: "available_skills",
-  "subagent-economics": "available_subagents",
+  subagents: "available-subagents",
   mcp: "mcp",
 }
 
@@ -162,31 +162,6 @@ export function modelContextOptions(generation: ModelContextGeneration, terminal
         footer: generation.skillCatalog ? `${generation.skillCatalog.skills.length}` : undefined,
         value: { title: "available_skills", content: skillsPart.text },
       })
-    }
-
-    if (generation.subagentRefresh) {
-      const catalog = generation.subagentCatalog
-      options.push({
-        category: "SystemPrompt",
-        title: "available_subagents",
-        footer: generation.subagentRefresh.status === "disabled" ? "None" : `${catalog?.agents.length ?? 0}`,
-        value: {
-          title: "available_subagents",
-          content:
-            generation.subagentGuidance ??
-            (generation.subagentRefresh.status === "disabled"
-              ? "Subagent economics is disabled for this device."
-              : `Subagent economics catalog is ${generation.subagentRefresh.status}.`),
-        },
-      })
-      for (const agent of catalog?.agents ?? []) {
-        options.push({
-          category: "SystemPrompt",
-          title: `  ${agent.agent}`,
-          footer: `${agent.model.providerID}/${agent.model.modelID}`,
-          value: { title: agent.agent, content: JSON.stringify(agent, null, 2) },
-        })
-      }
     }
   }
 

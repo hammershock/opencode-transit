@@ -1,6 +1,6 @@
 export * as SystemAssembly from "./system-assembly"
 
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import type { ModelContext } from "@opencode-ai/schema/model-context"
 import { AgentV2 } from "@opencode-ai/core/agent"
@@ -9,6 +9,7 @@ import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import type { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import type { Agent } from "@/agent/agent"
+import { Subagent } from "@/agent/subagent"
 import type { Provider } from "@/provider/provider"
 import { SessionID } from "./schema"
 import { SystemPrompt } from "./system"
@@ -25,7 +26,6 @@ export interface AssembleInput {
   readonly agent: Agent.Info
   readonly model: Provider.Model
   readonly permission?: PermissionV1.Ruleset
-  readonly economicsGuidance: Effect.Effect<string | undefined>
 }
 
 export interface Interface {
@@ -53,26 +53,36 @@ const layer = Layer.effect(
       })
 
     const assemble = Effect.fn("SystemAssembly.assemble")(function* (input: AssembleInput) {
-      const [parts, economicsGuidance, mcpInstructions] = yield* Effect.all([
+      const [parts, mcpInstructions, subagentOption] = yield* Effect.all([
         assembleRuntimeContext(input.sessionID, input.agent),
-        input.economicsGuidance,
         sys.mcp(input.agent, input.permission),
+        Effect.serviceOption(Subagent.Service),
       ])
+      const subagentText = yield* Option.match(subagentOption, {
+        onNone: () => Effect.succeed(undefined),
+        onSome: (subagents) =>
+          subagents
+            .resolve({
+              parentAgentID: input.agent.id ?? input.agent.name,
+              sessionID: input.sessionID,
+              includeInactive: false,
+            })
+            .pipe(
+              Effect.map((snapshot) =>
+                snapshot.entries.some((entry) => entry.effective === "active")
+                  ? subagents.render(snapshot)
+                  : undefined,
+              ),
+            ),
+      })
       const agentPrompt = input.agent.prompt ?? SystemPrompt.provider(input.model).join("\n")
       const modelIdentity = `You are powered by the model named ${input.model.api.id}. The exact model ID is ${input.model.providerID}/${input.model.api.id}`
       const systemParts: SystemPart[] = [
         { key: "agent", label: "Agent system prompt", tag: "<agent-system-prompt>", text: agentPrompt },
         { key: "model", label: "Model identity", tag: "<model>", text: modelIdentity },
         ...parts,
-        ...(economicsGuidance
-          ? [
-              {
-                key: "subagent-economics",
-                label: "Subagent economics",
-                tag: "<available_subagents>",
-                text: economicsGuidance,
-              },
-            ]
+        ...(subagentText
+          ? [{ key: "subagents", label: "Available subagents", tag: "<available-subagents>", text: subagentText }]
           : []),
         ...(mcpInstructions
           ? [{ key: "mcp", label: "MCP instructions", tag: "<mcp_instructions>", text: mcpInstructions }]
@@ -97,5 +107,6 @@ export const node = LayerNode.make({
     LocationServiceMap.node,
     AgentV2.node,
     RuntimeContext.node,
+    Subagent.node,
   ],
 })
