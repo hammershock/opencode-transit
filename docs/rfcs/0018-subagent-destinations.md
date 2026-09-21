@@ -5,7 +5,7 @@ status: draft
 authors:
   - hammershock
 created: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-21
 implemented-by: []
 depends-on:
   - 0002
@@ -21,7 +21,7 @@ superseded-by: []
 
 ## 摘要与状态
 
-父 Agent 创建 subagent 时可传入可选 `target` 和 `location`；先验证目的目录，再创建 child 并从自身 Location 加载环境与上下文。父 Session 保持原位置。省略参数保留同位置委派，切换 target 且省略 location 时使用目标实际 HOME。
+父 Agent 创建 subagent 时可传入可选 `target` 和 `directory`；二者共同构成目的 Location（`Location.Ref` 的 target + directory），先验证目的目录，再创建 child 并从自身 Location 加载环境与上下文。父 Session 保持原位置。省略参数保留同位置委派，切换 target 且省略 directory 时使用目标 target 的 `defaultDirectory`。
 
 本 RFC 为 **Draft**，设计追踪见 [#466](https://github.com/hammershock/opencode-transit/issues/466)。**依赖 RFC-0017 Agent Slash Commands（[#464](https://github.com/hammershock/opencode-transit/issues/464)，[PR #465](https://github.com/hammershock/opencode-transit/pull/465)）完成后，才开始本能力的实现。** 设计评审可以独立进行；接受 RFC 本身不等于上游能力已交付。
 
@@ -39,31 +39,31 @@ superseded-by: []
 TaskInput {
   ...existingFields
   target?: string
-  location?: string
+  directory?: string
 }
 ```
 
 `target` 接受 `local` 或 `/target list` 返回的设备本地稳定 target ID。唯一、完全同名的显示名称可以作为便利输入；解析后立即固定为 ID。`local` 为保留 selector，远端同名时必须使用 ID；禁止模糊匹配或把 host/SSH alias 当成未注册 target。target 改名不改变 child identity。
 
-`location` 是目的 target 上的绝对目录字符串，对应 `Location.Ref.directory`，不是完整 `Location.Ref`，也不是用户 Shell 的当前 `$PWD`。v1 不接受相对路径、`~`、环境变量或 shell 表达式展开。路径使用目标平台语义校验。
+`directory` 是目的 target 上的绝对目录字符串，对应 `Location.Ref.directory`；`target` + `directory` 共同构成目的 `Location`，`directory` 本身不是完整 `Location.Ref`，也不是用户 Shell 的当前 `$PWD`。v1 不接受相对路径、`~`、环境变量或 shell 表达式展开。路径使用目标平台语义校验。
 
 ### 1.2 默认值
 
-先解析目标 identity，再应用下表。`agent.location` 指调用父 Session 的持久 Location directory。
+先解析目标 identity，再应用下表。`agent.directory` 指调用父 Session 的持久 Location directory。
 
-| target 参数     | location 参数 | 最终 target   | 最终 directory                 |
-| --------------- | ------------- | ------------- | ------------------------------ |
-| 省略            | 省略          | parent.target | parent.directory               |
-| 省略            | 显式绝对路径  | parent.target | 显式路径                       |
-| 与 parent 相同  | 省略          | parent.target | parent.directory               |
-| 与 parent 不同  | 省略          | 指定 target   | 该 target 的实际 homeDirectory |
-| 任意有效 target | 显式绝对路径  | 指定 target   | 显式路径                       |
+| target 参数     | directory 参数 | 最终 target   | 最终 directory                  |
+| --------------- | -------------- | ------------- | ------------------------------- |
+| 省略            | 省略           | parent.target | parent.directory                |
+| 省略            | 显式绝对路径   | parent.target | 显式路径                        |
+| 与 parent 相同  | 省略           | parent.target | parent.directory                |
+| 与 parent 不同  | 省略           | 指定 target   | 该 target 的 `defaultDirectory` |
+| 任意有效 target | 显式绝对路径   | 指定 target   | 显式路径                        |
 
 相等比较基于解析后的 target identity，不比较用户输入字符串。显式空字符串是错误，不视为省略。
 
-`homeDirectory` 是 local 用户或远端连接用户的实际 HOME，由对应 provider 的既有环境探测解析。它与 target registry 的 `defaultDirectory` 不同：后者继续服务于 QuickStart 初始目录建议，不用于本默认值。HOME 无法确定、不可访问或位于 negotiated roots 外时失败，不回退到 `/`、defaultDirectory、父目录或本机 HOME。显式传入 location 时无需为了该默认值再探测 HOME。
+`defaultDirectory` 是 target registry 中该 target 的默认工作目录（RFC-0002 创建 target 时默认等于探测到的远端 HOME）。它同时是 QuickStart 的初始目录建议，也是本默认值的事实来源。`defaultDirectory` 缺失、不可访问或位于 negotiated roots 外时按 1.3 校验失败，不回退到 `/`、父目录或本机 HOME。显式传入 directory 时无需为该默认值读取 defaultDirectory。
 
-不为此新增可编辑的 homeDirectory 配置或把 HOME 当作永久健康事实。target list 不需要额外连接来查询它。同 target 同 directory 保留既有 workspace identity；改变 target 或 directory 时不能复制父 workspaceID 来宣称同一 placement，v1 使用无显式 workspaceID 的 Location，并由目的地发现项目根。
+同 target 同 directory 保留既有 workspace identity；改变 target 或 directory 时不能复制父 workspaceID 来宣称同一 placement，v1 使用无显式 workspaceID 的 Location，并由目的地发现项目根。
 
 ### 1.3 校验与创建顺序
 
@@ -94,7 +94,7 @@ Task 的返回值和可见 metadata 至少记录 child Session ID、实际 targe
 
 ### 1.5 Resume 与嵌套委派
 
-提供 `task_id` 时先解析已有 child；省略 target/location 使用该 child 已存储的位置，不重新应用新建默认值。显式参数只允许与原位置一致；冲突返回 `task_location_mismatch`，不迁移、不新建、不向旧 child 投递 prompt。未知或不可访问 task_id 必须失败，不能退化为新建。每次 resume 继续检查调用者的现行访问权。
+提供 `task_id` 时先解析已有 child；省略 target/directory 是 resume 的常态，直接使用该 child 已存储的位置，不重新应用新建默认值。显式参数只允许与原位置一致；冲突返回 `task_location_mismatch`，不迁移、不新建、不向旧 child 投递 prompt。未知或不可访问 task_id 必须失败，不能退化为新建。每次 resume 继续检查调用者的现行访问权。
 
 若现有深度与 Task 权限允许嵌套委派，child 仍可使用 Task 参数为自己的 child 选址；默认值相对于实际调用 Session。禁止 subagent 使用 slash 工具与是否允许其使用 Task 是独立规则。RFC-0015 的控制操作按 child Session ID 和实际 Location 路由，不假设 parent/child 同位置。
 
@@ -110,13 +110,13 @@ RFC-0015（[PR #437](https://github.com/hammershock/opencode-transit/pull/437)�
 
 本能力使用独立 issue、语义分支、worktree 和 PR，与 RFC-0017 分开交付。开始实现前，RFC-0017 必须已接受，其实现必须完成并满足验收；本 RFC 也必须接受，具体实现 issue 满足 Ready。**依赖方向为 #466 → #464，无反向依赖。** 后续若另开实现 issue，必须继承这一依赖并链接实际前置实现 issue/PR。
 
-实现覆盖 Task 参数/defaults、HOME 解析、无 mkdir 校验、child creation/context/权限、resume 与实际位置显示。集成验收使用已交付的 slash 工具与普通 Skill，通过 list 了解 target，再创建 child；不在本任务重复实现命令渠道。
+实现覆盖 Task 参数/defaults、defaultDirectory 解析、无 mkdir 校验、child creation/context/权限、resume 与实际位置显示。集成验收使用已交付的 slash 工具与普通 Skill，通过 list 了解 target，再创建 child；不在本任务重复实现命令渠道。
 
 ## 四、验收与验证
 
-1. 默认值表每行、精确名称解析到同一 ID、空参数、远端到 local 均有 contract test；HOME 与 defaultDirectory 故意不同时使用 HOME。
-2. Missing、非目录、无权限、symlink 越界、HOME unknown 和离线 target 均在 child 创建前失败，无 mkdir 或本地回退。
-3. 显式路径无需 HOME；后续操作保持 roots 校验；外部删除目录不触发补建。
+1. 默认值表每行、精确名称解析到同一 ID、空参数、远端到 local 均有 contract test；跨 target 使用 defaultDirectory。
+2. Missing、非目录、无权限、symlink 越界、defaultDirectory 缺失和离线 target 均在 child 创建前失败，无 mkdir 或本地回退。
+3. 显式路径无需 defaultDirectory；后续操作保持 roots 校验；外部删除目录不触发补建。
 4. child 文件、shell、项目根、平台、规则、runtime environment 与 Skill guidance 来自目的地；父同名路径/规则/.env/environment/catalog 不泄漏；覆盖 workspaceID 与定义缺失场景。
 5. Task 返回实际位置；resume 不重新应用默认值；冲突/未知 task_id 不创建新 child，取消/重试不重复创建。
 6. 前置 slash 工具已验收；完整流程可先获取 target 描述，再创建目的地 child；child 仍无法使用 slash 工具。
@@ -124,12 +124,12 @@ RFC-0015（[PR #437](https://github.com/hammershock/opencode-transit/pull/437)�
 
 文档阶段检查格式、链接和契约。实现涉及远程执行与上下文/权限，需针对 Task/Location 的 contract 和临时数据库/filesystem integration tests、受影响包内 `bun typecheck`、必要 client generation，以及精确提交的 clean Mac build。
 
-真实场景至少覆盖 Mac 父 Session → Linux Rexd child，两端设置不同 AGENTS.md、非敏感环境标记和同名文件，确认 child 只见目的地内容且父位置保持。检查 child `/context` 的 destination Environment preview，并确认 raw Session/export/sync payload 没有 runtime environment。再测不同已有目录、跨 target 默认 HOME、目录缺失、断连、恢复固定位置及 Task 卡片位置展示。测试仅使用隔离 Session/配置和显式测试目录。
+真实场景至少覆盖 Mac 父 Session → Linux Rexd child，两端设置不同 AGENTS.md、非敏感环境标记和同名文件，确认 child 只见目的地内容且父位置保持。检查 child `/context` 的 destination Environment preview，并确认 raw Session/export/sync payload 没有 runtime environment。再测不同已有目录、跨 target 默认 defaultDirectory、目录缺失、断连、恢复固定位置及 Task 卡片位置展示。测试仅使用隔离 Session/配置和显式测试目录。
 
-涉及 Windows 路径、HOME 或 transport 行为时补该平台证据；变更 portable Location/亲子 sync 语义时需实际双设备验收。不得声称未测平台通过。
+涉及 Windows 路径、defaultDirectory 或 transport 行为时补该平台证据；变更 portable Location/亲子 sync 语义时需实际双设备验收。不得声称未测平台通过。
 
 ## 五、供评审确认的细节
 
-- target canonical selector 为 ID/local，唯一精确名称可作便利输入；location 只接受绝对目录。
-- 跨 target 默认值为实际 HOME，而非 QuickStart defaultDirectory。
+- target canonical selector 为 ID/local，唯一精确名称可作便利输入；directory 只接受绝对目录。
+- 跨 target 默认值为 target registry 的 defaultDirectory，而非单独探测 HOME。
 - 已有深度/Task 权限允许时支持嵌套选址；subagent 的 slash 禁用仍由 RFC-0017 强制执行。
