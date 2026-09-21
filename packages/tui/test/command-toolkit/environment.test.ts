@@ -36,7 +36,11 @@ describe("environment command toolkit", () => {
     expect(reload.audiences).toEqual(["User", "Agent"])
     let presented = false
     const result = await reload.execute(
-      context({ presentEnvironment: async () => (presented = true) }),
+      context({
+        presentEnvironment: async () => {
+          presented = true
+        },
+      }),
       undefined,
     )
     expect(presented).toBe(false)
