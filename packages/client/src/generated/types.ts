@@ -1010,7 +1010,6 @@ export type SessionsModelContextOutput = {
     readonly name: string
     readonly description: string
     readonly inputSchema: JsonValue
-    readonly outputSchema?: JsonValue
   }>
   readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
   readonly headers: { readonly [x: string]: string } | null

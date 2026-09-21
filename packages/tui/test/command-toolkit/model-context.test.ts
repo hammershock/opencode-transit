@@ -141,7 +141,6 @@ const generation: ModelContextGeneration = {
       name: "read",
       description: "Read a file from the local filesystem.",
       inputSchema: { type: "object", properties: { path: { type: "string" } } },
-      outputSchema: { type: "string" },
     },
     {
       name: "grep",
@@ -218,7 +217,6 @@ describe("model context inspector", () => {
           name: "read",
           description: "Read a file from the local filesystem.",
           inputSchema: { type: "object", properties: { path: { type: "string" } } },
-          outputSchema: { type: "string" },
         },
         null,
         2,

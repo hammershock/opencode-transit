@@ -835,7 +835,6 @@ const layer = Layer.effect(
                 name: definition.name,
                 description: definition.description,
                 inputSchema: definition.inputSchema,
-                ...(definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
               })),
             }
           }).pipe(Effect.provide(locations.get(locationRef)))

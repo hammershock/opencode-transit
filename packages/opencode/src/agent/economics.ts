@@ -3,7 +3,7 @@ export * as SubagentEconomics from "./economics"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Hash } from "@opencode-ai/core/util/hash"
 import { SessionID } from "@/session/schema"
-import { Context, DateTime, Effect, Layer, Option, Schema } from "effect"
+import { Context, DateTime, Effect, Exit, Layer, Option, Schema } from "effect"
 import { Agent } from "./agent"
 import { Config } from "@/config/config"
 import { Permission } from "@/permission"
@@ -11,6 +11,15 @@ import { Subagent } from "./subagent"
 import { Provider } from "@/provider/provider"
 import { SessionContextExtension } from "@opencode-ai/server/session-context-extension"
 import { InstanceStore } from "@/project/instance-store"
+import { Session } from "@/session/session"
+import { resolveDefinitions } from "@/session/tools"
+import { LocationServiceMap } from "@opencode-ai/core/location-services"
+import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
+import { ToolRegistry as LocationToolRegistry } from "@opencode-ai/core/tool/registry"
+import type { ModelContext } from "@opencode-ai/schema/model-context"
+import { ToolRegistry } from "@/tool/registry"
+import { MCP } from "@/mcp"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 
 const MAX_GUIDANCE_BYTES = 16 * 1024
 
@@ -243,13 +252,53 @@ const contextLayer = Layer.effect(
     const agents = yield* Agent.Service
     const economics = yield* Service
     const instances = yield* InstanceStore.Service
+    const sessions = yield* Session.Service
+    const locations = yield* LocationServiceMap.Service
+    const locationAccess = yield* SessionLocationAccess.Service
+    const registry = yield* ToolRegistry.Service
+    const mcp = yield* MCP.Service
+    const flags = yield* RuntimeFlags.Service
+
+    const inspectTools = Effect.fn("SubagentEconomics.inspectTools")(function* (sessionID: SessionID) {
+      const session = yield* sessions.get(sessionID)
+      const agent = yield* agents.get(session.agent ?? "build")
+      if (!agent || !session.model) return []
+      const locationRef = yield* locationAccess.require(sessionID)
+      const locationLayer = locations.get(locationRef)
+      const materialization = yield* Effect.gen(function* () {
+        const locationRegistry = yield* LocationToolRegistry.Service
+        return yield* locationRegistry.materialize()
+      }).pipe(Effect.provide(locationLayer))
+      return yield* resolveDefinitions({
+        agent,
+        modelID: session.model.id,
+        providerID: session.model.providerID,
+        permission: session.permission,
+        sessionID,
+        locationTools: materialization,
+      }).pipe(
+        Effect.provideService(ToolRegistry.Service, registry),
+        Effect.provideService(MCP.Service, mcp),
+        Effect.provideService(RuntimeFlags.Service, flags),
+      )
+    })
 
     const inspect = Effect.fn("SubagentEconomics.inspect")(function* (sessionID: SessionID) {
+      const toolsAttempt = yield* inspectTools(sessionID).pipe(Effect.exit)
+      const tools: ReadonlyArray<ModelContext.Tool> = Exit.isSuccess(toolsAttempt)
+        ? toolsAttempt.value.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+          }))
+        : []
+
       if ((yield* config.get()).experimental?.subagent_economics !== true) {
         return {
           subagentCatalog: null,
           subagentGuidance: null,
           subagentRefresh: { status: "disabled" as const, diagnostics: [] },
+          tools,
         }
       }
       const catalog = yield* economics.peek(sessionID)
@@ -258,6 +307,7 @@ const contextLayer = Layer.effect(
           subagentCatalog: null,
           subagentGuidance: null,
           subagentRefresh: { status: "loading" as const, diagnostics: [] },
+          tools,
         }
       }
       return {
@@ -268,6 +318,7 @@ const contextLayer = Layer.effect(
           completedAt: catalog.activatedAt,
           diagnostics: catalog.diagnostics,
         },
+        tools,
       }
     })
 
@@ -302,5 +353,16 @@ export const node = LayerNode.make({
 export const contextNode = LayerNode.make({
   service: SessionContextExtension.Service,
   layer: contextLayer,
-  deps: [node, Config.node, Agent.node, InstanceStore.node],
+  deps: [
+    node,
+    Config.node,
+    Agent.node,
+    InstanceStore.node,
+    Session.node,
+    LocationServiceMap.node,
+    SessionLocationAccess.node,
+    ToolRegistry.node,
+    MCP.node,
+    RuntimeFlags.node,
+  ],
 })

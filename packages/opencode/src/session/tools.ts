@@ -17,7 +17,7 @@ import { Effect } from "effect"
 import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
 import { SessionProcessor } from "./processor"
-import { PartID } from "./schema"
+import { PartID, SessionID } from "./schema"
 import { EffectBridge } from "@/effect/bridge"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -28,12 +28,75 @@ import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { ToolCallPart } from "@opencode-ai/llm"
+import type { JSONSchema7 } from "@ai-sdk/provider"
 
 const MCP_RESOURCE_TOOLS = {
   list: "list_mcp_resources",
   listTemplates: "list_mcp_resource_templates",
   read: "read_mcp_resource",
 } as const
+
+const LOCATION_TOOL_NAMES = new Set(["bash", "read", "write", "edit", "apply_patch", "grep", "glob", "skill"])
+
+const MCP_RESOURCE_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinitionView> = [
+  {
+    name: MCP_RESOURCE_TOOLS.list,
+    description:
+      "Lists resources provided by connected MCP servers. Resources provide context such as files, database schemas, or application-specific information.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server: {
+          type: "string",
+          description: "Optional MCP server name. When omitted, lists resources from every connected server.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: MCP_RESOURCE_TOOLS.listTemplates,
+    description:
+      "Lists resource templates provided by connected MCP servers. Resource templates are parameterized resources that can be read after filling in their URI template.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server: {
+          type: "string",
+          description: "Optional MCP server name. When omitted, lists resource templates from every connected server.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: MCP_RESOURCE_TOOLS.read,
+    description:
+      "Read a specific resource from an MCP server using the server name and resource URI. The URI is an MCP identifier and does not need to be a file URL.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server: {
+          type: "string",
+          description: "MCP server name exactly as returned by list_mcp_resources.",
+        },
+        uri: {
+          type: "string",
+          description: "Resource URI to read. Use the exact URI string returned by list_mcp_resources.",
+        },
+      },
+      required: ["server", "uri"],
+      additionalProperties: false,
+    },
+  },
+]
+
+export type ToolDefinitionView = {
+  readonly name: string
+  readonly description: string
+  readonly inputSchema: JSONSchema7
+}
+
 const MAX_MCP_RESOURCE_BLOB_BYTES = 10 * 1024 * 1024
 const SUPPORTED_MCP_RESOURCE_ATTACHMENT_MIMES = new Set([
   "application/pdf",
@@ -61,6 +124,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const mcp = yield* MCP.Service
   const truncate = yield* Truncate.Service
   const flags = yield* RuntimeFlags.Service
+  const [listResources, listTemplates, readResource] = MCP_RESOURCE_TOOL_DEFINITIONS
 
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
@@ -146,9 +210,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   // canonical location registry so no controller filesystem/process captured
   // by the legacy registry can leak into a remote Session.
   if (input.locationTools) {
-    const names = new Set(["bash", "read", "write", "edit", "apply_patch", "grep", "glob", "skill"])
     for (const definition of input.locationTools.definitions) {
-      if (!names.has(definition.name)) continue
+      if (!LOCATION_TOOL_NAMES.has(definition.name)) continue
       const schema = ProviderTransform.schema(input.model, definition.inputSchema)
       tools[definition.name] = tool({
         description: definition.description,
@@ -189,20 +252,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   )
   if (hasMcpResourceServer) {
     tools[MCP_RESOURCE_TOOLS.list] = tool({
-      description:
-        "Lists resources provided by connected MCP servers. Resources provide context such as files, database schemas, or application-specific information.",
-      inputSchema: jsonSchema(
-        ProviderTransform.schema(input.model, {
-          type: "object",
-          properties: {
-            server: {
-              type: "string",
-              description: "Optional MCP server name. When omitted, lists resources from every connected server.",
-            },
-          },
-          additionalProperties: false,
-        }),
-      ),
+      description: listResources.description,
+      inputSchema: jsonSchema(ProviderTransform.schema(input.model, listResources.inputSchema)),
       execute(args, opts) {
         return run.promise(
           Effect.gen(function* () {
@@ -272,21 +323,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     })
 
     tools[MCP_RESOURCE_TOOLS.listTemplates] = tool({
-      description:
-        "Lists resource templates provided by connected MCP servers. Resource templates are parameterized resources that can be read after filling in their URI template.",
-      inputSchema: jsonSchema(
-        ProviderTransform.schema(input.model, {
-          type: "object",
-          properties: {
-            server: {
-              type: "string",
-              description:
-                "Optional MCP server name. When omitted, lists resource templates from every connected server.",
-            },
-          },
-          additionalProperties: false,
-        }),
-      ),
+      description: listTemplates.description,
+      inputSchema: jsonSchema(ProviderTransform.schema(input.model, listTemplates.inputSchema)),
       execute(args, opts) {
         return run.promise(
           Effect.gen(function* () {
@@ -356,25 +394,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     })
 
     tools[MCP_RESOURCE_TOOLS.read] = tool({
-      description:
-        "Read a specific resource from an MCP server using the server name and resource URI. The URI is an MCP identifier and does not need to be a file URL.",
-      inputSchema: jsonSchema(
-        ProviderTransform.schema(input.model, {
-          type: "object",
-          properties: {
-            server: {
-              type: "string",
-              description: "MCP server name exactly as returned by list_mcp_resources.",
-            },
-            uri: {
-              type: "string",
-              description: "Resource URI to read. Use the exact URI string returned by list_mcp_resources.",
-            },
-          },
-          required: ["server", "uri"],
-          additionalProperties: false,
-        }),
-      ),
+      description: readResource.description,
+      inputSchema: jsonSchema(ProviderTransform.schema(input.model, readResource.inputSchema)),
       execute(args, opts) {
         return run.promise(
           Effect.gen(function* () {
@@ -641,5 +662,75 @@ function formatBytes(value: number) {
   if (value < 1024 * 1024) return `${Math.ceil(value / 1024)} KB`
   return `${Math.ceil(value / (1024 * 1024))} MB`
 }
+
+/**
+ * Resolves the effective tool definitions that `SessionTools.resolve` injects
+ * into the model request, without binding execution. This is the single data
+ * source for `/context` tool inspection: it must stay in lockstep with the
+ * assembly order and filtering in `resolve` (covered by focused tests).
+ */
+export const resolveDefinitions = Effect.fn("SessionTools.resolveDefinitions")(function* (input: {
+  agent: Agent.Info
+  modelID: string
+  providerID: ProviderV2.ID
+  permission?: import("@opencode-ai/core/v1/permission").PermissionV1.Ruleset
+  sessionID: SessionID
+  locationTools?: LocationToolRegistry.Materialization
+}) {
+  const registry = yield* ToolRegistry.Service
+  const mcp = yield* MCP.Service
+  const flags = yield* RuntimeFlags.Service
+
+  const tools = new Map<string, ToolDefinitionView>()
+
+  for (const item of yield* registry.tools({
+    modelID: ModelV2.ID.make(input.modelID),
+    providerID: input.providerID,
+    agent: input.agent,
+    permission: input.permission,
+    sessionID: input.sessionID,
+  })) {
+    tools.set(item.id, {
+      name: item.id,
+      description: item.description,
+      inputSchema: ToolJsonSchema.fromTool(item),
+    })
+  }
+
+  if (input.locationTools) {
+    for (const definition of input.locationTools.definitions) {
+      if (!LOCATION_TOOL_NAMES.has(definition.name)) continue
+      tools.set(definition.name, {
+        name: definition.name,
+        description: definition.description,
+        inputSchema: definition.inputSchema as JSONSchema7,
+      })
+    }
+  }
+
+  const hasMcpResourceServer = Object.values(yield* mcp.clients()).some(
+    (client) => !!client.getServerCapabilities()?.resources,
+  )
+  if (hasMcpResourceServer) {
+    for (const definition of MCP_RESOURCE_TOOL_DEFINITIONS) {
+      tools.set(definition.name, {
+        name: definition.name,
+        description: definition.description,
+        inputSchema: definition.inputSchema,
+      })
+    }
+  }
+
+  if (!flags.experimentalCodeMode) {
+    for (const [key, entry] of Object.entries(yield* mcp.tools())) {
+      const item = McpCatalog.convertTool(entry.def, entry.client, entry.timeout)
+      if (!item.execute) continue
+      const schema = yield* Effect.promise(() => Promise.resolve(asSchema(item.inputSchema).jsonSchema))
+      tools.set(key, { name: key, description: item.description ?? "", inputSchema: schema })
+    }
+  }
+
+  return [...tools.values()]
+})
 
 export * as SessionTools from "./tools"

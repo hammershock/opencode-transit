@@ -274,7 +274,11 @@ describe("v2 location HttpApi", () => {
 
     const created = await request("/api/session", tmp.path, {
       method: "POST",
-      body: JSON.stringify({ location: { target: { type: "local" }, directory: tmp.path } }),
+      body: JSON.stringify({
+        agent: "build",
+        model: { providerID: "unknown", id: "unknown" },
+        location: { target: { type: "local" }, directory: tmp.path },
+      }),
     })
     expect(created.status, await created.clone().text()).toBe(200)
     const sessionID = ((await created.json()) as { data: { id: string } }).data.id
@@ -318,7 +322,7 @@ describe("v2 location HttpApi", () => {
       expect.arrayContaining([expect.objectContaining({ name: "activation-review" })]),
     )
     expect(initialResponse.tools.map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(["read", "grep", "edit"]),
+      expect.arrayContaining(["read", "grep", "edit", "task", "bash"]),
     )
     expect(initialResponse.tools.find((tool) => tool.name === "read")?.inputSchema).toMatchObject({ type: "object" })
     expect(initialResponse.skillGuidance.match(/<available_skills>/g)).toHaveLength(1)

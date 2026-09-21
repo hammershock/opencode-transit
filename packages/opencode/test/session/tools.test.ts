@@ -251,6 +251,43 @@ it.effect("remote location materialization replaces every location-bound tool in
   }),
 )
 
+it.effect("resolveDefinitions mirrors resolve assembly with legacy tools and location override", () =>
+  Effect.gen(function* () {
+    const locationTools: LocationToolRegistry.Materialization = {
+      definitions: [
+        ToolDefinition.make({
+          name: "bash",
+          description: "canonical bash",
+          inputSchema: { type: "object", properties: { command: { type: "string" } } },
+        }),
+        ToolDefinition.make({
+          name: "unlisted",
+          description: "not a location-bound tool",
+          inputSchema: { type: "object" },
+        }),
+      ],
+      settle: () => Effect.die("unused"),
+    }
+    const definitions = yield* SessionTools.resolveDefinitions({
+      agent,
+      modelID: "test-model",
+      providerID: ProviderV2.ID.make("test"),
+      permission: [],
+      sessionID,
+      locationTools,
+    })
+    const names = definitions.map((definition) => definition.name)
+    expect(names).toContain("timing")
+    expect(names).toContain("bash")
+    expect(names).not.toContain("unlisted")
+    expect(definitions.find((definition) => definition.name === "bash")?.description).toBe("canonical bash")
+    expect(definitions.find((definition) => definition.name === "bash")?.inputSchema).toEqual({
+      type: "object",
+      properties: { command: { type: "string" } },
+    })
+  }),
+)
+
 for (const route of ["legacy", "location"] as const) {
   for (const phase of ["before", "running", "completed"] as const) {
     it.live(`${route} dispatch cancellation ${phase} owns only the pending invocation`, () =>
