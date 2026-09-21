@@ -1,3 +1,5 @@
+export type CommandAudience = "User" | "Agent"
+
 export type CommandProvenance =
   | { type: "core"; feature: string }
   | { type: "upstream"; host: string; identity: string }
@@ -76,6 +78,8 @@ export type CommandDefinition<Input, Context extends InvocationContext = Invocat
   requires?: { session?: boolean; location?: boolean }
   /** Whether the command may execute while the current Session is read-only. Defaults to false. */
   readOnly?: boolean
+  /** Which actors may invoke this command directly. Defaults to ["User"]. */
+  audiences?: readonly CommandAudience[]
   capabilities: readonly string[]
   parse: (input: RawArguments) => ParseResult<Input>
   complete?: (input: CompletionInput, context: Context) => Promise<readonly CompletionItem[]>
@@ -98,6 +102,7 @@ export type RegisteredCommand<Context extends InvocationContext = InvocationCont
   | "provenance"
   | "requires"
   | "readOnly"
+  | "audiences"
   | "capabilities"
   | "complete"
   | "available"
@@ -131,4 +136,10 @@ export function defineCommand<Input, Context extends InvocationContext = Invocat
   definition: CommandDefinition<Input, Context>,
 ) {
   return definition
+}
+
+export function commandAudiences(
+  command: Pick<CommandDefinition<unknown>, "audiences">,
+): readonly CommandAudience[] {
+  return command.audiences ?? ["User"]
 }

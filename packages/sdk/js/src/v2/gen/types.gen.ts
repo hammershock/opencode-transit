@@ -13097,6 +13097,55 @@ export type SessionShellResponses = {
 
 export type SessionShellResponse = SessionShellResponses[keyof SessionShellResponses]
 
+export type SessionSlashCommandData = {
+  body?: {
+    messageID?: string
+    agent: string
+    model?: {
+      providerID: string
+      modelID: string
+    }
+    command: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/slash-command"
+}
+
+export type SessionSlashCommandErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * SessionBusyError
+   */
+  409: SessionBusyError
+}
+
+export type SessionSlashCommandError = SessionSlashCommandErrors[keyof SessionSlashCommandErrors]
+
+export type SessionSlashCommandResponses = {
+  /**
+   * Created message
+   */
+  200: {
+    info: Message
+    parts: Array<Part>
+  }
+}
+
+export type SessionSlashCommandResponse = SessionSlashCommandResponses[keyof SessionSlashCommandResponses]
+
 export type SessionShellCompletionData = {
   body?: {
     input: string

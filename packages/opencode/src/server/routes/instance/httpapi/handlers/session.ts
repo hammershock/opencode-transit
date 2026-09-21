@@ -34,6 +34,7 @@ import {
   PromptPayload,
   RevertPayload,
   ShellPayload,
+  SlashCommandPayload,
   ShellCompletionPayload,
   SummarizePayload,
   UpdatePayload,
@@ -469,6 +470,18 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         ),
     )
 
+    const slashCommand = Effect.fn("SessionHttpApi.slashCommand")(
+      (ctx: { params: { sessionID: SessionID }; payload: typeof SlashCommandPayload.Type }) =>
+        withLocationActivity(
+          ctx.params.sessionID,
+          Effect.gen(function* () {
+            yield* requireWritableLocation(ctx.params.sessionID)
+            yield* requireSession(ctx.params.sessionID)
+            return yield* SessionError.mapBusy(promptSvc.slashCommand({ ...ctx.payload, sessionID: ctx.params.sessionID }))
+          }),
+        ),
+    )
+
     const shellCompletion = Effect.fn("SessionHttpApi.shellCompletion")(
       (ctx: { params: { sessionID: SessionID }; payload: typeof ShellCompletionPayload.Type }) =>
         withLocationActivity(
@@ -579,6 +592,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("promptAsync", promptAsync)
       .handle("command", command)
       .handle("shell", shell)
+      .handle("slashCommand", slashCommand)
       .handle("shellCompletion", shellCompletion)
       .handle("revert", revert)
       .handle("unrevert", unrevert)

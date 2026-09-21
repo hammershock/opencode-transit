@@ -4,6 +4,10 @@ export type TargetCommandContext = InvocationContext & {
   openTargetManager: (mode: "manage" | "add") => void
 }
 
+export type TargetListCommandContext = InvocationContext & {
+  listTargets: () => Promise<void>
+}
+
 const mode = (raw: RawArguments) => {
   const value = raw.value.trim()
   if (!value) return { status: "parsed", input: "manage" as const } as const
@@ -15,6 +19,16 @@ const mode = (raw: RawArguments) => {
     range: raw.range,
   } as const
 }
+
+const empty = (raw: RawArguments) =>
+  raw.value.trim()
+    ? ({
+        status: "invalid",
+        code: "unexpected_arguments",
+        message: "This command accepts no arguments",
+        range: raw.range,
+      } as const)
+    : ({ status: "parsed", input: undefined } as const)
 
 export const targetCommand = defineCommand<"manage" | "add", TargetCommandContext>({
   id: "fork.target.manage",
@@ -28,6 +42,23 @@ export const targetCommand = defineCommand<"manage" | "add", TargetCommandContex
   parse: mode,
   execute: async (ctx, input) => {
     ctx.openTargetManager(input)
+    return { status: "completed" }
+  },
+})
+
+export const targetListCommand = defineCommand<void, TargetListCommandContext>({
+  id: "fork.target.list",
+  path: ["target", "list"],
+  title: "List targets",
+  description: "List configured execution targets as text",
+  category: "Target",
+  provenance: { type: "core", feature: "target-registry" },
+  readOnly: true,
+  audiences: ["User", "Agent"],
+  capabilities: ["target.registry.read"],
+  parse: empty,
+  execute: async (ctx) => {
+    await ctx.listTargets()
     return { status: "completed" }
   },
 })

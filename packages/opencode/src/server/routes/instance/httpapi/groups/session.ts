@@ -71,6 +71,7 @@ export const SummarizePayload = Schema.Struct({
 export const PromptPayload = Schema.Struct(Struct.omit(SessionPrompt.PromptInput.fields, ["sessionID"]))
 export const CommandPayload = Schema.Struct(Struct.omit(SessionPrompt.CommandInput.fields, ["sessionID"]))
 export const ShellPayload = Schema.Struct(Struct.omit(SessionPrompt.ShellInput.fields, ["sessionID"]))
+export const SlashCommandPayload = Schema.Struct(Struct.omit(SessionPrompt.SlashCommandInput.fields, ["sessionID"]))
 export const ShellCompletionPayload = Schema.Struct(
   Struct.omit(SessionPrompt.ShellCompletionInput.fields, ["sessionID"]),
 )
@@ -100,6 +101,7 @@ export const SessionPaths = {
   promptAsync: `${root}/:sessionID/prompt_async`,
   command: `${root}/:sessionID/command`,
   shell: `${root}/:sessionID/shell`,
+  slashCommand: `${root}/:sessionID/slash-command`,
   shellCompletion: `${root}/:sessionID/shell/completion`,
   revert: `${root}/:sessionID/revert`,
   unrevert: `${root}/:sessionID/unrevert`,
@@ -370,6 +372,19 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.shell",
             summary: "Run shell command",
             description: "Execute a shell command within the session context and return the AI's response.",
+          }),
+        ),
+        HttpApiEndpoint.post("slashCommand", SessionPaths.slashCommand, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: SlashCommandPayload,
+          success: described(SessionV1.WithParts, "Created message"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.slashCommand",
+            summary: "Run slash command",
+            description: "Execute a slash command within the session without invoking the model.",
           }),
         ),
         HttpApiEndpoint.post("shellCompletion", SessionPaths.shellCompletion, {

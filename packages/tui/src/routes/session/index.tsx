@@ -97,7 +97,7 @@ import {
 import { reportOverrideDiagnostic } from "../../command-toolkit/experimental-settings"
 import { COMMAND_RESTRICTIONS_KEY, createCommandHost, normalizeCommandRestrictions } from "../../command-toolkit/host"
 import { environmentCommands, type EnvironmentCommandContext } from "../../command-toolkit/environment"
-import { targetCommand, type TargetCommandContext } from "../../command-toolkit/target"
+import { targetCommand, targetListCommand, type TargetCommandContext, type TargetListCommandContext } from "../../command-toolkit/target"
 import { sessionControlCommands, type SessionControlCommandContext } from "../../command-toolkit/session-controls"
 import { approvalModeCommand, type ApprovalModeCommandContext } from "../../command-toolkit/approval-mode"
 import { useTargetManager } from "../../component/target-manager"
@@ -688,6 +688,7 @@ export function Session() {
     createCommandHost<
       EnvironmentCommandContext &
         TargetCommandContext &
+        TargetListCommandContext &
         SessionControlCommandContext &
         SyncCommandContext &
         ApprovalModeCommandContext &
@@ -699,6 +700,7 @@ export function Session() {
       register: (registry) => {
         environmentCommands.forEach((command) => registry.register(command))
         registry.register(targetCommand)
+        registry.register(targetListCommand)
         registry.register(skillCommand)
         registry.register(harnessCommand)
         registry.register(subagentCommand)
@@ -781,6 +783,16 @@ export function Session() {
           location: current,
           abortSignal: new AbortController().signal,
           openTargetManager: targetManager.open,
+          listTargets: async () => {
+            await sdk.client.session.slashCommand(
+              {
+                sessionID: route.sessionID,
+                agent: local.agent.current()?.name ?? "build",
+                command: "/target list",
+              },
+              { throwOnError: true },
+            )
+          },
           openSkillManager: skillManager.open,
           openHarnessManager: harnessManager.open,
           openSubagentManager: subagentManager.open,
@@ -2371,6 +2383,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={display() === "bash"}>
           <Shell {...toolprops} />
         </Match>
+        <Match when={display() === "slash_command"}>
+          <SlashCommand {...toolprops} />
+        </Match>
         <Match when={display() === "glob"}>
           <Glob {...toolprops} />
         </Match>
@@ -2731,6 +2746,53 @@ function Shell(props: ToolProps) {
       <Match when={true}>
         <InlineTool icon="$" pending="Writing command…" complete={stringValue(props.input.command)} part={props.part}>
           {stringValue(props.input.command)}
+        </InlineTool>
+      </Match>
+    </Switch>
+  )
+}
+
+function SlashCommand(props: ToolProps) {
+  const { theme } = useTheme()
+  const ctx = use()
+  const isRunning = createMemo(() => props.part.state.status === "running")
+  const output = createMemo(() => stripAnsi(props.output?.trim() ?? ""))
+  const command = createMemo(() => stringValue(props.input.command) ?? "")
+  const [expanded, setExpanded] = createSignal(false)
+  const maxLines = 10
+  const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6))
+  const collapsed = createMemo(() => collapseToolOutput(output(), maxLines, maxChars()))
+  const limited = createMemo(() => {
+    if ((ctx.outputExpansion() ?? expanded()) || !collapsed().overflow) return output()
+    return collapsed().output
+  })
+
+  return (
+    <Switch>
+      <Match when={output() !== ""}>
+        <BlockTool
+          title={`# ${command()}`}
+          part={props.part}
+          onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
+        >
+          <box gap={1}>
+            <Show when={isRunning()} fallback={<text fg={theme.text}>{command()}</text>}>
+              <Spinner color={theme.text}>{command()}</Spinner>
+            </Show>
+            <Show when={output()}>
+              <text fg={theme.text}>{limited()}</text>
+            </Show>
+            <Show when={collapsed().overflow}>
+              <text fg={theme.textMuted}>
+                {(ctx.outputExpansion() ?? expanded()) ? "Click to collapse" : "Click to expand"}
+              </text>
+            </Show>
+          </box>
+        </BlockTool>
+      </Match>
+      <Match when={true}>
+        <InlineTool icon="⌘" pending="Running slash command…" complete={command()} part={props.part}>
+          {command()}
         </InlineTool>
       </Match>
     </Switch>
@@ -3278,6 +3340,7 @@ function numberValue(value: unknown) {
 
 const toolDisplays = new Set([
   "bash",
+  "slash_command",
   "glob",
   "read",
   "grep",
