@@ -810,7 +810,7 @@ export function Session() {
               )
               .join("\n")
             await sdk.client.v2.session.prompt(
-              { sessionID: route.sessionID, prompt: { text }, resume: false },
+              { sessionID: route.sessionID, prompt: { text } },
               { throwOnError: true },
             )
           },
