@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { CommandRegistry } from "@opencode-ai/command-kit"
+import { CommandRegistry, commandAudiences } from "@opencode-ai/command-kit"
 import { environmentCommands, type EnvironmentCommandContext } from "../../src/command-toolkit/environment"
 
 const raw = { source: "/env init", value: "", range: { start: 9, end: 9 } }
@@ -27,7 +27,25 @@ describe("environment command toolkit", () => {
   test("registers canonical env routes", () => {
     const registry = new CommandRegistry<EnvironmentCommandContext>()
     environmentCommands.forEach((command) => registry.register(command))
-    expect(registry.routes().map((route) => route.path.join(" "))).toEqual(["env list", "env reload", "env init"])
+    expect(registry.routes().map((route) => route.path.join(" "))).toEqual(["env", "env reload", "env init"])
+  })
+
+  test("reload is Agent-open and does not present UI", async () => {
+    const reload = environmentCommands[1]
+    expect(reload.id).toBe("fork.environment.reload")
+    expect(reload.audiences).toEqual(["User", "Agent"])
+    let presented = false
+    const result = await reload.execute(
+      context({ presentEnvironment: async () => (presented = true) }),
+      undefined,
+    )
+    expect(presented).toBe(false)
+    expect(result).toEqual({ status: "completed", message: "Environment generation 2 loaded" })
+  })
+
+  test("bare env and init are User-only", () => {
+    expect(commandAudiences(environmentCommands[0]!)).toEqual(["User"])
+    expect(commandAudiences(environmentCommands[2]!)).toEqual(["User"])
   })
 
   test("init presents the Core workflow outcome", async () => {

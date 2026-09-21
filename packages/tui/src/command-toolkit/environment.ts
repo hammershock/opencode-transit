@@ -33,14 +33,14 @@ const empty = (raw: RawArguments) =>
 
 export const environmentCommands = [
   defineCommand<void, EnvironmentCommandContext>({
-    id: "fork.environment.list",
-    path: ["env", "list"],
-    title: "List environment",
-    description: "Show names, origins, and generation without exposing values",
+    id: "fork.environment",
+    path: ["env"],
+    title: "View environment",
+    description: "Open the environment panel to inspect names, origins, and values",
     category: "Environment",
     provenance: { type: "core", feature: "location-environment" },
     requires: { location: true },
-    readOnly: false,
+    readOnly: true,
     capabilities: ["environment.metadata.read"],
     parse: empty,
     execute: async (ctx) => {
@@ -57,11 +57,11 @@ export const environmentCommands = [
     provenance: { type: "core", feature: "location-environment" },
     requires: { location: true },
     readOnly: false,
+    audiences: ["User", "Agent"],
     capabilities: ["environment.reload"],
     parse: empty,
     execute: async (ctx) => {
       const snapshot = await ctx.environment.reload()
-      await ctx.presentEnvironment(snapshot, ctx.environment.reveal)
       return { status: "completed", message: `Environment generation ${snapshot.generation} loaded` }
     },
   }),
@@ -74,6 +74,7 @@ export const environmentCommands = [
     provenance: { type: "core", feature: "location-environment" },
     requires: { session: true, location: true },
     readOnly: false,
+    audiences: ["User"],
     capabilities: ["workspace.write", "agent.invoke", "environment.reload"],
     parse: empty,
     execute: async (ctx) => {

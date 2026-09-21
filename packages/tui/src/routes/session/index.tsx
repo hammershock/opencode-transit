@@ -97,7 +97,7 @@ import {
 import { reportOverrideDiagnostic } from "../../command-toolkit/experimental-settings"
 import { COMMAND_RESTRICTIONS_KEY, createCommandHost, normalizeCommandRestrictions } from "../../command-toolkit/host"
 import { environmentCommands, type EnvironmentCommandContext } from "../../command-toolkit/environment"
-import { targetCommand, type TargetCommandContext } from "../../command-toolkit/target"
+import { targetCommand, targetListCommand, type TargetCommandContext, type TargetListCommandContext } from "../../command-toolkit/target"
 import { sessionControlCommands, type SessionControlCommandContext } from "../../command-toolkit/session-controls"
 import { approvalModeCommand, type ApprovalModeCommandContext } from "../../command-toolkit/approval-mode"
 import { useTargetManager } from "../../component/target-manager"
@@ -688,6 +688,7 @@ export function Session() {
     createCommandHost<
       EnvironmentCommandContext &
         TargetCommandContext &
+        TargetListCommandContext &
         SessionControlCommandContext &
         SyncCommandContext &
         ApprovalModeCommandContext &
@@ -699,6 +700,7 @@ export function Session() {
       register: (registry) => {
         environmentCommands.forEach((command) => registry.register(command))
         registry.register(targetCommand)
+        registry.register(targetListCommand)
         registry.register(skillCommand)
         registry.register(harnessCommand)
         registry.register(subagentCommand)
@@ -781,6 +783,30 @@ export function Session() {
           location: current,
           abortSignal: new AbortController().signal,
           openTargetManager: targetManager.open,
+          listTargets: async () => {
+            const result = await sdk.client.v2.target.list({ throwOnError: true })
+            const rows = [
+              ["selector", "name", "description", "status"],
+              ["local", "local", "Local execution target", "available"],
+              ...result.data.targets.map((target) => [
+                target.id,
+                target.name,
+                target.description ?? "",
+                target.health?.status ?? "unknown",
+              ]),
+            ]
+            const widths = [0, 1, 2, 3].map((column) =>
+              Math.max(...rows.map((row) => Bun.stringWidth(String(row[column] ?? "")))),
+            )
+            return rows
+              .map((row) =>
+                [0, 1, 2, 3]
+                  .map((column) => String(row[column] ?? "").padEnd(widths[column] ?? 0))
+                  .join("  ")
+                  .trimEnd(),
+              )
+              .join("\n")
+          },
           openSkillManager: skillManager.open,
           openHarnessManager: harnessManager.open,
           openSubagentManager: subagentManager.open,
