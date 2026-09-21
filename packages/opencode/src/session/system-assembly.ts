@@ -58,8 +58,10 @@ const layer = Layer.effect(
         input.economicsGuidance,
         sys.mcp(input.agent, input.permission),
       ])
+      const agentPrompt = input.agent.prompt ?? SystemPrompt.provider(input.model).join("\n")
       const modelIdentity = `You are powered by the model named ${input.model.api.id}. The exact model ID is ${input.model.providerID}/${input.model.api.id}`
       const systemParts: SystemPart[] = [
+        { key: "agent", label: "Agent system prompt", tag: "<agent-system-prompt>", text: agentPrompt },
         { key: "model", label: "Model identity", tag: "<model>", text: modelIdentity },
         ...parts,
         ...(economicsGuidance
@@ -76,7 +78,9 @@ const layer = Layer.effect(
           ? [{ key: "mcp", label: "MCP instructions", tag: "<mcp_instructions>", text: mcpInstructions }]
           : []),
       ]
-      const system = systemParts.map((part) => part.text).filter((part) => part.length > 0)
+      // The provider prompt is prepended by `LLMRequestPrep.prepare`, so the
+      // emitted system excludes the agent segment to avoid duplicating it.
+      const system = systemParts.slice(1).map((part) => part.text).filter((part) => part.length > 0)
       return { systemParts, system }
     })
 

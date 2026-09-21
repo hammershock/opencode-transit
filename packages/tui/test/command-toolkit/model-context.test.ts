@@ -235,31 +235,28 @@ describe("model context inspector", () => {
     )
   })
 
-  test("surfaces emitted model identity and mcp instructions with canonical titles", () => {
+  test("renders emitted system parts in order with canonical titles and character-count footers", () => {
+    const agentPrompt = "You are opencode, an interactive CLI tool."
+    const modelIdentity = "You are powered by the model named test-model."
+    const mcpText = '<mcp_instructions><server name="s">do</server></mcp_instructions>'
     const options = modelContextOptions({
       ...generation,
-      model: { id: "test-model", providerID: "test" },
       systemParts: [
-        {
-          key: "model",
-          label: "Model identity",
-          tag: "<model>",
-          text: "You are powered by the model named test-model.",
-        },
-        {
-          key: "mcp",
-          label: "MCP instructions",
-          tag: "<mcp_instructions>",
-          text: "<mcp_instructions><server name=\"s\">do</server></mcp_instructions>",
-        },
+        { key: "agent", label: "Agent system prompt", tag: "<agent-system-prompt>", text: agentPrompt },
+        { key: "model", label: "Model identity", tag: "<model>", text: modelIdentity },
+        { key: "mcp", label: "MCP instructions", tag: "<mcp_instructions>", text: mcpText },
       ],
     })
-    const model = options.find((option) => option.category === "SystemPrompt" && option.title === "model")
-    expect(model?.value.content).toBe("You are powered by the model named test-model.")
-    expect(model?.footer).toBe("test/test-model")
-    const mcp = options.find((option) => option.title === "mcp")
-    expect(mcp?.value.content).toBe("<mcp_instructions><server name=\"s\">do</server></mcp_instructions>")
-    expect(mcp?.footer).toBe("<mcp_instructions>")
+    const systemParts = options.filter((option) => option.category === "SystemPrompt")
+    expect(systemParts.map((option) => option.title)).toEqual(["agent-system-prompt", "model", "mcp"])
+    expect(systemParts.map((option) => option.footer)).toEqual([
+      `${agentPrompt.length}chars`,
+      `${modelIdentity.length}chars`,
+      `${mcpText.length}chars`,
+    ])
+    expect(systemParts[0]?.value.content).toBe(agentPrompt)
+    expect(systemParts[1]?.value.content).toBe(modelIdentity)
+    expect(systemParts[2]?.value.content).toBe(mcpText)
   })
 
   test("reports disabled subagent economics without synthetic guidance", () => {
