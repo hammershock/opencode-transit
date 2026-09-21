@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { targetCommand, type TargetCommandContext } from "../../src/command-toolkit/target"
+import {
+  targetCommand,
+  targetListCommand,
+  type TargetCommandContext,
+  type TargetListCommandContext,
+} from "../../src/command-toolkit/target"
 import { createCommandHost } from "../../src/command-toolkit/host"
 
 const raw = (value: string) => ({ source: `/target ${value}`, value, range: { start: 8, end: 8 + value.length } })
@@ -29,6 +34,25 @@ describe("target command", () => {
       status: "invalid",
       code: "invalid_target_action",
     })
+  })
+
+  test("list is Agent-open and submits the table to the session", async () => {
+    let listed = false
+    const ctx: TargetListCommandContext = {
+      source: "slash",
+      client: "tui",
+      sessionID: "session-1",
+      location: { target: { type: "local" }, directory: "/work" },
+      abortSignal: new AbortController().signal,
+      confirm: async () => true,
+      listTargets: async () => {
+        listed = true
+      },
+    }
+    expect(targetListCommand.audiences).toEqual(["User", "Agent"])
+    expect(targetListCommand.readOnly).toBe(true)
+    expect(await targetListCommand.execute(ctx, undefined)).toEqual({ status: "completed" })
+    expect(listed).toBe(true)
   })
 
   test.each(["home", "session"])("is discoverable and directly invokable from the %s host", async (route) => {

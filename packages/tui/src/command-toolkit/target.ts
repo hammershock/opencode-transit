@@ -5,7 +5,7 @@ export type TargetCommandContext = InvocationContext & {
 }
 
 export type TargetListCommandContext = InvocationContext & {
-  listTargets: () => Promise<string>
+  listTargets: () => Promise<void>
 }
 
 const mode = (raw: RawArguments) => {
@@ -58,6 +58,7 @@ export const targetListCommand = defineCommand<void, TargetListCommandContext>({
   capabilities: ["target.registry.read"],
   parse: empty,
   execute: async (ctx) => {
-    return { status: "completed", message: await ctx.listTargets() }
+    await ctx.listTargets()
+    return { status: "completed" }
   },
 })

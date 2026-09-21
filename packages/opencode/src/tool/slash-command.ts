@@ -2,6 +2,7 @@ import { Effect, Option, Schema } from "effect"
 import * as Tool from "./tool"
 import { TargetRegistry } from "@opencode-ai/core/target-registry"
 import { LocationEnvironment } from "@opencode-ai/core/location-environment"
+import { Location } from "@opencode-ai/core/location"
 import { Session } from "@/session/session"
 import DESCRIPTION from "./slash-command.txt"
 
@@ -28,13 +29,15 @@ function messageOf(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
-function targetList(snapshot: TargetRegistry.Snapshot): CommandResult {
+function targetList(snapshot: TargetRegistry.Snapshot, current?: Location.Target): CommandResult {
   const columns = ["selector", "name", "description", "status"] as const
+  const currentSelector = current ? (current.type === "rexd" ? current.targetID : "local") : undefined
+  const mark = (selector: string) => (currentSelector && selector === currentSelector ? `*${selector}` : selector)
   const rows: string[][] = [
     [...columns],
-    ["local", "local", "Local execution target", "available"],
+    [mark("local"), "local", "Local execution target", "available"],
     ...snapshot.targets.map((target) => [
-      target.id,
+      mark(target.id),
       target.name,
       target.description ?? "",
       target.health?.status ?? "unknown",
@@ -62,12 +65,12 @@ export const SlashCommandTool = Tool.define<
     const targetRegistry = yield* TargetRegistry.Service
     const session = yield* Session.Service
 
-    const execute = (command: string): Effect.Effect<CommandResult> =>
+    const execute = (command: string, current?: Location.Target): Effect.Effect<CommandResult> =>
       Effect.gen(function* () {
         const tokens = command.trim().split(/\s+/)
         if (tokens[0] === "/target" && tokens[1] === "list") {
           return yield* Effect.promise(() => targetRegistry.load()).pipe(
-            Effect.map((snapshot) => targetList(snapshot)),
+            Effect.map((snapshot) => targetList(snapshot, current)),
             Effect.catch((error) => Effect.succeed(fail("target_list_failed", messageOf(error)))),
           )
         }
@@ -100,7 +103,7 @@ export const SlashCommandTool = Tool.define<
             const denied = fail("subagent_forbidden", "Slash commands are only available to the primary session")
             return { title: params.command, output: denied.stderr, metadata: { ...denied, command: params.command } }
           }
-          const result = yield* execute(params.command)
+          const result = yield* execute(params.command, info?.target)
           return {
             title: params.command,
             output: result.stdout || result.stderr,

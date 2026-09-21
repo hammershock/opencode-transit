@@ -785,11 +785,14 @@ export function Session() {
           openTargetManager: targetManager.open,
           listTargets: async () => {
             const result = await sdk.client.v2.target.list({ throwOnError: true })
+            const currentTarget = location()?.target
+            const currentSelector = currentTarget?.type === "rexd" ? currentTarget.targetID : "local"
+            const mark = (selector: string) => (selector === currentSelector ? `*${selector}` : selector)
             const rows = [
               ["selector", "name", "description", "status"],
-              ["local", "local", "Local execution target", "available"],
+              [mark("local"), "local", "Local execution target", "available"],
               ...result.data.targets.map((target) => [
-                target.id,
+                mark(target.id),
                 target.name,
                 target.description ?? "",
                 target.health?.status ?? "unknown",
@@ -798,7 +801,7 @@ export function Session() {
             const widths = [0, 1, 2, 3].map((column) =>
               Math.max(...rows.map((row) => Bun.stringWidth(String(row[column] ?? "")))),
             )
-            return rows
+            const text = rows
               .map((row) =>
                 [0, 1, 2, 3]
                   .map((column) => String(row[column] ?? "").padEnd(widths[column] ?? 0))
@@ -806,6 +809,10 @@ export function Session() {
                   .trimEnd(),
               )
               .join("\n")
+            await sdk.client.v2.session.prompt(
+              { sessionID: route.sessionID, prompt: { text }, resume: false },
+              { throwOnError: true },
+            )
           },
           openSkillManager: skillManager.open,
           openHarnessManager: harnessManager.open,
