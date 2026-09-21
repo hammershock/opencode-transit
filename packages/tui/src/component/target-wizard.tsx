@@ -141,14 +141,19 @@ async function completeRoots(
   cursor: number,
   cwd: string,
 ) {
+  return completeWorkspaceRoots(services.complete, draft(["/"]), value, cursor, cwd)
+}
+
+export async function completeWorkspaceRoots(
+  complete: WizardServices["complete"],
+  input: TargetInput,
+  value: string,
+  cursor: number,
+  cwd: string,
+) {
   const start = value.lastIndexOf(",", cursor - 1) + 1
   const leading = value.slice(start, cursor).match(/^\s*/)?.[0] ?? ""
-  const result = await services.complete(
-    draft(["/"]),
-    value.slice(start + leading.length),
-    cursor - start - leading.length,
-    cwd,
-  )
+  const result = await complete(input, value.slice(start + leading.length), cursor - start - leading.length, cwd)
   if (!result) return
   return {
     value: value.slice(0, start) + leading + result.value,

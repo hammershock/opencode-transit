@@ -83,7 +83,7 @@ For required pre-merge Mac acceptance, prepare an isolated clean checkout at the
 
 ## Task-level real-device gate
 
-Every non-fast-path functional task names the relevant rows and platform-selection rationale. After automated checks pass, run the exact candidate through `opencode-transit` on Mac and required additional devices. A focused fast-path task instead records why focused coverage is sufficient and performs the clean post-merge Mac build/install verification described above. Isolated candidate acceptance need not overwrite a production installation; record final installation separately.
+Every non-fast-path functional task names the relevant rows and platform-selection rationale. After automated checks pass, run the exact candidate through `opencode-transit` on Mac and required additional devices. A focused fast-path task instead records why focused coverage is sufficient and performs the clean post-merge Mac build/install verification described above. Isolated candidate acceptance must not overwrite a production installation by default; the clean Mac candidate build uses `--skip-install` and the transactional install is a separate, explicitly authorized step recorded on its own.
 
 Minimum evidence:
 
