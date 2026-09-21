@@ -1,11 +1,13 @@
 import type { SubagentEconomicsCatalog, SubagentEconomicsRefresh } from "@opencode-ai/protocol/groups/session"
 import type { SessionV2 } from "@opencode-ai/core/session"
+import type { ModelContext } from "@opencode-ai/schema/model-context"
 import { Context, Effect } from "effect"
 
 export type View = {
   readonly subagentCatalog: typeof SubagentEconomicsCatalog.Type | null
   readonly subagentGuidance: string | null
   readonly subagentRefresh: typeof SubagentEconomicsRefresh.Type
+  readonly tools: ReadonlyArray<ModelContext.Tool>
 }
 
 export interface Interface {
