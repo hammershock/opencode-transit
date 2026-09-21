@@ -3,16 +3,43 @@ import os from "node:os"
 import { describe, expect } from "bun:test"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
+import { Location } from "@opencode-ai/core/location"
+import {
+  LocationServiceMap,
+  buildLocationServiceMap,
+  localProvider,
+  locationServiceMapLayer,
+  type LocationProvider,
+} from "@opencode-ai/core/location-services"
 import { Effect, Layer } from "effect"
 import { Skill } from "../../src/skill"
 import { Permission } from "../../src/permission"
-import { provideInstance, provideTmpdirInstance, testInstanceStoreLayer } from "../fixture/fixture"
+import { InstanceStore } from "../../src/project/instance-store"
+import { provideInstance, provideTmpdirInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(
   Layer.mergeAll(
     LayerNode.compile(Skill.node, [[LocationServiceMap.node, locationServiceMapLayer]]),
+    LayerNode.compile(CrossSpawnSpawner.node),
+    testInstanceStoreLayer,
+  ),
+)
+
+const recordedRefs: Location.Ref[] = []
+const recordingRexdProvider: LocationProvider = {
+  target: "rexd",
+  build: (ref, replacements) => {
+    recordedRefs.push(ref)
+    return localProvider.build(ref, replacements)
+  },
+}
+
+const itWithRexd = testEffect(
+  Layer.mergeAll(
+    LayerNode.compile(Skill.node, [
+      [LocationServiceMap.node, buildLocationServiceMap([], [localProvider, recordingRexdProvider])],
+    ]),
     LayerNode.compile(CrossSpawnSpawner.node),
     testInstanceStoreLayer,
   ),
@@ -117,6 +144,28 @@ describe("legacy Skill compatibility adapter", () => {
         expect(yield* skill.all()).toEqual([])
         expect(yield* skill.dirs()).toEqual([])
       }).pipe(provideInstance(missing))
+    }),
+  )
+})
+
+describe("target-aware skill catalog", () => {
+  itWithRexd.live("routes the catalog through the instance target", () =>
+    Effect.gen(function* () {
+      recordedRefs.length = 0
+      const dir = yield* tmpdirScoped()
+      const store = yield* InstanceStore.Service
+      const target = Location.RexdTarget.make({
+        type: "rexd",
+        targetID: Location.TargetID.make("a20c4f65-7ad8-47ae-bc91-7f2b9476108d"),
+      })
+      yield* store.provide(
+        { directory: dir, target },
+        Effect.gen(function* () {
+          const skill = yield* Skill.Service
+          yield* skill.all()
+          expect(recordedRefs[0]?.target).toEqual(target)
+        }),
+      )
     }),
   )
 })

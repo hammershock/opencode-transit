@@ -112,7 +112,16 @@ const layer = Layer.effect(
           ? yield* Effect.gen(function* () {
               yield* (yield* PluginV2.Service).wait(PluginV2.ID.make("core/config-reference"))
               return (yield* (yield* Reference.Service).list()).map((reference) => reference.path)
-            }).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) }))))
+            }).pipe(
+              Effect.provide(
+                locations.get(
+                  Location.Ref.make({
+                    directory: AbsolutePath.make(ctx.directory),
+                    ...(ctx.target === undefined ? {} : { target: ctx.target }),
+                  }),
+                ),
+              ),
+            )
           : []
         const whitelistedDirs = [
           Truncate.GLOB,

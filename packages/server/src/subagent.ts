@@ -1,6 +1,7 @@
 export * as SubagentManager from "./subagent"
 
 import { Subagent } from "@opencode-ai/schema/subagent"
+import type { Location } from "@opencode-ai/core/location"
 import { Context, Data, Effect, Layer } from "effect"
 
 export class MutationFailure extends Data.TaggedError("SubagentManagerMutationFailure")<{
@@ -9,11 +10,12 @@ export class MutationFailure extends Data.TaggedError("SubagentManagerMutationFa
   revision?: string
 }> {}
 
-type Located<Input> = Input & { directory: string }
+type Located<Input> = Input & { directory: string; target?: Location.Target }
 
 export interface Interface {
   readonly catalog: (input: {
     directory: string
+    target?: Location.Target
     sessionID?: string
     parentAgentID: string
     includeInactive?: boolean
