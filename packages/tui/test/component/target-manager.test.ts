@@ -46,7 +46,7 @@ describe("target health presentation", () => {
     )
   })
 
-  test("shows a description while retaining the host in target details", () => {
+  test("shows a description while falling back to the host", () => {
     const target = {
       id: "target-1",
       name: "a100-2gpu",
@@ -57,11 +57,9 @@ describe("target health presentation", () => {
     }
     expect(targetListPresentation(target)).toEqual({
       description: "Huawei ModelArts 2×A100 GPU server",
-      details: ["modelarts"],
     })
     expect(targetListPresentation({ ...target, description: undefined })).toEqual({
       description: "modelarts",
-      details: [],
     })
   })
 

@@ -71,6 +71,8 @@ export interface DialogSelectOption<T = any> {
   titleView?: () => JSX.Element
   value: T
   description?: string
+  descriptionAlign?: "right"
+  descriptionWidth?: number
   details?: string[]
   footer?: (() => JSX.Element) | string
   flatFooter?: string
@@ -699,6 +701,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                               inspectionFooter={option.inspectionFooter}
                               footerSuffix={option.footerSuffix}
                               description={option.description !== category ? option.description : undefined}
+                              descriptionAlign={option.descriptionAlign}
+                              descriptionWidth={option.descriptionWidth}
                               active={active()}
                               current={current()}
                               muted={actionFocused()}
@@ -751,6 +755,8 @@ function Option(props: {
   title: string
   titleView?: () => JSX.Element
   description?: string
+  descriptionAlign?: "right"
+  descriptionWidth?: number
   active?: boolean
   current?: boolean
   muted?: boolean
@@ -777,7 +783,11 @@ function Option(props: {
       typeof props.footer === "string" &&
       Bun.stringWidth(props.inspectionFooter ?? props.footer) >
         Math.max(0, (props.footerWidth ?? 0) - footerSuffixWidth(props.footerSuffix))
-    if (!props.active || (!title && !footer)) {
+    const description =
+      props.descriptionAlign === "right" &&
+      (props.descriptionWidth ?? 0) > 0 &&
+      Bun.stringWidth(props.description ?? "") > (props.descriptionWidth ?? 0)
+    if (!props.active || (!title && !footer && !description)) {
       setInspectionOffset(0)
       return
     }
@@ -799,6 +809,14 @@ function Option(props: {
       !!props.active,
     ),
   )
+  const descriptionFrame = createMemo(() => {
+    if (props.descriptionAlign !== "right" || !props.description) return ""
+    const width = props.descriptionWidth ?? 0
+    if (width <= 0) return props.description
+    return props.active
+      ? inspectionFrame(props.description, width, inspectionOffset())
+      : displayTruncate(props.description, width)
+  })
 
   return (
     <>
@@ -814,7 +832,7 @@ function Option(props: {
       </Show>
       <text
         flexGrow={1}
-        flexShrink={props.footer ? 0 : undefined}
+        flexShrink={props.footer || props.descriptionAlign === "right" ? 0 : undefined}
         fg={text()}
         attributes={props.active && !props.muted ? TextAttributes.BOLD : undefined}
         overflow="hidden"
@@ -832,10 +850,21 @@ function Option(props: {
                 : props.truncateTitle === "left"
                   ? Locale.truncateLeft(props.title, props.titleWidth ?? 61)
                   : Locale.truncate(props.title, props.titleWidth ?? 61)))}
-        <Show when={props.description}>
+        <Show when={props.description && props.descriptionAlign !== "right"}>
           <span style={{ fg: props.active && !props.muted ? fg : theme.textMuted }}> {props.description}</span>
         </Show>
       </text>
+      <Show when={props.description && props.descriptionAlign === "right"}>
+        <text
+          flexShrink={1}
+          maxWidth={props.descriptionWidth}
+          fg={props.active && !props.muted ? fg : theme.textMuted}
+          overflow="hidden"
+          wrapMode="none"
+        >
+          {descriptionFrame()}
+        </text>
+      </Show>
       <Show when={props.footer}>
         <box flexShrink={props.footerWidth ? 0 : 1} width={props.footerWidth}>
           <Show

@@ -63,13 +63,9 @@ export function targetHealthLabel(state: TargetHealthState) {
 
 export function targetListPresentation(
   target: { readonly description?: string; readonly connection: { readonly host: string } },
-  healthDetail?: string,
 ) {
   return {
     description: target.description ?? target.connection.host,
-    details: [target.description ? target.connection.host : undefined, healthDetail].filter((item): item is string =>
-      Boolean(item),
-    ),
   }
 }
 
@@ -291,7 +287,9 @@ export function useTargetManager() {
           { title: "Refresh status", value: "refresh" as const, category: "Actions" },
           ...(targets()?.targets ?? []).map((target) => ({
             title: target.name,
-            ...targetListPresentation(target, detail(target.id)),
+            ...targetListPresentation(target),
+            descriptionAlign: "right" as const,
+            descriptionWidth: 40,
             footer: () => <TargetHealth state={() => state(target.id)} />,
             value: target as TargetDefinition,
             category: "Configured targets",
@@ -304,6 +302,7 @@ export function useTargetManager() {
         }}
       />
     ))
+    dialog.setSize("large")
   }
 
   return {
