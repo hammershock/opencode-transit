@@ -889,7 +889,10 @@ export type SessionsContextOutput = {
   >
 }["data"]
 
-export type SessionsModelContextInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+export type SessionsModelContextInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly model?: { readonly model?: string | undefined }["model"]
+}
 
 export type SessionsModelContextOutput = {
   readonly data: {

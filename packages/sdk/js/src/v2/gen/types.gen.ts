@@ -14800,7 +14800,9 @@ export type V2SessionModelContextData = {
   path: {
     sessionID: string
   }
-  query?: never
+  query?: {
+    model?: string
+  }
   url: "/api/session/{sessionID}/model-context"
 }
 

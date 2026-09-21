@@ -731,7 +731,13 @@ export function Session() {
           }
         }
         const inspectModelContext = async () => {
-          const response = await sdk.request(`/api/session/${encodeURIComponent(route.sessionID)}/model-context`)
+          const selected = local.model.current()
+          const modelQuery = selected
+            ? `?model=${encodeURIComponent(selected.providerID)}/${encodeURIComponent(selected.modelID)}`
+            : ""
+          const response = await sdk.request(
+            `/api/session/${encodeURIComponent(route.sessionID)}/model-context${modelQuery}`,
+          )
           if (!response.ok) throw new Error(`Failed to inspect model context (HTTP ${response.status})`)
           const result = (await response.json()) as {
             skillCatalog: ModelContextGeneration["skillCatalog"] | null

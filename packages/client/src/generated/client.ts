@@ -547,6 +547,7 @@ export function make(options: ClientOptions) {
           {
             method: "GET",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/model-context`,
+            query: { model: input["model"] },
             successStatus: 200,
             declaredStatuses: [404, 500, 401, 400],
             empty: false,
