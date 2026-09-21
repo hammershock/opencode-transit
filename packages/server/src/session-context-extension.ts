@@ -13,7 +13,11 @@ export type View = {
 
 export interface Interface {
   readonly activate: (input: { sessionID: SessionV2.ID; directory: string; agent?: string }) => Effect.Effect<View>
-  readonly inspect: (input: { sessionID: SessionV2.ID; directory: string }) => Effect.Effect<View>
+  readonly inspect: (input: {
+    sessionID: SessionV2.ID
+    directory: string
+    model?: { providerID: string; modelID: string }
+  }) => Effect.Effect<View>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionContextExtension") {}

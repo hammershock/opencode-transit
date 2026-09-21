@@ -5979,10 +5979,21 @@ export class Session3 extends HeyApiClient {
   public modelContext<ThrowOnError extends boolean = false>(
     parameters: {
       sessionID: string
+      model?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "model" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).get<
       V2SessionModelContextResponses,
       V2SessionModelContextErrors,

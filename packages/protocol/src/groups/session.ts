@@ -381,6 +381,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.get("session.modelContext", "/api/session/:sessionID/model-context", {
         params: { sessionID: Session.ID },
+        query: { model: Schema.optional(Schema.String) },
         success: Schema.Struct({
           data: Schema.NullOr(ModelContext.Generation),
           skillCatalog: Schema.NullOr(Skill.AdmittedCatalog),

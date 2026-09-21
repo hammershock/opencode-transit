@@ -9,6 +9,8 @@ import { Config } from "@/config/config"
 import { Permission } from "@/permission"
 import { Subagent } from "./subagent"
 import { Provider } from "@/provider/provider"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { ModelV2 } from "@opencode-ai/core/model"
 import { SessionContextExtension } from "@opencode-ai/server/session-context-extension"
 import { InstanceStore } from "@/project/instance-store"
 import { Session } from "@/session/session"
@@ -262,11 +264,17 @@ const contextLayer = Layer.effect(
     const provider = yield* Provider.Service
     const systemAssembly = yield* SystemAssembly.Service
 
-    const inspectSystem = Effect.fn("SubagentEconomics.inspectSystem")(function* (sessionID: SessionID) {
+    const inspectSystem = Effect.fn("SubagentEconomics.inspectSystem")(function* (
+      sessionID: SessionID,
+      modelOverride?: { providerID: string; modelID: string },
+    ) {
       const session = yield* sessions.get(sessionID)
       const agent = yield* agents.get(session.agent ?? "build")
-      if (!agent || !session.model) return null
-      const model = yield* provider.getModel(session.model.providerID, session.model.id).pipe(Effect.option)
+      const ref = modelOverride ?? (session.model ? { providerID: session.model.providerID, modelID: session.model.id } : undefined)
+      if (!agent || !ref) return null
+      const model = yield* provider
+        .getModel(ProviderV2.ID.make(ref.providerID), ModelV2.ID.make(ref.modelID))
+        .pipe(Effect.option)
       if (Option.isNone(model)) return null
       const assembled = yield* systemAssembly.assemble({
         sessionID,
@@ -302,7 +310,10 @@ const contextLayer = Layer.effect(
       )
     })
 
-    const inspect = Effect.fn("SubagentEconomics.inspect")(function* (sessionID: SessionID) {
+    const inspect = Effect.fn("SubagentEconomics.inspect")(function* (
+      sessionID: SessionID,
+      model?: { providerID: string; modelID: string },
+    ) {
       const toolsAttempt = yield* inspectTools(sessionID).pipe(Effect.exit)
       const tools: ReadonlyArray<ModelContext.Tool> = Exit.isSuccess(toolsAttempt)
         ? toolsAttempt.value.map((tool) => ({
@@ -311,7 +322,7 @@ const contextLayer = Layer.effect(
             inputSchema: tool.inputSchema,
           }))
         : []
-      const systemPartsAttempt = yield* inspectSystem(sessionID).pipe(Effect.exit)
+      const systemPartsAttempt = yield* inspectSystem(sessionID, model).pipe(Effect.exit)
       const systemParts = Exit.isSuccess(systemPartsAttempt) ? systemPartsAttempt.value : null
 
       if ((yield* config.get()).experimental?.subagent_economics !== true) {
@@ -359,7 +370,7 @@ const contextLayer = Layer.effect(
         )
       }),
       inspect: Effect.fn("SubagentEconomics.inspectContext")((input) =>
-        instances.provide({ directory: input.directory }, inspect(input.sessionID)),
+        instances.provide({ directory: input.directory }, inspect(input.sessionID, input.model)),
       ),
     })
   }),

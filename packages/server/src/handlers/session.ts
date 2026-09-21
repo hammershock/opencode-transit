@@ -162,6 +162,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.modelContext",
         Effect.fn(function* (ctx) {
+          const modelQuery = ctx.query.model
+          const modelOverride = modelQuery
+            ? (() => {
+                const separator = modelQuery.indexOf("/")
+                if (separator === -1) return undefined
+                return { providerID: modelQuery.slice(0, separator), modelID: modelQuery.slice(separator + 1) }
+              })()
+            : undefined
           const subagent = yield* Option.match(contextExtension, {
             onNone: () => Effect.succeed(undefined),
             onSome: (extension) =>
@@ -170,6 +178,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 return yield* extension.inspect({
                   sessionID: ctx.params.sessionID,
                   directory: controllerDirectory(request),
+                  model: modelOverride,
                 })
               }),
           })
