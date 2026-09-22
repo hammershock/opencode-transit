@@ -50,3 +50,42 @@ describe("AgentPermission.resolve", () => {
     }),
   )
 })
+
+describe("AgentPermission.resolveSessionPermission", () => {
+  it.live("appends the location whitelist as external_directory allow rules", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(dir, ".opencode", "skill", "review", "SKILL.md"),
+          "---\nname: review\ndescription: review\n---\n\n# Review\n",
+        ),
+      )
+      const locations = yield* LocationServiceMap.Service
+      const permission = yield* AgentPermission.resolveSessionPermission(locations, {
+        directory: dir,
+        withReferences: false,
+      })
+      expect(permission).toContainEqual({
+        permission: "external_directory",
+        pattern: path.join(dir, ".opencode", "skill", "review", "*"),
+        action: "allow",
+      })
+    }),
+  )
+
+  it.live("preserves existing permission and appends the whitelist after it", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const locations = yield* LocationServiceMap.Service
+      const existing = { permission: "edit" as const, pattern: "*" as const, action: "deny" as const }
+      const permission = yield* AgentPermission.resolveSessionPermission(locations, {
+        permission: [existing],
+        directory: dir,
+        withReferences: false,
+      })
+      expect(permission).toContainEqual(existing)
+      expect(permission[0]).toEqual(existing)
+    }),
+  )
+})

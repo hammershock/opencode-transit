@@ -25,12 +25,9 @@ import { Effect, Context, Layer, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
-import { AbsolutePath, type DeepMutable } from "@opencode-ai/core/schema"
+import { type DeepMutable } from "@opencode-ai/core/schema"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
-import { Location } from "@opencode-ai/core/location"
-import { LocationServiceMap } from "@opencode-ai/core/location-services"
-import { AgentPermission } from "./agent-permission"
 
 export const Info = Schema.Struct({
   id: Schema.optional(Schema.String),
@@ -97,24 +94,15 @@ const layer = Layer.effect(
     const auth = yield* Auth.Service
     const plugin = yield* Plugin.Service
     const provider = yield* Provider.Service
-    const locations = yield* LocationServiceMap.Service
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Agent.state")(function* (ctx) {
         const cfg = yield* config.get()
         const globalConfig = yield* config.getGlobal()
         const globalAgents = yield* Effect.promise(() => ConfigAgent.load(Global.Path.config))
-        const locationWhitelist = yield* AgentPermission.resolve(locations, {
-          location: Location.Ref.make({
-            directory: AbsolutePath.make(ctx.directory),
-            ...(ctx.target === undefined ? {} : { target: ctx.target }),
-          }),
-          withReferences: Object.keys(cfg.references ?? cfg.reference ?? {}).length > 0,
-        })
         const whitelistedDirs = [
           Truncate.GLOB,
           path.join(Global.Path.tmp, "*"),
-          ...locationWhitelist,
         ]
         const readonlyExternalDirectory = {
           "*": "ask",
@@ -490,7 +478,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, Auth.node, Plugin.node, Provider.node, LocationServiceMap.node],
+  deps: [Config.node, Auth.node, Plugin.node, Provider.node],
 })
 
 export * as Agent from "./agent"

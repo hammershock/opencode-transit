@@ -6,6 +6,7 @@ import { Cause, Effect } from "effect"
 import { Agent } from "../../../agent/agent"
 import { Provider } from "@/provider/provider"
 import { Session } from "@/session/session"
+import { SessionShare } from "@/share/session"
 import type { MessageV2 } from "../../../session/message-v2"
 import { MessageID, PartID } from "../../../session/schema"
 import { ToolRegistry } from "@/tool/registry"
@@ -127,8 +128,9 @@ const createToolContext = Effect.fn("Cli.debug.agent.createToolContext")(functio
   agent: Agent.Info,
   ctx: InstanceContext,
 ) {
+  const shareSvc = yield* SessionShare.Service
   const sessionSvc = yield* Session.Service
-  const session = yield* sessionSvc.create({ title: `Debug tool run (${agent.name})` })
+  const session = yield* shareSvc.create({ title: `Debug tool run (${agent.name})` })
   const messageID = MessageID.ascending()
   const model = agent.model
     ? agent.model
