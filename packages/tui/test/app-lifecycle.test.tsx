@@ -210,6 +210,7 @@ test.each([
   { route: "QuickStart", args: {} },
   { route: "Session", args: { continue: true } },
 ] as const)("Ctrl+P opens the command palette from the production $route route", async ({ args }) => {
+  let api: TuiPluginApi | undefined
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
@@ -269,7 +270,8 @@ test.each([
         events: events.source,
         args,
         pluginHost: {
-          async start() {
+          async start(input) {
+            api = input.api
             started()
           },
           async dispose() {},
@@ -284,6 +286,11 @@ test.each([
     await setup.waitForVisualIdle()
 
     expect(setup.captureCharFrame()).toContain("Commands")
+    expect(
+      api!.keymap
+        .getCommandEntries({ visibility: "reachable", namespace: "palette" })
+        .some((entry) => entry.command.name === "fork.location.recent"),
+    ).toBe(!("continue" in args))
     const editor = await waitForEditor(setup)
     "Subagent economics".split("").forEach((key) => setup.mockInput.pressKey(key))
     await waitForFrame(setup, "Configure device-local pricing")
@@ -1038,6 +1045,157 @@ test("QuickStart accepts and renders keyboard input without starving the keymap"
     mock.restore()
   }
 }, 10_000)
+
+test.each([
+  { width: 60, remote: false },
+  { width: 100, remote: false },
+  { width: 140, remote: false },
+  { width: 100, remote: true },
+])(
+  "QuickStart recent locations select safely at $width columns (remote=$remote)",
+  async ({ width, remote }) => {
+    const setup = await createTestRenderer({ width, height: 30, useThread: false })
+    const core = await import("@opentui/core")
+    mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+    const events = createEventSource()
+    const validated: URL[] = []
+    let fail = true
+    let release: (() => void) | undefined
+    let delay = false
+    let removed = false
+    const prepared: string[] = []
+    const calls = createFetch(async (url) => {
+      if (url.pathname === "/api/target")
+        return json({
+          path: "targets.jsonc",
+          revision: "test",
+          targets: remote && !removed ? [{ id: "target-1", name: "renamed", workspaceRoots: ["/work"] }] : [],
+          diagnostics: [],
+          valid: true,
+        })
+      if (url.pathname === "/api/target/target-1/prepare") {
+        prepared.push("target-1")
+        return json({ status: "ready", stages: [] })
+      }
+      if (url.pathname === "/experimental/session") {
+        expect(url.searchParams.has("directory")).toBe(false)
+        return json(
+          Array.from({ length: 25 }, (_, i) => ({
+            id: `recent-${i}`,
+            slug: `recent-${i}`,
+            projectID: `project-${i}`,
+            title: "Recent work",
+            directory: `/work/project-${i}`,
+            ...(remote ? { target: { type: "rexd", targetID: "target-1" }, lastKnownTargetName: "old-name" } : {}),
+            version: "test",
+            time: { created: 0, updated: 100 - i },
+          })),
+        )
+      }
+      if (url.pathname === "/api/fs/list") {
+        validated.push(url)
+        if (delay)
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+        if (fail) return json({ message: "Directory unavailable" }, { status: 400 })
+        return json({ data: [] })
+      }
+      if (url.pathname === "/config/providers")
+        return json({
+          providers: [{ id: "test", name: "Test", source: "custom", env: [], options: {}, models: {} }],
+          default: {},
+        })
+    })
+    let api: TuiPluginApi | undefined
+    let disposeSlots = () => {}
+    try {
+      const { run } = await import("../src/app")
+      const task = Effect.runPromise(
+        run({
+          url: "http://test",
+          directory,
+          config: createTuiResolvedConfig({ plugin_enabled: {} }),
+          fetch: calls.fetch,
+          events: events.source,
+          args: {},
+          pluginHost: {
+            async start(input) {
+              api = input.api
+              disposeSlots = input.runtime.setupSlots(input.api).dispose
+            },
+            async dispose() {
+              disposeSlots()
+            },
+          },
+        }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+      )
+      const editor = await waitForEditor(setup, 5_000)
+      await waitForFrame(setup, "/work/project-0")
+      api!.keymap.dispatchCommand("prompt.clear")
+      "draft remains".split("").forEach((key) => setup.mockInput.pressKey(key))
+      await waitForFrame(setup, "draft remains")
+      api!.keymap.dispatchCommand("fork.location.recent")
+      await waitForFrame(setup, "Search target or directory")
+      await setup.waitForVisualIdle()
+      setup.mockInput.pressEnter()
+      await waitForFrame(setup, "Cannot select recent location")
+      expect(editor.plainText).toBe("draft remains")
+      expect(setup.captureCharFrame()).toContain("Search target or directory")
+      fail = false
+      delay = true
+      setup.mockInput.pressEnter()
+      while (!release) await Bun.sleep(10)
+      setup.mockInput.pressEscape()
+      await waitForFrameWithout(setup, "Search target or directory")
+      release()
+      await Bun.sleep(40)
+      await waitForEditor(setup)
+      expect(editor.plainText).toBe("draft remains")
+      expect(setup.captureCharFrame()).not.toContain("● selected")
+      delay = false
+      const lines = setup.captureCharFrame().split("\n")
+      const y = lines.findIndex((line) => line.includes("/work/project-0"))
+      await setup.mockMouse.click(lines[y].indexOf("/work/project-0") + 2, y)
+      await waitForFrame(setup, "● selected")
+      expect(validated).toHaveLength(3)
+      expect(validated.map((url) => url.searchParams.get("location[directory]"))).toEqual(
+        Array(3).fill("/work/project-0"),
+      )
+      expect(validated.map((url) => url.searchParams.get("location[target]"))).toEqual(
+        Array(3).fill(remote ? "target-1" : null),
+      )
+      expect(prepared).toHaveLength(remote ? 3 : 0)
+      expect(editor.plainText).toBe("draft remains")
+      if (remote) {
+        removed = true
+        api!.keymap.dispatchCommand("fork.location.recent")
+        await waitForFrame(setup, "Search target or directory")
+        await setup.waitForVisualIdle()
+        setup.mockInput.pressEnter()
+        await waitForFrame(setup, "Target is no longer configured")
+        expect(validated).toHaveLength(3)
+        expect(editor.plainText).toBe("draft remains")
+      }
+      if (!remote) {
+        api!.keymap.dispatchCommand("prompt.clear")
+        "/recent".split("").forEach((key) => setup.mockInput.pressKey(key))
+        await waitForFrame(setup, "Choose a recently used target")
+        await setup.waitForVisualIdle()
+        setup.mockInput.pressEnter()
+        await waitForFrame(setup, "Search target or directory")
+        expect(validated).toHaveLength(3)
+      }
+      process.emit("SIGHUP")
+      await task
+    } finally {
+      release?.()
+      if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+      mock.restore()
+    }
+  },
+  15_000,
+)
 
 test("session.undo restores a canonical Skill prompt and session.redo clears its V2 revert", async () => {
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
