@@ -24,7 +24,7 @@ RFC（Request for Comments）用于记录本 fork 中影响多个模块或核心
 | [0017](0017-agent-slash-commands.md)           | Agent Slash Commands                   | Accepted |
 | [0019](0019-target-descriptions.md)            | Target Descriptions                    | Accepted |
 | [0020](0020-model-context-inspection.md)       | Model Context Inspection               | Draft    |
-| [0021](0021-location-execution-permissions.md) | Location-derived Execution Permissions | Draft    |
+| [0021](0021-location-execution-permissions.md) | Location-derived Execution Permissions | Accepted |
 
 ## 状态
 

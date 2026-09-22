@@ -1,7 +1,7 @@
 ---
 id: 0021
 title: Location-derived Execution Permissions
-status: draft
+status: accepted
 authors:
   - hammershock
 created: 2026-09-23
@@ -21,7 +21,7 @@ superseded-by: []
 
 ## 状态与范围
 
-**Draft，尚未接受完整 runtime 契约。** 设计任务为 [#509](https://github.com/hammershock/opencode-transit/issues/509)，背景为 [#481](https://github.com/hammershock/opencode-transit/issues/481)。维护者已在本轮评审中选择第六节的**保守升级**，并授权合并优先级修复 [#508](https://github.com/hammershock/opencode-transit/pull/508)。本文据此补全迁移与恢复细节；该方向选择不替代完整 RFC 接受或生产数据修改授权。
+**Accepted。** 设计任务为 [#509](https://github.com/hammershock/opencode-transit/issues/509)，背景为 [#481](https://github.com/hammershock/opencode-transit/issues/481)。维护者选择第六节的**保守升级**，并在补全契约后确认开始下一阶段实现。实施按第七节的独立任务推进；接受设计不代表迁移已经上线，也不授权开发过程中修改生产数据。
 
 目标是让普通消息、结构化 Skill mention、主 Session 和子 Session 的工具执行使用同一权限语义，并使切换执行位置不会复制另一台机器的路径许可。它是指定 Target 委派的基础，不实现 RFC-0018 的 Task 参数，也不替代该 RFC 的接受流程。
 
@@ -115,7 +115,7 @@ controller 配置上下文与 execution Location 必须显式区分。不能只�
 
 #505 已写入的规则没有 provenance，自动 allow 与用户 allow 可能字节完全相同。不能从 path glob、数组位置或当前 Skill catalog 推断来源；旧 event history 也不能原地重写来假装从未保存过它们。
 
-维护者已选择**保守升级**，不采用“所有历史规则都视作用户许可”的兼容优先方案。以下为该选择的具体契约提案。
+维护者已选择**保守升级**，不采用“所有历史规则都视作用户许可”的兼容优先方案。以下为该选择的具体契约。
 
 ### 6.1 保留历史与限制
 
