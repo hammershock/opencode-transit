@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import type { GlobalEvent } from "@opencode-ai/sdk/v2"
 import { tmpdir } from "../../../fixture/fixture"
 import { json, mount, wait } from "./sync-fixture"
@@ -32,6 +32,38 @@ const assistant = {
 function global(payload: GlobalEvent["payload"]): GlobalEvent {
   return { directory: "/tmp/other", project: "proj_test", payload }
 }
+
+test.each(["message.removed", "message.part.removed"] as const)(
+  "%s for uncached history is a no-op without disrupting live updates",
+  async (type) => {
+    await using tmp = await tmpdir()
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const { app, emit, sync } = await mount(undefined, tmp.path)
+    const errors = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      emit(
+        global(
+          type === "message.removed"
+            ? { id: "evt_uncached_removed", type, properties: { sessionID, messageID } }
+            : { id: "evt_uncached_removed", type, properties: { sessionID, messageID, partID } },
+        ),
+      )
+      await Bun.sleep(30)
+      expect(errors).not.toHaveBeenCalled()
+      expect(sync.data.message[sessionID]).toBeUndefined()
+      expect(sync.data.part[messageID]).toBeUndefined()
+
+      emit(
+        global({ id: "evt_live_after_removal", type: "message.updated", properties: { sessionID, info: assistant } }),
+      )
+      await wait(() => sync.data.message[sessionID]?.length === 1)
+      expect(sync.data.message[sessionID][0].id).toBe(messageID)
+    } finally {
+      errors.mockRestore()
+      app.renderer.destroy()
+    }
+  },
+)
 
 test("live messages use creation time with an ID tie-break", async () => {
   await using tmp = await tmpdir()
