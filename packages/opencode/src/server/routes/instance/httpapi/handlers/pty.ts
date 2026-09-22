@@ -58,8 +58,16 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
     const locations = yield* LocationServiceMap.Service
     const access = yield* SessionLocationAccess.Service
     const activity = yield* SessionActivity.Service
-    const unregister = registerDisposer((directory) =>
-      Effect.runPromise(locations.invalidate(Location.Ref.make({ directory: AbsolutePath.make(directory) }))),
+    const unregister = registerDisposer((ctx) =>
+      Effect.runPromise(
+        locations.invalidate(
+          Location.Ref.make({
+            directory: AbsolutePath.make(ctx.directory),
+            target: ctx.target,
+            workspaceID: ctx.workspaceID,
+          }),
+        ),
+      ),
     )
     yield* Effect.addFinalizer(() => Effect.sync(unregister))
 

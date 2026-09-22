@@ -1,12 +1,16 @@
-const disposers = new Set<(directory: string) => Promise<void>>()
+import type { InstanceContext } from "@/project/instance-context"
 
-export function registerDisposer(disposer: (directory: string) => Promise<void>) {
+const disposers = new Set<(context: InstanceContext) => Promise<void>>()
+
+export function registerDisposer(disposer: (context: InstanceContext) => Promise<void>) {
   disposers.add(disposer)
   return () => {
     disposers.delete(disposer)
   }
 }
 
-export async function disposeInstance(directory: string) {
-  await Promise.allSettled([...disposers].map((disposer) => disposer(directory)))
+export async function disposeInstance(context: InstanceContext) {
+  await Promise.allSettled([...disposers].map((disposer) => disposer(context)))
 }
+
+export * as InstanceRegistry from "./instance-registry"
