@@ -348,6 +348,7 @@ export function createRoutes(
       AppNodeBuilderV1.build(app, [
         [TargetRegistry.node, rexdTargetRegistryNode],
         [LocationServiceMap.node, locationServiceMapV2],
+        [SessionExecution.node, SessionExecutionLocal.node],
       ]),
     ),
     // Must stay last: layers provided later in this pipe build beneath earlier ones,

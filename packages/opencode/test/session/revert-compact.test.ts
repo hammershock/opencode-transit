@@ -1,7 +1,9 @@
 import { describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { SessionExecution } from "@opencode-ai/core/session/execution"
 import fs from "fs/promises"
 import path from "path"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -18,8 +20,9 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 
 const it = testEffect(
-  LayerNode.compile(
+  AppNodeBuilder.build(
     LayerNode.group([Session.node, SessionRevert.node, Snapshot.node, SessionProjector.node, CrossSpawnSpawner.node]),
+    [[SessionExecution.node, SessionExecution.noopLayer]],
   ),
 )
 

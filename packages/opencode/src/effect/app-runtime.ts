@@ -55,6 +55,8 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { makeGlobalNode } from "@opencode-ai/core/effect/app-node"
 import { AppNodeBuilderV1 } from "./app-node-builder-v1"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
 import { ProviderUsage } from "@/provider/usage"
 import { SyncSetup } from "@opencode-ai/core/sync/setup"
 import { SessionSync } from "@opencode-ai/core/sync/session"
@@ -126,7 +128,10 @@ export const AppLayer = AppNodeBuilderV1.build(
     SessionShare.node,
     LocationServiceMap.node,
   ]),
-  [[LocationServiceMap.node, localLocationServiceMapNode]],
+  [
+    [LocationServiceMap.node, localLocationServiceMapNode],
+    [SessionExecution.node, SessionExecutionLocal.node],
+  ],
 ).pipe(Layer.provideMerge(AppNodeBuilderV1.build(Ripgrep.node)), Layer.provideMerge(Observability.layer))
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })

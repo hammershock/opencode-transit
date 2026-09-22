@@ -94,6 +94,7 @@ const it = testEffect(
     [LSP.node, lsp],
     [RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true })],
     [LocationServiceMap.node, locationServiceMapLayer],
+    [SessionExecution.node, SessionExecution.noopLayer],
   ]),
 )
 
@@ -190,3 +191,4 @@ it.live("tool execution produces non-empty session diff (snapshot race)", () =>
     { git: true, config: providerCfg },
   ),
 )
+import { SessionExecution } from "@opencode-ai/core/session/execution"
