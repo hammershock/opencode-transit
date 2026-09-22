@@ -710,7 +710,9 @@ const layer = Layer.effect(
         if (changed) yield* Effect.promise(() => writeFileAtomic(file, updated))
       }
 
-      if (changed) yield* invalidate()
+      // Saving is not a runtime reload. Existing Instance snapshots and their
+      // scoped services must survive; new Instances read the saved global value.
+      if (changed) yield* invalidateGlobal
       return { info: next, changed }
     })
 
