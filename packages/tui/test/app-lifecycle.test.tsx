@@ -296,10 +296,10 @@ test.each([
     await waitForFrame(setup, "Configure device-local pricing")
     expect(editor.plainText).toBe("Subagent economics")
     setup.mockInput.pressEnter()
-    await waitForFrame(setup, "○ disabled")
+    await waitForFrame(setup, "○ saved off")
     expect(setup.captureCharFrame()).toContain("Device setting · give")
     setup.mockInput.pressKey(" ")
-    await waitForFrame(setup, "● enabled")
+    await waitForFrame(setup, "● saved on")
     expect(patches).toEqual([{ experimental: { subagent_economics: true } }])
     process.emit("SIGHUP")
     await task
