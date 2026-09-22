@@ -3,7 +3,9 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Location } from "@opencode-ai/core/location"
 import { Deferred, Effect, Fiber, Layer } from "effect"
-import { InstanceRef } from "../../src/effect/instance-ref"
+import { InstanceRef, WorkspaceRef } from "../../src/effect/instance-ref"
+import { InstanceState } from "../../src/effect/instance-state"
+import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { registerDisposer } from "../../src/effect/instance-registry"
 import { InstanceBootstrap } from "../../src/project/bootstrap"
 import { InstanceStore } from "../../src/project/instance-store"
@@ -22,6 +24,11 @@ const it = testEffect(
   ]),
 )
 
+const targets = [
+  Location.RexdTarget.make({ type: "rexd", targetID: Location.TargetID.make("a20c4f65-7ad8-47ae-bc91-7f2b9476108d") }),
+  Location.RexdTarget.make({ type: "rexd", targetID: Location.TargetID.make("b20c4f65-7ad8-47ae-bc91-7f2b9476108d") }),
+]
+
 const setBootstrap = (run: Effect.Effect<void>) =>
   Effect.acquireRelease(
     Effect.sync(() => {
@@ -35,11 +42,194 @@ const setBootstrap = (run: Effect.Effect<void>) =>
 
 const registerDisposerScoped = (disposer: (directory: string) => Promise<void>) =>
   Effect.acquireRelease(
-    Effect.sync(() => registerDisposer(disposer)),
+    Effect.sync(() => registerDisposer((ctx) => disposer(ctx.directory))),
     (off) => Effect.sync(off),
   )
 
 describe("InstanceStore", () => {
+  it.live("isolates equal directories on local and two remote targets", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const local = yield* store.load({ directory: dir })
+      const [a, b, again] = yield* Effect.all(
+        [targets[0], targets[1], targets[0]].map((target) => store.load({ directory: dir, target })),
+        { concurrency: "unbounded" },
+      )
+      expect(a).not.toBe(local)
+      expect(b).not.toBe(local)
+      expect(a).not.toBe(b)
+      expect(again).toBe(a)
+      expect(a.target).toEqual(targets[0])
+      expect(b.target).toEqual(targets[1])
+      expect(yield* store.load({ directory: dir, target: { type: "local" } })).toBe(local)
+    }),
+  )
+
+  it.live("isolates explicit workspace identities at one target and directory", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const a = { directory: dir, target: targets[0], workspaceID: WorkspaceV2.ID.make("wrk_one") }
+      const b = { ...a, workspaceID: WorkspaceV2.ID.make("wrk_two") }
+      const first = yield* store.load(a)
+      expect(yield* store.load(a)).toBe(first)
+      expect(yield* store.load(b)).not.toBe(first)
+      expect(yield* store.load({ directory: dir, target: targets[0] })).not.toBe(first)
+    }),
+  )
+
+  it.live("provides the selected workspace during bootstrap and scoped work", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const workspaceID = WorkspaceV2.ID.make("wrk_selected")
+      const seen: Array<WorkspaceV2.ID | undefined> = []
+      yield* setBootstrap(
+        Effect.gen(function* () {
+          seen.push(yield* WorkspaceRef)
+        }),
+      )
+      const input = { directory: dir, target: targets[0], workspaceID }
+      expect(yield* store.provide(input, WorkspaceRef)).toBe(workspaceID)
+      expect(seen).toEqual([workspaceID])
+      const inherited = yield* store
+        .load({ directory: dir, target: targets[0] })
+        .pipe(Effect.provideService(WorkspaceRef, workspaceID))
+      expect(inherited).toBe(yield* store.load(input))
+      const cleared = yield* store
+        .provide({ ...input, workspaceID: undefined }, WorkspaceRef)
+        .pipe(Effect.provideService(WorkspaceRef, workspaceID))
+      expect(cleared).toBeUndefined()
+      expect(seen).toEqual([workspaceID, undefined])
+    }),
+  )
+
+  it.live("directory disposal retires local workspace views without touching a remote boot", () =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const local = yield* store.load({ directory })
+      const input = { directory, workspaceID: WorkspaceV2.ID.make("wrk_local") }
+      const workspace = yield* store.load(input)
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* setBootstrap(
+        Effect.gen(function* () {
+          yield* Deferred.succeed(started, undefined)
+          yield* Deferred.await(release)
+        }),
+      )
+      const remote = yield* store.load({ directory, target: targets[0] }).pipe(Effect.forkScoped)
+      yield* Deferred.await(started)
+      yield* store
+        .disposeDirectory(directory)
+        .pipe(Effect.timeout("2 seconds"), Effect.ensuring(Deferred.succeed(release, undefined)))
+      const other = yield* Fiber.join(remote)
+      yield* setBootstrap(Effect.void)
+      expect(yield* store.load({ directory })).not.toBe(local)
+      expect(yield* store.load(input)).not.toBe(workspace)
+      expect(yield* store.load({ directory, target: targets[0] })).toBe(other)
+    }),
+  )
+
+  it.live("reload joins concurrent disposal of the same generation", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const input = { directory: dir, target: targets[0] }
+      const first = yield* store.load(input)
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const disposed: object[] = []
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          registerDisposer((ctx) =>
+            Effect.runPromise(
+              Effect.gen(function* () {
+                disposed.push(ctx)
+                yield* Deferred.succeed(started, undefined)
+                yield* Deferred.await(release)
+              }),
+            ),
+          ),
+        ),
+        (off) => Effect.sync(off),
+      )
+      const disposing = yield* store.dispose(first).pipe(Effect.forkScoped)
+      yield* Deferred.await(started)
+      const reloading = yield* store.reload(input).pipe(Effect.forkScoped({ startImmediately: true }))
+      yield* Deferred.succeed(release, undefined)
+      const next = yield* Fiber.join(reloading)
+      yield* Fiber.join(disposing)
+      expect(disposed).toEqual([first])
+      expect(yield* store.load(input)).toBe(next)
+      expect(next).not.toBe(first)
+    }),
+  )
+
+  it.live("reload and directory disposal leave other targets and their state alive", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const closed: object[] = []
+      const state = yield* InstanceState.make((ctx) =>
+        Effect.acquireRelease(Effect.succeed({ ctx }), (value) =>
+          Effect.sync(() => {
+            closed.push(value)
+          }),
+        ),
+      )
+      const local = yield* store.load({ directory: dir })
+      const a = yield* store.load({ directory: dir, target: targets[0] })
+      const b = yield* store.load({ directory: dir, target: targets[1] })
+      const l = yield* InstanceState.get(state).pipe(Effect.provideService(InstanceRef, local))
+      const first = yield* InstanceState.get(state).pipe(Effect.provideService(InstanceRef, a))
+      const other = yield* InstanceState.get(state).pipe(Effect.provideService(InstanceRef, b))
+      expect(first).not.toBe(other)
+      const next = yield* store.reload({ directory: dir, target: targets[0] })
+      const current = yield* InstanceState.get(state).pipe(Effect.provideService(InstanceRef, next))
+      expect(closed).toEqual([first])
+      expect(current).not.toBe(first)
+      yield* store.dispose(a)
+      expect(closed).toEqual([first])
+      expect(yield* InstanceState.get(state).pipe(Effect.provideService(InstanceRef, b))).toBe(other)
+      yield* store.disposeDirectory(dir)
+      expect(closed).toEqual([first, l])
+      expect(yield* store.load({ directory: dir, target: targets[0] })).toBe(next)
+      expect(yield* store.load({ directory: dir, target: targets[1] })).toBe(b)
+      yield* store.disposeAll()
+      expect(closed).toHaveLength(4)
+      expect(closed).toContain(current)
+      expect(closed).toContain(other)
+    }),
+  )
+
+  it.live("failed target boot retries without removing a same-path sibling", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      const sibling = yield* store.load({ directory: dir, target: targets[1] })
+      const closed: object[] = []
+      const state = yield* InstanceState.make((ctx) =>
+        Effect.acquireRelease(Effect.succeed({ ctx }), (value) =>
+          Effect.sync(() => {
+            closed.push(value)
+          }),
+        ),
+      )
+      yield* setBootstrap(InstanceState.get(state).pipe(Effect.andThen(Effect.die("target boot failed"))))
+      const failed = yield* store.load({ directory: dir, target: targets[0] }).pipe(Effect.exit)
+      expect(failed._tag).toBe("Failure")
+      expect(closed).toHaveLength(1)
+      expect(yield* store.load({ directory: dir, target: targets[1] })).toBe(sibling)
+      yield* setBootstrap(Effect.void)
+      const retried = yield* store.load({ directory: dir, target: targets[0] })
+      expect(retried.target).toEqual(targets[0])
+      expect(retried).not.toBe(sibling)
+    }),
+  )
+
   it.live("loads instance context", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })

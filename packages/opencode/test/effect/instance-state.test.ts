@@ -4,6 +4,9 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { $ } from "bun"
 import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
 import { InstanceState } from "@/effect/instance-state"
+import { InstanceRef } from "@/effect/instance-ref"
+import { InstanceStore } from "@/project/instance-store"
+import { Location } from "@opencode-ai/core/location"
 import {
   disposeAllInstancesEffect,
   provideInstanceEffect,
@@ -35,6 +38,45 @@ it.live("InstanceState caches values per directory", () =>
 
     expect(a).toBe(b)
     expect(n).toBe(1)
+  }),
+)
+
+it.live("InstanceState scopes has and invalidation to context generations", () =>
+  Effect.gen(function* () {
+    const directory = yield* tmpdirScoped()
+    const store = yield* InstanceStore.Service
+    const local = yield* store.load({ directory })
+    const remote = {
+      ...local,
+      target: Location.RexdTarget.make({
+        type: "rexd",
+        targetID: Location.TargetID.make("a20c4f65-7ad8-47ae-bc91-7f2b9476108d"),
+      }),
+    }
+    const reloaded = { ...remote }
+    const released: object[] = []
+    const state = yield* InstanceState.make((ctx) =>
+      Effect.acquireRelease(Effect.succeed({ ctx }), (value) =>
+        Effect.sync(() => {
+          released.push(value)
+        }),
+      ),
+    )
+    const first = yield* InstanceState.get(state).pipe(Effect.provideService(InstanceRef, local))
+    expect(yield* InstanceState.has(state).pipe(Effect.provideService(InstanceRef, remote))).toBe(false)
+    const second = yield* InstanceState.get(state).pipe(Effect.provideService(InstanceRef, remote))
+    const third = yield* InstanceState.get(state).pipe(Effect.provideService(InstanceRef, reloaded))
+    expect(first).not.toBe(second)
+    expect(second).not.toBe(third)
+    yield* InstanceState.invalidate(state).pipe(Effect.provideService(InstanceRef, remote))
+    expect(released).toEqual([second])
+    expect(yield* InstanceState.has(state).pipe(Effect.provideService(InstanceRef, remote))).toBe(false)
+    expect(yield* InstanceState.has(state).pipe(Effect.provideService(InstanceRef, reloaded))).toBe(true)
+    expect(yield* InstanceState.get(state).pipe(Effect.provideService(InstanceRef, local))).toBe(first)
+    yield* InstanceState.invalidateAll(state)
+    expect(released).toHaveLength(3)
+    expect(released).toContain(first)
+    expect(released).toContain(third)
   }),
 )
 
