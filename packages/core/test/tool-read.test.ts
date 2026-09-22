@@ -104,7 +104,16 @@ const mutation = Layer.succeed(
   LocationMutation.Service.of({
     resolve: (input) => {
       if (input.path === missingPath)
-        return Effect.fail(new LocationMutation.PathError({ path: input.path, reason: "non_directory_ancestor" }))
+        return Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "FileSystem",
+            method: "realPath",
+            pathOrDescriptor: input.path,
+          }),
+        )
+      if (input.path === "../outside.txt")
+        return Effect.fail(new LocationMutation.PathError({ path: input.path, reason: "relative_escape" }))
       const canonical = path.resolve(process.cwd(), input.path)
       const external = path.isAbsolute(input.path) && !FSUtil.contains(process.cwd(), canonical)
       const resource = external ? canonical.replaceAll("\\", "/") : path.relative(process.cwd(), canonical) || "."
@@ -217,6 +226,36 @@ describe("ReadTool", () => {
         { sessionID, action: "read", resources: [external.replaceAll("\\", "/")], save: ["*"] },
       ])
       expect(readCalls).toEqual([{ input: AbsolutePath.make(external), page: { offset: undefined, limit: undefined } }])
+    }),
+  )
+
+  it.effect("explains the canonical path key before executing obsolete filePath input", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const definitions = yield* toolDefinitions(registry)
+      expect(definitions[0]?.inputSchema).toMatchObject({ required: ["path"] })
+      expect(definitions[0]?.description).toContain('"path" (not "filePath")')
+      expect(
+        yield* executeTool(registry, {
+          sessionID,
+          ...toolIdentity,
+          call: { type: "tool-call", id: "call-old-key", name: "read", input: { filePath: "README.md" } },
+        }),
+      ).toEqual({
+        type: "error",
+        value: expect.stringContaining('Call read with {"path":"file-or-directory"}; "filePath" is not supported.'),
+      })
+      expect(assertions).toEqual([])
+      expect(readCalls).toEqual([])
+
+      expect(
+        yield* executeTool(registry, {
+          sessionID,
+          ...toolIdentity,
+          call: { type: "tool-call", id: "call-corrected-key", name: "read", input: { path: "README.md" } },
+        }),
+      ).toMatchObject({ type: "json" })
+      expect(readCalls).toHaveLength(1)
     }),
   )
 
@@ -528,6 +567,58 @@ describe("ReadTool", () => {
     }),
   )
 
+  it.effect("preserves actionable paging, encoding, path-kind, and filesystem diagnostics", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const cases = [
+        [new ReadToolFileSystem.OffsetOutOfRangeError({ offset: 200 }), "Offset 200 is out of range"],
+        [new ReadToolFileSystem.MalformedUtf8Error({ resource: "README.md" }), "File is not valid UTF-8: README.md"],
+        [
+          new ReadToolFileSystem.PathKindError({ resource: "README.md", expected: "a file" }),
+          "Path is not a file: README.md",
+        ],
+        [
+          PlatformError.systemError({ _tag: "NotFound", module: "FileSystem", method: "open" }),
+          "File or directory not found: README.md",
+        ],
+        [
+          PlatformError.systemError({ _tag: "PermissionDenied", module: "FileSystem", method: "open" }),
+          "Filesystem permission denied: README.md",
+        ],
+      ] as const
+      for (const [error, message] of cases) {
+        readFailure = error
+        expect(
+          yield* executeTool(registry, {
+            sessionID,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: `call-${error._tag}-${message}`,
+              name: "read",
+              input: { path: "README.md" },
+            },
+          }),
+        ).toEqual({ type: "error", value: message })
+      }
+    }),
+  )
+
+  it.effect("explains relative path escapes without reading", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      expect(
+        yield* executeTool(registry, {
+          sessionID,
+          ...toolIdentity,
+          call: { type: "tool-call", id: "call-escape", name: "read", input: { path: "../outside.txt" } },
+        }),
+      ).toEqual({ type: "error", value: expect.stringContaining("use an absolute path for external files") })
+      expect(assertions).toEqual([])
+      expect(readCalls).toEqual([])
+    }),
+  )
+
   it.effect("does not read when permission is denied", () =>
     Effect.gen(function* () {
       allow = false
@@ -539,7 +630,7 @@ describe("ReadTool", () => {
           ...toolIdentity,
           call: { type: "tool-call", id: "call-read", name: "read", input: { path: "README.md" } },
         }),
-      ).toEqual({ type: "error", value: "Unable to read README.md" })
+      ).toEqual({ type: "error", value: "Read permission denied: README.md" })
       expect(readCalls).toEqual([])
     }),
   )
@@ -554,7 +645,7 @@ describe("ReadTool", () => {
           ...toolIdentity,
           call: { type: "tool-call", id: "call-missing-path", name: "read", input: { path: missingPath } },
         }),
-      ).toEqual({ type: "error", value: `Unable to read ${missingPath}` })
+      ).toEqual({ type: "error", value: `File or directory not found: ${missingPath}` })
       expect(assertions).toEqual([])
       expect(readCalls).toEqual([])
     }),
@@ -594,7 +685,7 @@ describe("ReadTool", () => {
           ...toolIdentity,
           call: { type: "tool-call", id: "call-read-directory-denied", name: "read", input: { path: "src" } },
         }),
-      ).toEqual({ type: "error", value: "Unable to read src" })
+      ).toEqual({ type: "error", value: "Read permission denied: src" })
       expect(listCalls).toEqual([])
     }),
   )

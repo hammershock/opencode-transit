@@ -82,4 +82,43 @@ describe("Ripgrep", () => {
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
   )
+
+  it.live("handles records above 64 KiB with bounded previews and original match offsets", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            fs.writeFile(path.join(tmp.path, "generated.txt"), `${"x".repeat(80_000)}needle\nneedle\n`),
+          )
+          const ripgrep = yield* Ripgrep.Service
+          const matches = yield* ripgrep.grep({ cwd: tmp.path, pattern: "needle", limit: 10 })
+          expect(matches).toHaveLength(2)
+          expect(matches[0]?.text).toBe(`${"x".repeat(2_000)}...`)
+          expect(matches[0]?.submatches).toEqual([{ text: "needle", start: 80_000, end: 80_006 }])
+          expect(matches[1]).toMatchObject({ line: 2, offset: 80_007, text: "needle\n" })
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("bounds dense and oversized submatches without dropping matching lines", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "dense.txt"), `${"needle ".repeat(2_000)}\n`))
+          yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "wide.txt"), `${"x".repeat(80_000)}\n`))
+          const ripgrep = yield* Ripgrep.Service
+          const dense = yield* ripgrep.grep({ cwd: tmp.path, file: "dense.txt", pattern: "needle", limit: 10 })
+          expect(dense).toHaveLength(1)
+          expect(dense[0]?.submatches).toHaveLength(100)
+          expect(dense[0]?.text.length).toBeLessThanOrEqual(2_003)
+          const wide = yield* ripgrep.grep({ cwd: tmp.path, file: "wide.txt", pattern: "x+", limit: 10 })
+          expect(wide).toHaveLength(1)
+          expect(wide[0]?.submatches).toEqual([{ text: `${"x".repeat(2_000)}...`, start: 0, end: 80_000 }])
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
 })

@@ -155,6 +155,7 @@ describe("tool.grep", () => {
       const test = yield* TestInstance
       const file = path.join(test.directory, "test.txt")
       yield* Effect.promise(() => Bun.write(file, "line1\nline2\nline3"))
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "sibling.txt"), "line2 in sibling"))
       const info = yield* GrepTool
       const grep = yield* info.init()
       const result = yield* grep.execute(
@@ -167,6 +168,51 @@ describe("tool.grep", () => {
       expect(result.metadata.matches).toBe(1)
       expect(result.output).toContain(file)
       expect(result.output).toContain("Line 2: line2")
+      expect(result.output).not.toContain("sibling")
+    }),
+  )
+
+  it.instance("does not search siblings when the requested file is missing", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "sibling.txt"), "needle"))
+      const info = yield* GrepTool
+      const grep = yield* info.init()
+      const file = path.join(test.directory, "missing.txt")
+      const result = yield* grep.execute({ pattern: "needle", path: file }, ctx).pipe(Effect.exit)
+      expect(result.toString()).toContain(`File or directory not found or inaccessible: ${file}`)
+    }),
+  )
+
+  it.instance("keeps an exact symlink file scoped and reports its requested name", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return
+      const test = yield* TestInstance
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "actual.txt"), "needle"))
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "sibling.txt"), "needle"))
+      const alias = path.join(test.directory, "alias.txt")
+      yield* Effect.promise(() => fs.symlink(path.join(test.directory, "actual.txt"), alias))
+      const info = yield* GrepTool
+      const grep = yield* info.init()
+      const result = yield* grep.execute({ pattern: "needle", path: "alias.txt" }, ctx)
+      expect(result.metadata.matches).toBe(1)
+      expect(result.output).toContain(alias)
+      expect(result.output).not.toContain("actual.txt")
+      expect(result.output).not.toContain("sibling.txt")
+    }),
+  )
+
+  it.instance("returns bounded long-line previews and subsequent matches", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const file = path.join(test.directory, "generated.txt")
+      yield* Effect.promise(() => Bun.write(file, `needle${"x".repeat(80_000)}\nneedle on next line\n`))
+      const info = yield* GrepTool
+      const grep = yield* info.init()
+      const result = yield* grep.execute({ pattern: "needle", path: file }, ctx)
+      expect(result.metadata.matches).toBe(2)
+      expect(result.output).toContain("Line 2: needle on next line")
+      expect(result.output.length).toBeLessThan(3_000)
     }),
   )
 
