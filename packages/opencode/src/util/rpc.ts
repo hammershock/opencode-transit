@@ -51,7 +51,7 @@ export function client<T extends Definition>(target: Worker) {
   }
   const failed = () => dispose(new Error("Worker RPC failed"))
   const stopped = () => dispose(new Error("Worker RPC closed"))
-  const receive = (evt: MessageEvent<string>) => {
+  const receive = async (evt: MessageEvent<string>) => {
     const parsed: Response = JSON.parse(evt.data)
     if (parsed.type === "rpc.event") {
       for (const handler of listeners.get(parsed.event) ?? []) handler(parsed.data)

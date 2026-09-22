@@ -2,6 +2,7 @@ import { Rpc } from "../../../src/util/rpc"
 
 // Mirrors the TUI worker: rejected handlers must still return an RPC failure.
 process.on("unhandledRejection", () => {})
+process.on("uncaughtException", () => {})
 
 export const rpc = {
   echo(input: string) {
