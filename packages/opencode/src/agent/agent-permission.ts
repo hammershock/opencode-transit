@@ -61,10 +61,7 @@ export function resolve(
   return Effect.gen(function* () {
     const skills = yield* skillDirs
     const references = yield* referenceDirs
-    return [
-      ...skills.map((dir) => path.join(dir, "*")),
-      ...references.map((dir) => path.join(dir, "*")),
-    ]
+    return [...skills.map((dir) => path.join(dir, "*")), ...references.map((dir) => path.join(dir, "*"))]
   })
 }
 
@@ -76,10 +73,9 @@ export interface SessionPermissionInput {
 }
 
 /**
- * Resolve the full session permission for a new Session: the caller's existing
- * rules plus the location-scoped `external_directory` whitelist resolved from
- * `directory`/`target`. The whitelist is appended after the caller's rules so
- * `Permission.evaluate`'s last-match semantics let it take effect.
+ * Resolve path defaults for a new Session before applying the caller's explicit
+ * rules. Permission evaluation is last-match-wins, so generated defaults must
+ * precede explicit overrides, including deny and ask rules.
  */
 export function resolveSessionPermission(
   locations: LayerMap.LayerMap<Location.Ref, LocationServices, LocationError>,
@@ -94,12 +90,12 @@ export function resolveSessionPermission(
       withReferences: input.withReferences,
     })
     return [
-      ...(input.permission ?? []),
       ...whitelist.map((pattern) => ({
         permission: "external_directory" as const,
         pattern,
         action: "allow" as const,
       })),
+      ...(input.permission ?? []),
     ]
   })
 }
