@@ -24,6 +24,27 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_policy_activation\` (
+          \`session_id\` text NOT NULL,
+          \`device_id\` text NOT NULL,
+          \`request_id\` text NOT NULL,
+          \`location\` text NOT NULL,
+          CONSTRAINT \`session_policy_activation_pk\` PRIMARY KEY(\`session_id\`, \`device_id\`, \`request_id\`),
+          CONSTRAINT \`fk_session_policy_activation_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`session_policy_review\` (
+          \`session_id\` text NOT NULL,
+          \`device_id\` text NOT NULL,
+          \`request_id\` text NOT NULL,
+          \`seq\` integer NOT NULL,
+          \`data\` text NOT NULL,
+          CONSTRAINT \`session_policy_review_pk\` PRIMARY KEY(\`session_id\`, \`device_id\`, \`request_id\`),
+          CONSTRAINT \`fk_session_policy_review_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`account_state\` (
           \`id\` integer PRIMARY KEY,
           \`active_account_id\` text,
@@ -221,6 +242,7 @@ export default {
           \`tokens_cache_write\` integer DEFAULT 0 NOT NULL,
           \`revert\` text,
           \`permission\` text,
+          \`permission_revision\` integer DEFAULT 0 NOT NULL,
           \`subagent_access\` text,
           \`agent\` text,
           \`model\` text,

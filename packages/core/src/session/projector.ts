@@ -17,6 +17,8 @@ import { SessionSchema } from "./schema"
 import { WorkspaceV2 } from "../workspace"
 import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
 import { AbsolutePath, type DeepMutable } from "../schema"
+import { SessionPolicy } from "@opencode-ai/schema/session-policy"
+import { SessionPolicyStore } from "./policy"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -220,6 +222,7 @@ const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const events = yield* EventV2.Service
     const { db } = yield* Database.Service
+    yield* events.project(SessionPolicy.Reviewed, (event) => SessionPolicyStore.project(db, event))
     yield* events.project(SessionV1.Event.Created, (event) =>
       Effect.gen(function* () {
         // A synced Session may arrive before this device has ever resolved its
@@ -264,12 +267,29 @@ const layer = Layer.effectDiscard(
         revert: _revert,
         ...metadata
       } = sessionRow(event.data.info)
-      return db
-        .update(SessionTable)
-        .set(metadata)
-        .where(eq(SessionTable.id, event.data.sessionID))
-        .run()
-        .pipe(Effect.orDie)
+      return Effect.gen(function* () {
+        const previous = yield* metadata.permission === undefined
+          ? Effect.succeed(undefined)
+          : db
+              .select({ permission: SessionTable.permission })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, event.data.sessionID))
+              .get()
+              .pipe(Effect.orDie)
+        const changed =
+          previous &&
+          SessionPolicyStore.digest(SessionPolicyStore.legacyRules(previous.permission)) !==
+            SessionPolicyStore.digest(SessionPolicyStore.legacyRules(metadata.permission))
+        yield* db
+          .update(SessionTable)
+          .set({
+            ...metadata,
+            ...(changed ? { permission_revision: sql`${SessionTable.permission_revision} + 1` } : {}),
+          })
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .run()
+          .pipe(Effect.orDie)
+      })
     })
     // Legacy revert is persisted separately from session metadata so a metadata
     // update can never clear a staged revert boundary.
@@ -287,6 +307,16 @@ const layer = Layer.effectDiscard(
     )
     yield* events.project(SessionEvent.Moved, (event) =>
       Effect.gen(function* () {
+        const previous = yield* db
+          .select()
+          .from(SessionTable)
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        const changed =
+          previous &&
+          SessionPolicyStore.locationKey(SessionPolicyStore.locationFromRow(previous)) !==
+            SessionPolicyStore.locationKey(event.data.location)
         yield* db
           .update(SessionTable)
           .set({
@@ -296,6 +326,7 @@ const layer = Layer.effectDiscard(
             path: event.data.subdirectory,
             workspace_id: event.data.location.workspaceID ? WorkspaceV2.ID.make(event.data.location.workspaceID) : null,
             time_updated: DateTime.toEpochMillis(event.data.timestamp),
+            ...(changed ? { permission_revision: sql`${SessionTable.permission_revision} + 1` } : {}),
           })
           .where(eq(SessionTable.id, event.data.sessionID))
           .run()
