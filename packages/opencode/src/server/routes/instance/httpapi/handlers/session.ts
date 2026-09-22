@@ -245,7 +245,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload?: typeof ForkPayload.Type
     }) {
       return yield* SessionError.mapStorageNotFound(
-        session.fork({
+        shareSvc.fork({
           sessionID: ctx.params.sessionID,
           messageID: ctx.payload?.messageID,
         }),

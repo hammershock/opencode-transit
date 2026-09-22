@@ -419,6 +419,23 @@ describe("Session", () => {
     }),
   )
 
+  it.instance("forwards the provided permission on fork", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const created = yield* Effect.acquireRelease(session.create({}), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      const permission = [
+        { permission: "external_directory" as const, pattern: "/tmp/skill/*", action: "allow" as const },
+      ]
+      const fork = yield* Effect.acquireRelease(
+        session.fork({ sessionID: created.id, permission }),
+        (info) => session.remove(info.id).pipe(Effect.ignore),
+      )
+      expect(fork.permission).toEqual(permission)
+    }),
+  )
+
   it.instance("forks the chronological prefix across mixed message ID ordering", () =>
     Effect.gen(function* () {
       const session = yield* SessionNs.Service

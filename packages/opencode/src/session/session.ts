@@ -446,7 +446,7 @@ export interface Interface {
     target?: Location.Target
     lastKnownTargetName?: string
   }) => Effect.Effect<Info>
-  readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info, NotFound>
+  readonly fork: (input: { sessionID: SessionID; messageID?: MessageID; permission?: PermissionV1.Ruleset }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
@@ -746,7 +746,11 @@ const layer: Layer.Layer<
       })
     })
 
-    const fork = Effect.fn("Session.fork")(function* (input: { sessionID: SessionID; messageID?: MessageID }) {
+    const fork = Effect.fn("Session.fork")(function* (input: {
+      sessionID: SessionID
+      messageID?: MessageID
+      permission?: PermissionV1.Ruleset
+    }) {
       const ctx = yield* InstanceState.context
       const original = yield* get(input.sessionID)
       const title = getForkedTitle(original.title)
@@ -757,6 +761,7 @@ const layer: Layer.Layer<
         title,
         metadata: structuredClone(original.metadata),
         subagentAccess: structuredClone(original.subagentAccess),
+        permission: input.permission ? [...input.permission] : undefined,
       })
       const msgs = yield* messages({ sessionID: input.sessionID })
       const idMap = new Map<string, MessageID>()
