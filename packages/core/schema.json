@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "48790c09-44d8-495f-b60e-7ed32d62d487",
+  "id": "dbb3f5ac-6f1e-4271-84b2-40e2e08785ad",
   "prevIds": [
-    "72196b48-dd8f-405e-9b79-a7e1c306965b"
+    "48790c09-44d8-495f-b60e-7ed32d62d487"
   ],
   "ddl": [
     {
@@ -12,6 +12,14 @@
     },
     {
       "name": "data_migration",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_policy_activation",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_policy_review",
       "entityType": "tables"
     },
     {
@@ -185,6 +193,96 @@
       "name": "time_completed",
       "entityType": "columns",
       "table": "data_migration"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_policy_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "device_id",
+      "entityType": "columns",
+      "table": "session_policy_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "session_policy_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "location",
+      "entityType": "columns",
+      "table": "session_policy_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_policy_review"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "device_id",
+      "entityType": "columns",
+      "table": "session_policy_review"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "session_policy_review"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "seq",
+      "entityType": "columns",
+      "table": "session_policy_review"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data",
+      "entityType": "columns",
+      "table": "session_policy_review"
     },
     {
       "type": "integer",
@@ -1427,6 +1525,16 @@
       "table": "session"
     },
     {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "permission_revision",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
       "type": "text",
       "notNull": false,
       "autoincrement": false,
@@ -1643,6 +1751,36 @@
     },
     {
       "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_policy_activation_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_policy_activation"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_policy_review_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_policy_review"
+    },
+    {
+      "columns": [
         "active_account_id"
       ],
       "tableTo": "account",
@@ -1835,6 +1973,28 @@
       "name": "fk_session_share_session_id_session_id_fk",
       "entityType": "fks",
       "table": "session_share"
+    },
+    {
+      "columns": [
+        "session_id",
+        "device_id",
+        "request_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_policy_activation_pk",
+      "entityType": "pks",
+      "table": "session_policy_activation"
+    },
+    {
+      "columns": [
+        "session_id",
+        "device_id",
+        "request_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_policy_review_pk",
+      "entityType": "pks",
+      "table": "session_policy_review"
     },
     {
       "columns": [

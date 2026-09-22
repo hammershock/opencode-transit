@@ -3,6 +3,7 @@ export * as DurableEventManifest from "./durable-event-manifest"
 import { Event } from "./event"
 import { SessionEvent } from "./session-event"
 import { SessionV1 } from "./session-v1"
+import { SessionPolicy } from "./session-policy"
 import { Schema } from "effect"
 
 export const SessionDurable = {
@@ -11,6 +12,7 @@ export const SessionDurable = {
 } as const
 
 const SessionSyncDefinitions = Event.inventory(
+  SessionPolicy.Reviewed,
   ...SessionV1.Event.Definitions.filter((definition) => definition.durable !== undefined),
   ...SessionEvent.DurableDefinitions,
 )
