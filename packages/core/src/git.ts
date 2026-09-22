@@ -172,14 +172,18 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/GitV2") {}
 
+// Legacy snapshots and Location-scoped Git share the same on-disk index.
+// Keep their compound index operations mutually exclusive across service layers.
+const repositoryLocks = KeyedMutex.makeUnsafe<string>()
+export const withRepositoryLock = repositoryLocks.withLock
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
     const proc = yield* AppProcess.Service
-    const locks = KeyedMutex.makeUnsafe<string>()
     const locked = <A, E, R>(repository: Repository, effect: Effect.Effect<A, E, R>) =>
-      locks.withLock(repository.gitDirectory)(effect)
+      withRepositoryLock(repository.gitDirectory)(effect)
 
     const discover = Effect.fn("Git.repo.discover")(function* (input: AbsolutePath) {
       const dotgit = yield* fs.up({ targets: [".git"], start: input }).pipe(

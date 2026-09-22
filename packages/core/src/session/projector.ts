@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector"
 
-import { and, desc, eq, gt, gte, or, sql } from "drizzle-orm"
+import { and, desc, eq, gt, gte, inArray, isNull, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -13,6 +13,7 @@ import { ProjectV2 } from "../project"
 import { SessionMessage } from "./message"
 import { SessionMessageUpdater } from "./message-updater"
 import { SessionInput } from "./input"
+import { RevertHistory } from "./revert-history"
 import { SessionSchema } from "./schema"
 import { WorkspaceV2 } from "../workspace"
 import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
@@ -221,7 +222,8 @@ function insertMessage(db: DatabaseService, event: SessionEvent.Event, message: 
 const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const events = yield* EventV2.Service
-    const { db } = yield* Database.Service
+    const database = yield* Database.Service
+    const db = database.db
     yield* events.project(SessionPolicy.Reviewed, (event) => SessionPolicyStore.project(db, event))
     yield* events.project(SessionV1.Event.Created, (event) =>
       Effect.gen(function* () {
@@ -512,31 +514,79 @@ const layer = Layer.effectDiscard(
     )
     yield* events.project(SessionEvent.RevertEvent.Committed, (event) =>
       Effect.gen(function* () {
-        const boundary = yield* db
-          .select({ seq: SessionMessageTable.seq })
-          .from(SessionMessageTable)
-          .where(
-            and(
-              eq(SessionMessageTable.session_id, event.data.sessionID),
-              eq(SessionMessageTable.id, event.data.messageID),
-            ),
-          )
+        const boundary = yield* RevertHistory.boundary(event.data.sessionID, event.data.messageID).pipe(
+          Effect.provideService(Database.Service, database),
+        )
+        if (!boundary) return yield* Effect.die(`Revert boundary message not found: ${event.data.messageID}`)
+        const session = yield* db
+          .select({ revert: SessionTable.revert })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, event.data.sessionID))
           .get()
           .pipe(Effect.orDie)
-        if (!boundary) return yield* Effect.die(`Revert boundary message not found: ${event.data.messageID}`)
-        yield* db
-          .delete(SessionMessageTable)
-          .where(
-            and(eq(SessionMessageTable.session_id, event.data.sessionID), gte(SessionMessageTable.seq, boundary.seq)),
-          )
-          .run()
-          .pipe(Effect.orDie)
+        const partID = session?.revert?.messageID === event.data.messageID ? session.revert.partID : undefined
+        const legacy = boundary.messages.flatMap((item) =>
+          item.kind === "legacy" && !(partID && String(item.row.id) === event.data.messageID) ? [item.row.id] : [],
+        )
+        const canonical = boundary.messages.flatMap((item) => (item.kind === "canonical" ? [item.row.id] : []))
+        if (partID && boundary.message.kind === "legacy") {
+          const parts = yield* db
+            .select()
+            .from(PartTable)
+            .where(
+              and(eq(PartTable.message_id, boundary.message.row.id), gte(PartTable.id, SessionV1.PartID.make(partID))),
+            )
+            .all()
+            .pipe(Effect.orDie)
+          for (const part of parts) {
+            const previous = usage(part.data)
+            if (previous) yield* applyUsage(db, event.data.sessionID, previous, -1)
+          }
+          if (parts.length)
+            yield* db
+              .delete(PartTable)
+              .where(
+                inArray(
+                  PartTable.id,
+                  parts.map((part) => part.id),
+                ),
+              )
+              .run()
+              .pipe(Effect.orDie)
+        }
+        if (legacy.length) {
+          const parts = yield* db
+            .select()
+            .from(PartTable)
+            .where(inArray(PartTable.message_id, legacy))
+            .all()
+            .pipe(Effect.orDie)
+          for (const part of parts) {
+            const previous = usage(part.data)
+            if (previous) yield* applyUsage(db, event.data.sessionID, previous, -1)
+          }
+          yield* db.delete(MessageTable).where(inArray(MessageTable.id, legacy)).run().pipe(Effect.orDie)
+        }
+        if (canonical.length)
+          yield* db
+            .delete(SessionMessageTable)
+            .where(inArray(SessionMessageTable.id, canonical))
+            .run()
+            .pipe(Effect.orDie)
         yield* db
           .delete(SessionInputTable)
           .where(
             and(
               eq(SessionInputTable.session_id, event.data.sessionID),
-              or(gte(SessionInputTable.admitted_seq, boundary.seq), gte(SessionInputTable.promoted_seq, boundary.seq)),
+              or(
+                inArray(SessionInputTable.id, canonical),
+                and(
+                  isNull(SessionInputTable.promoted_seq),
+                  boundary.message.kind === "canonical"
+                    ? gte(SessionInputTable.admitted_seq, boundary.message.row.seq)
+                    : gte(SessionInputTable.time_created, boundary.message.row.time_created),
+                ),
+              ),
             ),
           )
           .run()

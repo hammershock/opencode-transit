@@ -35,6 +35,7 @@ export function DialogExperimentalCommands(props: { current?: string } = {}) {
   const kv = useKV()
   const sdk = useSDK()
   const toast = useToast()
+  const saved = () => toast.show({ message: "Saved. Restart OpenCode to apply to existing sessions.", variant: "info" })
   const [locationEnvironment, setLocationEnvironment] = createSignal<boolean>()
   const [subagentEconomics, setSubagentEconomics] = createSignal<boolean>()
   const [userShellCwd, setUserShellCwd] = createSignal<boolean>()
@@ -61,14 +62,14 @@ export function DialogExperimentalCommands(props: { current?: string } = {}) {
       value: "fork.subagent.economics",
       title: "Subagent economics",
       description: "Device setting · give the parent Agent local pricing and routing evidence at Session activation",
-      footer: subagentEconomics() === undefined ? "◐ checking" : subagentEconomics() ? "● enabled" : "○ disabled",
+      footer: subagentEconomics() === undefined ? "◐ checking" : subagentEconomics() ? "● saved on" : "○ saved off",
       category: "Experimental features",
     },
     {
       value: "fork.user-shell.cwd",
       title: "User Shell CWD continuity",
       description: "User setting · remember verified cwd until OpenCode exits",
-      footer: userShellCwd() === undefined ? "◐ checking" : userShellCwd() ? "● enabled" : "○ disabled",
+      footer: userShellCwd() === undefined ? "◐ checking" : userShellCwd() ? "● saved on" : "○ saved off",
       category: "Experimental features",
       disabled: userShellCwd() === undefined,
     },
@@ -76,7 +77,7 @@ export function DialogExperimentalCommands(props: { current?: string } = {}) {
       value: "fork.environment.location",
       title: "Location environment",
       description: "User setting · load target user and project .env files for Shell and Agent tools",
-      footer: locationEnvironment() === undefined ? "◐ checking" : locationEnvironment() ? "● enabled" : "○ disabled",
+      footer: locationEnvironment() === undefined ? "◐ checking" : locationEnvironment() ? "● saved on" : "○ saved off",
       category: "Experimental features",
       disabled: locationEnvironment() === undefined,
     },
@@ -100,6 +101,7 @@ export function DialogExperimentalCommands(props: { current?: string } = {}) {
                 await sdk.client.global.config.update({ config }, { throwOnError: true })
               })
                 .then(setSubagentEconomics)
+                .then(saved)
                 .catch(toast.error)
               return
             }
@@ -111,6 +113,7 @@ export function DialogExperimentalCommands(props: { current?: string } = {}) {
                 await sdk.client.global.config.update({ config }, { throwOnError: true })
               })
                 .then(setUserShellCwd)
+                .then(saved)
                 .catch(toast.error)
               return
             }
@@ -122,6 +125,7 @@ export function DialogExperimentalCommands(props: { current?: string } = {}) {
                 await sdk.client.global.config.update({ config }, { throwOnError: true })
               })
                 .then(setLocationEnvironment)
+                .then(saved)
                 .catch(toast.error)
               return
             }
