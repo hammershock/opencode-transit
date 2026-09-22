@@ -2,10 +2,11 @@ import { InstanceStore } from "@/project/instance-store"
 import { SessionID } from "@/session/schema"
 import { SubagentManager } from "@opencode-ai/server/subagent"
 import type { Location } from "@opencode-ai/core/location"
+import type { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { Effect, Layer } from "effect"
 import { Subagent } from "./subagent"
 
-type Located = { directory: string; target?: Location.Target }
+type Located = { directory: string; target?: Location.Target; workspaceID?: WorkspaceV2.ID }
 
 export const subagentManagerLayer = Layer.effect(
   SubagentManager.Service,
@@ -13,10 +14,7 @@ export const subagentManagerLayer = Layer.effect(
     const subagent = yield* Subagent.Service
     const instances = yield* InstanceStore.Service
     const provide = <A, E, R>(input: Located, effect: Effect.Effect<A, E, R>) =>
-      instances.provide(
-        { directory: input.directory, ...(input.target === undefined ? {} : { target: input.target }) },
-        effect,
-      )
+      instances.provide({ directory: input.directory, target: input.target, workspaceID: input.workspaceID }, effect)
     const mutation = <A>(
       input: Located,
       effect: Effect.Effect<A, Subagent.ConflictError | Subagent.NotFoundError | Subagent.ReadonlyError>,

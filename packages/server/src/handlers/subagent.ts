@@ -1,4 +1,5 @@
 import { Location } from "@opencode-ai/core/location"
+import type { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { SubagentMutationError } from "@opencode-ai/protocol/errors"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -12,11 +13,13 @@ export const SubagentHandler = HttpApiBuilder.group(Api, "server.subagent", (han
     const location = Effect.map(Location.Service, (location) => ({
       directory: location.directory,
       target: location.target,
+      workspaceID: location.workspaceID,
     }))
     const mutation = <A>(
       effect: (input: {
         directory: string
         target?: Location.Target
+        workspaceID?: WorkspaceV2.ID
       }) => Effect.Effect<A, SubagentManager.MutationFailure>,
     ) =>
       Effect.flatMap(location, effect).pipe(
@@ -37,6 +40,7 @@ export const SubagentHandler = HttpApiBuilder.group(Api, "server.subagent", (han
             manager.catalog({
               directory: location.directory,
               target: location.target,
+              workspaceID: location.workspaceID,
               sessionID: ctx.query.sessionID,
               parentAgentID: ctx.query.parentAgentID,
               includeInactive: ctx.query.includeInactive !== "false",
@@ -45,11 +49,7 @@ export const SubagentHandler = HttpApiBuilder.group(Api, "server.subagent", (han
         ),
       )
       .handle("subagent.definition.create", (ctx) =>
-        response(
-          mutation((location) =>
-            manager.create({ directory: location.directory, target: location.target, ...ctx.payload }),
-          ),
-        ),
+        response(mutation((location) => manager.create({ ...location, ...ctx.payload }))),
       )
       .handle("subagent.definition.update", (ctx) =>
         response(
@@ -57,6 +57,7 @@ export const SubagentHandler = HttpApiBuilder.group(Api, "server.subagent", (han
             manager.update({
               directory: location.directory,
               target: location.target,
+              workspaceID: location.workspaceID,
               ...ctx.payload,
               subagentID: ctx.params.subagentID,
             }),
@@ -69,6 +70,7 @@ export const SubagentHandler = HttpApiBuilder.group(Api, "server.subagent", (han
             manager.remove({
               directory: location.directory,
               target: location.target,
+              workspaceID: location.workspaceID,
               ...ctx.payload,
               subagentID: ctx.params.subagentID,
             }),
@@ -76,11 +78,7 @@ export const SubagentHandler = HttpApiBuilder.group(Api, "server.subagent", (han
         ),
       )
       .handle("subagent.access.update", (ctx) =>
-        response(
-          mutation((location) =>
-            manager.setAccess({ directory: location.directory, target: location.target, ...ctx.payload }),
-          ),
-        ),
+        response(mutation((location) => manager.setAccess({ ...location, ...ctx.payload }))),
       )
   }),
 )
