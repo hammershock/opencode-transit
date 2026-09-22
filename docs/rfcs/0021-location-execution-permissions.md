@@ -21,7 +21,7 @@ superseded-by: []
 
 ## 状态与范围
 
-**Draft，尚未授权 runtime 实现。** 设计任务为 [#509](https://github.com/hammershock/opencode-transit/issues/509)，背景为 [#481](https://github.com/hammershock/opencode-transit/issues/481)。本文提出权限状态归属和迁移方案；第六节的历史规则处理必须得到明确选择后才能接受。
+**Draft，尚未接受完整 runtime 契约。** 设计任务为 [#509](https://github.com/hammershock/opencode-transit/issues/509)，背景为 [#481](https://github.com/hammershock/opencode-transit/issues/481)。维护者已在本轮评审中选择第六节的**保守升级**，并授权合并优先级修复 [#508](https://github.com/hammershock/opencode-transit/pull/508)。本文据此补全迁移与恢复细节；该方向选择不替代完整 RFC 接受或生产数据修改授权。
 
 目标是让普通消息、结构化 Skill mention、主 Session 和子 Session 的工具执行使用同一权限语义，并使切换执行位置不会复制另一台机器的路径许可。它是指定 Target 委派的基础，不实现 RFC-0018 的 Task 参数，也不替代该 RFC 的接受流程。
 
@@ -77,7 +77,15 @@ superseded-by: []
 
 自动 defaults 不具有用户 override 身份。显式规则内部的 allow/ask/deny 顺序保持不变，不用“任何 deny 永远优先”的通用算法替代已有语义。saved approvals 不越过合并后的显式 deny。Task 父链/child-definition 的 hard-deny 约束按 RFC-0016 单独保留，不能靠追加自动 allow 消除。
 
-实现任务必须用冲突矩阵证明 Agent、Session、saved 与父链边界的结果，尤其覆盖 Session allow 与 child-definition deny 的冲突；若现有契约无法确定结果，先修订本文而不是在实现时决定。
+以下冲突结果作为提案的验收契约，不能由实现自行选择：
+
+- Location 自动 allow 与 Agent/Session 显式 deny 或 ask 冲突：显式规则生效。
+- 非 hard-deny 的普通显式规则：后层及同层后匹配规则生效，保留 last-match 语义。
+- Task admission 已捕获的父链 hard deny，或 child definition 对该资源的有效 deny：Session allow、自动 defaults 和 saved approval 都不能解除。
+- child definition 内部仍先执行其有序规则；不是只要历史数组曾出现 deny 就永久禁止。
+- saved allow 与合并后的有效显式 deny 冲突：deny；与普通 ask 冲突时，只有作用域有效的 saved approval 才可放行。
+
+本文保留 admission 时捕获父限制的边界，不增加持续扫描父 Session 的新执行控制器。跨 target 的路径限制解释由 RFC-0018 明确后才能交付跨位置继承。
 
 Catalog visibility 和执行授权仍是不同操作，但两者使用同一有效策略输入。隐藏工具不构成授权，展示 capabilities 也不授予权限。`/context` 可解释有效结果及非敏感来源，不输出凭据或原始配置全集。
 
@@ -87,7 +95,7 @@ Core 不依赖 opencode 包。共享策略读取不应迫使 current Schema 依�
 
 Skill catalog 的 source path 是 controller 发现结果，不能充当远端自动 allow。现有 Rexd `SkillPackageAccess.prepare` 已将 package snapshot materialize 到 target，返回实际 digest package path；复用这条传输路径。
 
-推荐仅为已成功 prepare、仍在有效生命周期中的精确 package 目录建立运行时 default，不授权整个 staging root。prepare 失败或 attachment 失效不得留下新增许可。built-in inline Skill 没有 package path 时不产生路径 default。
+推荐仅为已成功 prepare、仍在有效生命周期中的精确 package 目录建立运行时 default，不授权整个 staging root。default 的使用资格属于发起 prepare 的 Session 和实际 Location；共享物理 package 或 Location 服务不意味着另一 Session 自动获得许可。prepare 失败或 attachment 失效不得留下新增许可。built-in inline Skill 没有 package path 时不产生路径 default。
 
 这意味着“catalog 中存在 Skill”与“已经加载其 package”是不同状态；相较于自动放行 catalog 中所有 Skill 目录，这是需要接受的行为收紧。显式配置仍可表达用户确实需要的额外访问。
 
@@ -103,28 +111,74 @@ controller 配置上下文与 execution Location 必须显式区分。不能只�
 
 测试必须同时放入 local、Rexd A、Rexd B 的相同目录字符串，验证读取、权限、reload 和 disposal 互不串用。修复不应顺便扩大到 [#398](https://github.com/hammershock/opencode-transit/issues/398) 的全局事件协议改造。
 
-## 六、历史规则迁移：待决定
+## 六、历史规则迁移：保守升级
 
 #505 已写入的规则没有 provenance，自动 allow 与用户 allow 可能字节完全相同。不能从 path glob、数组位置或当前 Skill catalog 推断来源；旧 event history 也不能原地重写来假装从未保存过它们。
 
-可选策略：
+维护者已选择**保守升级**，不采用“所有历史规则都视作用户许可”的兼容优先方案。以下为该选择的具体契约提案。
 
-1. **保守升级（推荐）**：保留原始历史规则和已有显式拒绝；为缺少来源的旧 allow 标记待确认状态，在统一执行器中新启用它们之前要求一次明确的策略确认。未确认时使用现行配置、可验证的目的地 defaults 和常规询问流程，不自动扩大许可。确认结果形成新的版本化策略事件，旧 history 保持可回放。
-2. **兼容优先**：将所有历史 Session 规则都视为显式用户规则，在原绑定 Location 中继续生效。无需确认，但会把 #505 的自动 allow 永久提升为用户权限，且 Core 开始消费它们会改变实际执行授权。必须明确接受这个代价，不能称作行为不变。
+### 6.1 保留历史与限制
 
-两种策略都不授权批量修改生产数据，也不允许历史路径 allow 随跨 target resume/rebind 自动迁移。迁移状态、fork、离线同步、旧客户端写入与重放幂等性必须有独立测试；若无法识别来源设备或原绑定位置，则不得把未知位置解释为当前本机。
+原始 legacy rules 和 event history 不删除、不重排、不原地改写。读取旧 Session 时，根据有序原始规则计算稳定 digest，建立 migration view；不修改 transcript，也不为了迁移重新执行 provider turn。
 
-接受本文前需选定一个方案，并补全旧客户端与失败恢复契约。本文当前不宣布上述任一方案已被接受。
+对缺少可信来源的规则，allow 进入待确认集合；deny 和 ask 保留相对顺序，作为迁移期的 Session 限制参与解析。排除未知 allow 可能使早先的 deny 重新生效，这是保守升级的明确行为，不假称旧权限完全不变。
+
+未知 allow 本身既不授权也不额外禁止：当前配置、目的地 defaults 或有效 saved approval 已经允许的操作可以继续。没有其他许可时走现有工具询问流程；有效 deny 仍然拒绝。打开历史或发送消息不要求先通过一个全会话迁移弹窗，也不因迁移启动新的 Agent 回合。
+
+普通工具的 Allow once/Always 继续拥有原作用域，不自动确认整份历史策略。Agent、项目文件、同步事件或模型生成的回复不能代表用户完成策略确认。
+
+### 6.2 确认范围与状态
+
+提供独立、用户发起的 Session 权限复核动作，展示原始规则、实际绑定位置以及确认后的有效变化。用户可逐条接受未知 allow，或明确不保留它；提交结果是一份可预览的新显式策略，不能用“继续会话”隐式接受全部规则。
+
+确认至少绑定：Session ID、预期 policy revision、原始有序规则 digest、实际完整 Location 与 location revision，以及选择结果。未知/未解析 Location 不能被默认成 local 后确认。新策略区分非路径动作与位置绑定资源；改变 target 或 directory 时旧路径 allow 不自动适用。
+
+```text
+无 legacy rules → current
+存在未确认 legacy allow → pending
+pending + 提交完整选择且版本匹配 → reviewed
+pending + 取消复核 → pending（原状态不变）
+reviewed + legacy rules 或 Location 发生变化 → pending
+```
+
+没有 legacy allow 时，不引入无意义的确认；原有限制进入 current 规则视图。选择“不保留”只影响新的有效策略，原始历史仍可审计。相同版本和位置的已完成确认不会每次进入 Session 重新询问。
+
+### 6.3 并发、幂等与失败恢复
+
+复核提交使用请求幂等键及 compare-and-swap；检查规则 digest、policy revision 和 location revision 后，将确认事件与策略投影原子提交。任何一项过期都返回 conflict，不接受旧面板覆盖新限制。与 rebind、删除及策略写入使用同一 Session mutation 序列化边界。
+
+提交前取消、校验失败、数据库失败或进程退出不激活任何选中的 allow。事件与投影提交成功但客户端未收到响应时，完全相同的请求重试返回原结果；同一幂等键不同内容返回 conflict。恢复和同步重放不得产生重复确认、部分许可或自动工具执行。
+
+解析到损坏或未知版本的 policy 数据时，执行返回可诊断的 policy-unavailable 错误，不退回忽略旧 deny 的默认规则。历史读取保持可用。实现必须有提交前失败、提交后丢响应、重启与竞争测试，不能仅凭 UI 状态认为授权已经生效。
+
+### 6.4 旧客户端写入
+
+新的 server 在 legacy Session permission 写入口也维护上述版本和 digest。与已确认 snapshot 完全相同的写入不使确认失效；内容不同的未标记写入产生新的待复核版本，其 deny/ask 立即按限制使用，allow 不因来自旧客户端而获得可信来源。
+
+新的、明确用户确认的权限编辑必须使用带 revision 与来源的 current workflow。不能把任意 legacy API 请求标记为“用户已确认”。同一策略的两个并发写入只能有一个版本胜出。
+
+旧 server 无法执行本契约；保证只覆盖升级后的执行端。回退旧二进制不等于安全回滚策略语义，发布说明应明确此边界。旧 server 产生的新规则在升级端重放后仍按未知来源处理。
+
+### 6.5 Fork、位置变化与同步
+
+Fork 保留原始策略来源和选择记录作为历史依据，但新 Session 不自动继承未知 allow 的确认资格；对该 child 重新建立 migration view。Task 已知来源的父链限制仍按 admission 契约继承，不能被这条 fork 规则清除。
+
+确认事件可作为 Session 的版本化事实同步，但**另一设备收到确认事件不等于获得本机执行授权**。实际激活资格绑定确认设备和该设备解析后的完整 Location；同步数据只携带现有可移植位置身份和必要的非敏感确认来源，不携带设备本地 target ID、SSH 配置或凭据。
+
+接收设备、重新绑定位置或无法验证原位置的 Session 保留确认记录用于解释，并在执行侧保持 pending；不能靠目录字符串相同、portable label 相同或从同步 history 读到 allow 自动激活。完整 Location 匹配时，本机重启可以恢复已提交的确认，而不是再次要求相同确认。
+
+策略确认与 sync 顺序无关地收敛：旧规则 digest 与确认 snapshot 不一致时，确认保持历史事实但不适用于新版本；离线确认、冲突写入、重复投递都不得让过期 allow 复活。
+
+这项设计不授权对生产数据库执行清理脚本。上线迁移必须可解释、可回放，历史保留与新执行策略切换在同一验收矩阵中验证。
 
 ## 七、实施与验收
 
 接受后按可独立审查的任务交付，GitHub issues 负责实时状态：
 
-1. 明确历史迁移和 current policy read model；覆盖 provenance、版本和重放。不得直接读取旧 allow 后立即启用。
-2. 实现共享 effective-policy 解析，接入 Core leaf 与 legacy adapter。用两个创建入口和两个 prompt 入口证明相同结果。
-3. 将路径 defaults 迁到 Location/runtime owner，移除新 Session 创建时的 baking；接入 Skill prepare/release 与 reference 生命周期。
-4. 关闭 execution-sensitive Instance/cache 身份缺口，验证同路径多 target、rebind、reload 和 dispose。
-5. 更新 `/context` 与 capability 消费者，再推进已接受的 destination Task 契约。不会把全部 upstream V2 迁移设为前提。
+1. [#512](https://github.com/hammershock/opencode-transit/issues/512)：历史 migration view 与 current policy read model，覆盖 provenance、版本和重放。基础层不启用 execution cutover，不直接读取旧 allow 后立即放行。
+2. [#513](https://github.com/hammershock/opencode-transit/issues/513)：独立关闭 execution-sensitive Instance/cache 身份缺口，验证同路径多 target、reload 和 dispose；不依赖 #512 的实现，先完成 controller/execution 状态归属清单。
+3. [#514](https://github.com/hammershock/opencode-transit/issues/514)：消费 #512/#513，完整交付用户复核 workflow 与 Core/legacy effective-policy 一致性。包括 Session+Location 派生路径生命周期、移除新 baking、冲突 UI、两个创建入口和两个 prompt 入口的验证。不能先启用缺少复核/恢复入口的半套迁移。
+4. 同步更新 `/context` 与 capability 消费者，再推进已接受的 destination Task 契约。不会把全部 upstream V2 迁移设为前提。目的地参数仍由 RFC-0018 和 [#466](https://github.com/hammershock/opencode-transit/issues/466) 跟踪。
 
 每个实现 issue 明确依赖；共享文件一次只有一个 active owner。正在进行的 leaf-tool 修复 [#507](https://github.com/hammershock/opencode-transit/issues/507) 不应被本设计改动混入。
 
@@ -135,6 +189,7 @@ controller 配置上下文与 execution Location 必须显式区分。不能只�
 - Skill prepare 成功/失败/release，reference reload 和 target 离线不遗留错误许可。
 - 三个 target 同路径不串用；child 目的地不同，parent 的环境和路径 allow 不进入 child。
 - 新派生路径不出现在 raw Session/sync/export；旧记录保留且迁移可解释、幂等、失败不半应用。
+- 迁移取消、逐条接受/不保留、过期 revision、旧客户端更改、fork、提交后丢响应及 sync 乱序均覆盖；其他设备不能自动激活收到的确认。
 - 精确提交 clean Mac 候选与真实 Mac → Rexd workflow；改变 sync/迁移时增加实际双设备验证。未测试平台明确记录。
 
 文档阶段只进行元数据、链接和格式检查。不会安装二进制、修改已运行 Session，也不会用本文替代真实工作流验收。
