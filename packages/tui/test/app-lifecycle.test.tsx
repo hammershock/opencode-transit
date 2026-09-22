@@ -2012,3 +2012,105 @@ test("an open Sessions dialog refreshes when another device projects a Session",
     mock.restore()
   }
 })
+
+test("event subscriber failure preserves production command palette rendering and search", async () => {
+  let api: TuiPluginApi | undefined
+  const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
+  const core = await import("@opentui/core")
+  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  const events = createEventSource()
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/dummy/activate") return json({ data: { status: "unchanged", diagnostics: [] } })
+    if (url.pathname === "/api/target")
+      return json({ path: "/tmp/opencode/targets.jsonc", revision: "test", targets: [], diagnostics: [], valid: true })
+    if (url.pathname === "/config/providers")
+      return json({
+        providers: [{ id: "test", name: "Test", source: "custom", env: [], options: {}, models: {} }],
+        default: {},
+      })
+    if (url.pathname === "/global/config") return json({ experimental: { subagent_economics: false } })
+    if (url.pathname === "/session/dummy")
+      return json({
+        id: "dummy",
+        title: "PromptRef integration",
+        slug: "dummy",
+        projectID: "project",
+        directory,
+        version: "0.0.0-test",
+        time: { created: 0, updated: 0 },
+      })
+    if (url.pathname === "/api/session/dummy/target-resolution")
+      return json({ status: "resolved", location: { directory } })
+    if (url.pathname === "/session")
+      return json([
+        {
+          id: "dummy",
+          title: "PromptRef integration",
+          slug: "dummy",
+          projectID: "project",
+          directory,
+          version: "0.0.0-test",
+          time: { created: 0, updated: 0 },
+        },
+      ])
+  })
+  let started!: () => void
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
+  })
+
+  try {
+    const { run } = await import("../src/app")
+    const task = Effect.runPromise(
+      run({
+        url: "http://test",
+        directory,
+        config: createTuiResolvedConfig({ plugin_enabled: {} }),
+        fetch: calls.fetch,
+        events: events.source,
+        args: { continue: true },
+        pluginHost: {
+          async start(input) {
+            api = input.api
+            started()
+          },
+          async dispose() {},
+        },
+      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+    )
+
+    await ready
+    await setup.waitForVisualIdle()
+    {
+      const off = api!.event.on("session.status", () => {
+        throw new Error("fixture event subscriber failed")
+      })
+      try {
+        events.emit({
+          directory,
+          payload: {
+            id: "event-fault",
+            type: "session.status",
+            properties: { sessionID: "dummy", status: { type: "busy" } },
+          },
+        })
+      } catch {}
+      off()
+      await setup.waitForVisualIdle()
+    }
+    setup.mockInput.pressKey("home")
+    setup.mockInput.pressKey("p", { ctrl: true })
+    await setup.waitForVisualIdle()
+
+    expect(setup.captureCharFrame()).toContain("Commands")
+    const editor = await waitForEditor(setup)
+    "Subagent economics".split("").forEach((key) => setup.mockInput.pressKey(key))
+    await waitForFrame(setup, "Configure device-local pricing")
+    expect(editor.plainText).toBe("Subagent economics")
+    process.emit("SIGHUP")
+    await task
+  } finally {
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    mock.restore()
+  }
+})

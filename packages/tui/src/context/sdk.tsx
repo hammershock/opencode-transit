@@ -86,7 +86,19 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     const handlers = new Set<(event: GlobalEvent) => void>()
     const emitter = {
       emit(_type: "event", event: GlobalEvent) {
-        for (const handler of handlers) handler(event)
+        for (const handler of handlers) {
+          try {
+            handler(event)
+          } catch (error) {
+            // Escaping batch() discards queued effects while leaving them stale,
+            // so later writes may never refresh the UI. Contain faults here.
+            console.error("TUI event subscriber failed", {
+              type: event.payload.type,
+              name: error instanceof Error ? error.name : typeof error,
+              stack: error instanceof Error ? error.stack?.split("\n").filter((line) => /^\s+at /.test(line)) : [],
+            })
+          }
+        }
       },
       on(_type: "event", handler: (event: GlobalEvent) => void) {
         handlers.add(handler)
