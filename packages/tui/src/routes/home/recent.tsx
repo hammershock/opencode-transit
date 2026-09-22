@@ -15,6 +15,7 @@ import { validateDestination } from "./target-workflow"
 
 export function useRecentLocations(targets: () => { targets: readonly { id: string; name: string }[] } | undefined) {
   const sdk = useSDK()
+  const paths = useTuiPaths()
   const destination = useHomeSessionDestination()!
   const dialog = useDialog()
   const toast = useToast()
@@ -111,12 +112,12 @@ export function useRecentLocations(targets: () => { targets: readonly { id: stri
         locked={pending() !== undefined}
         options={rows().map((row) => ({
           title: `${row.target.type === "local" ? "local" : row.target.name} · ${row.directory}`,
+          inspectionTitle: `${row.target.type === "local" ? "local" : row.target.name} · ${row.target.type === "local" ? abbreviateHome(row.directory, paths.home) : row.directory}`,
           value: row.key,
           truncateTitle: true,
           inspectTitle: true,
           footer: pending() === row.key ? "◐ checking" : selected() === row.key ? "● selected" : undefined,
           footerWidth: 10,
-          details: [`Target: ${row.target.type === "local" ? "local" : row.target.name}`, row.directory],
         }))}
         emptyView={
           <text fg={theme.textMuted}>
@@ -163,7 +164,7 @@ export function RecentLocations(props: { recent: ReturnType<typeof useRecentLoca
     const timer = setInterval(() => setOffset((value) => value + 1), 300)
     onCleanup(() => clearInterval(timer))
   })
-  const count = () => (dimensions().height < 28 ? 2 : 3)
+  const count = () => (dimensions().height < 26 ? 1 : dimensions().height < 30 ? 2 : 3)
   const width = () => Math.max(1, Math.min(props.width, dimensions().width - 4))
   const targetWidth = () => Math.min(16, Math.max(5, Math.floor(width() / 4)))
   const directoryWidth = () => Math.max(0, width() - targetWidth() - 14)
