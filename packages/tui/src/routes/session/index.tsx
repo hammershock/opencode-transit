@@ -97,7 +97,12 @@ import {
 import { reportOverrideDiagnostic } from "../../command-toolkit/experimental-settings"
 import { COMMAND_RESTRICTIONS_KEY, createCommandHost, normalizeCommandRestrictions } from "../../command-toolkit/host"
 import { environmentCommands, type EnvironmentCommandContext } from "../../command-toolkit/environment"
-import { targetCommand, targetListCommand, type TargetCommandContext, type TargetListCommandContext } from "../../command-toolkit/target"
+import {
+  targetCommand,
+  targetListCommand,
+  type TargetCommandContext,
+  type TargetListCommandContext,
+} from "../../command-toolkit/target"
 import { sessionControlCommands, type SessionControlCommandContext } from "../../command-toolkit/session-controls"
 import { approvalModeCommand, type ApprovalModeCommandContext } from "../../command-toolkit/approval-mode"
 import { useTargetManager } from "../../component/target-manager"
@@ -334,17 +339,27 @@ export function Session() {
         ),
     ),
   )
-  const revertInfo = createMemo(() => data.session.get(route.sessionID)?.revert ?? session()?.revert)
+  const revertInfo = createMemo(() => {
+    const current = data.session.get(route.sessionID)
+    return current ? current.revert : session()?.revert
+  })
+  let revertTask = Promise.resolve()
+  const [revertPending, setRevertPending] = createSignal(0)
+  const changeRevert = (run: () => Promise<void>) => {
+    const sessionID = route.sessionID
+    setRevertPending((count) => count + 1)
+    const next = revertTask
+      .then(() => (route.sessionID === sessionID ? run() : undefined))
+      .finally(() => setRevertPending((count) => count - 1))
+    revertTask = next.catch(() => undefined)
+    return next
+  }
   const messagesBeforeRevert = () => {
     const messageID = revertInfo()?.messageID
     if (!messageID) return messages()
     const index = messages().findIndex((message) => message.id === messageID)
     if (index === -1) return messages()
-    const canonical = durableUsers().has(messageID)
-    // Legacy and canonical reverts are independent, so never move a staged boundary into the other store.
-    return messages()
-      .slice(0, index)
-      .filter((message) => message.role !== "user" || durableUsers().has(message.id) === canonical)
+    return messages().slice(0, index)
   }
   const foregroundTasks = createMemo(() =>
     sync.data.capabilities.experimentalBackgroundSubagents
@@ -1080,25 +1095,41 @@ export function Session() {
       slash: {
         name: "undo",
       },
-      run: async () => {
-        const message = messagesBeforeRevert().findLast((item) => item.role === "user")
-        if (!message) return
-        const canonical = durableUsers().get(message.id)
-        if (canonical) {
-          const current = data.session.get(route.sessionID)
-          if (!current) return
+      run: () =>
+        changeRevert(async () => {
+          const message = messagesBeforeRevert().findLast((item) => item.role === "user")
+          if (!message) return
+          const sessionID = route.sessionID
+          const canonical = durableUsers().get(message.id)
           try {
-            const catalog = await sdk.client.v2.skill.catalog(
-              {
-                location: {
-                  directory: current.location.directory,
-                  workspace: current.location.workspaceID,
-                  ...(current.location.target?.type === "rexd" ? { target: current.location.target.targetID } : {}),
-                },
-              },
-              { throwOnError: true },
-            )
-            const restored = restoreCanonicalPrompt(canonical, catalog.data.data.skills)
+            const current = data.session.get(sessionID)
+            const catalog =
+              canonical?.skills?.length && current
+                ? await sdk.client.v2.skill.catalog(
+                    {
+                      location: {
+                        directory: current.location.directory,
+                        workspace: current.location.workspaceID,
+                        ...(current.location.target?.type === "rexd"
+                          ? { target: current.location.target.targetID }
+                          : {}),
+                      },
+                    },
+                    { throwOnError: true },
+                  )
+                : undefined
+            const restored = canonical
+              ? restoreCanonicalPrompt(canonical, catalog?.data.data.skills ?? [])
+              : {
+                  prompt: messageParts(message.id).reduce(
+                    (agg, part) => {
+                      if (part.type === "text" && !part.synthetic) agg.input += part.text
+                      if (part.type === "file") agg.parts.push(part)
+                      return agg
+                    },
+                    { input: "", parts: [] as PromptInfo["parts"] },
+                  ),
+                }
             if ("missing" in restored) {
               toast.show({
                 message: `Cannot revert: $${restored.missing} is no longer available. Reload Skills and try again.`,
@@ -1106,44 +1137,23 @@ export function Session() {
               })
               return
             }
-            await sdk.client.v2.session.interrupt({ sessionID: route.sessionID }, { throwOnError: true })
-            await sdk.client.v2.session.revert.stage(
-              { sessionID: route.sessionID, messageID: canonical.id },
+            await Promise.all([
+              sdk.client.v2.session.interrupt({ sessionID }, { throwOnError: true }),
+              sdk.client.session.abort({ sessionID }, { throwOnError: true }),
+            ])
+            const staged = await sdk.client.v2.session.revert.stage(
+              { sessionID, messageID: message.id },
               { throwOnError: true },
             )
+            data.session.revert(sessionID, staged.data.data)
+            if (route.sessionID !== sessionID) return
             prompt?.set(restored.prompt)
             toBottom()
             dialog.clear()
           } catch (error) {
             toast.error(error)
           }
-          return
-        }
-        const status = sync.data.session_status?.[route.sessionID]
-        if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
-        void sdk.client.session
-          .revert({
-            sessionID: route.sessionID,
-            messageID: message.id,
-          })
-          .then(() => {
-            toBottom()
-          })
-        const parts = messageParts(message.id)
-        prompt?.set(
-          parts.reduce(
-            (agg, part) => {
-              if (part.type === "text") {
-                if (!part.synthetic) agg.input += part.text
-              }
-              if (part.type === "file") agg.parts.push(part)
-              return agg
-            },
-            { input: "", parts: [] as PromptInfo["parts"] },
-          ),
-        )
-        dialog.clear()
-      },
+        }),
     },
     {
       title: "Redo",
@@ -1154,44 +1164,34 @@ export function Session() {
       slash: {
         name: "redo",
       },
-      run: async () => {
-        dialog.clear()
-        const messageID = revertInfo()?.messageID
-        if (!messageID) return
-        const index = messages().findIndex((message) => message.id === messageID)
-        if (index === -1) return
-        const canonical = durableUsers().has(messageID)
-        const message = messages()
-          .slice(index + 1)
-          .find((message) => message.role === "user" && durableUsers().has(message.id) === canonical)
-        if (canonical) {
+      run: () =>
+        changeRevert(async () => {
+          dialog.clear()
+          const messageID = revertInfo()?.messageID
+          if (!messageID) return
+          const index = messages().findIndex((message) => message.id === messageID)
+          if (index === -1) return
+          const sessionID = route.sessionID
+          const message = messages()
+            .slice(index + 1)
+            .find((message) => message.role === "user")
           try {
             if (!message) {
-              await sdk.client.v2.session.revert.clear({ sessionID: route.sessionID }, { throwOnError: true })
-              prompt?.set({ input: "", parts: [] })
+              await sdk.client.v2.session.revert.clear({ sessionID }, { throwOnError: true })
+              data.session.revert(sessionID, undefined)
+              if (route.sessionID === sessionID) prompt?.set({ input: "", parts: [] })
               return
             }
-            await sdk.client.v2.session.revert.stage(
-              { sessionID: route.sessionID, messageID: message.id },
+            const staged = await sdk.client.v2.session.revert.stage(
+              { sessionID, messageID: message.id },
               { throwOnError: true },
             )
+            data.session.revert(sessionID, staged.data.data)
+            if (route.sessionID === sessionID) prompt?.set({ input: "", parts: [] })
           } catch (error) {
             toast.error(error)
           }
-          return
-        }
-        if (!message) {
-          await sdk.client.session.unrevert({
-            sessionID: route.sessionID,
-          })
-          prompt?.set({ input: "", parts: [] })
-          return
-        }
-        await sdk.client.session.revert({
-          sessionID: route.sessionID,
-          messageID: message.id,
-        })
-      },
+        }),
     },
     {
       title: sidebarVisible() ? "Hide sidebar" : "Show sidebar",
@@ -1933,7 +1933,7 @@ export function Session() {
                     <Prompt
                       visible={visible()}
                       ref={bind}
-                      disabled={disabled()}
+                      disabled={disabled() || revertPending() > 0}
                       readOnly={readOnly()}
                       commandHost={coreCommandHost()}
                       shellCompletionGeneration={shellCompletionGeneration()}

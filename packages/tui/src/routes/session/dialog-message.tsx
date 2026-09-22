@@ -59,11 +59,15 @@ export function DialogMessage(props: {
                   })
                   return
                 }
-                await sdk.client.v2.session.interrupt({ sessionID: props.sessionID }, { throwOnError: true })
-                await sdk.client.v2.session.revert.stage(
+                await Promise.all([
+                  sdk.client.v2.session.interrupt({ sessionID: props.sessionID }, { throwOnError: true }),
+                  sdk.client.session.abort({ sessionID: props.sessionID }, { throwOnError: true }),
+                ])
+                const staged = await sdk.client.v2.session.revert.stage(
                   { sessionID: props.sessionID, messageID: current.id },
                   { throwOnError: true },
                 )
+                data.session.revert(props.sessionID, staged.data.data)
                 props.setPrompt?.(restored.prompt)
                 dialog.clear()
               } catch (error) {
@@ -74,27 +78,38 @@ export function DialogMessage(props: {
             const msg = message()
             if (!msg) return
 
-            void sdk.client.session.revert({
-              sessionID: props.sessionID,
-              messageID: msg.id,
-            })
-
-            if (props.setPrompt) {
-              const parts = sync.data.part[msg.id]
-              const promptInfo = parts.reduce(
-                (agg, part) => {
-                  if (part.type === "text") {
-                    if (!part.synthetic) agg.input += part.text
-                  }
-                  if (part.type === "file") agg.parts.push(strip(part))
-                  return agg
+            try {
+              await Promise.all([
+                sdk.client.v2.session.interrupt({ sessionID: props.sessionID }, { throwOnError: true }),
+                sdk.client.session.abort({ sessionID: props.sessionID }, { throwOnError: true }),
+              ])
+              const staged = await sdk.client.v2.session.revert.stage(
+                {
+                  sessionID: props.sessionID,
+                  messageID: msg.id,
                 },
-                { input: "", parts: [] as PromptInfo["parts"] },
+                { throwOnError: true },
               )
-              props.setPrompt(promptInfo)
-            }
+              data.session.revert(props.sessionID, staged.data.data)
+              if (props.setPrompt) {
+                const parts = sync.data.part[msg.id]
+                const promptInfo = parts.reduce(
+                  (agg, part) => {
+                    if (part.type === "text") {
+                      if (!part.synthetic) agg.input += part.text
+                    }
+                    if (part.type === "file") agg.parts.push(strip(part))
+                    return agg
+                  },
+                  { input: "", parts: [] as PromptInfo["parts"] },
+                )
+                props.setPrompt(promptInfo)
+              }
 
-            dialog.clear()
+              dialog.clear()
+            } catch (error) {
+              toast.error(error)
+            }
           },
         },
         {

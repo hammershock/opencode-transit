@@ -1,5 +1,6 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Cause, Duration, Effect, Layer, Schedule, Schema, Semaphore, Context } from "effect"
+import { Cause, Duration, Effect, Layer, Schedule, Schema, Context } from "effect"
+import { withRepositoryLock } from "@opencode-ai/core/git"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { formatPatch, structuredPatch } from "diff"
 import path from "path"
@@ -52,16 +53,6 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
     const fs = yield* FSUtil.Service
     const appProcess = yield* AppProcess.Service
     const config = yield* Config.Service
-    const locks = new Map<string, Semaphore.Semaphore>()
-
-    const lock = (key: string) => {
-      const hit = locks.get(key)
-      if (hit) return hit
-
-      const next = Semaphore.makeUnsafe(1)
-      locks.set(key, next)
-      return next
-    }
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Snapshot.state")(function* (ctx) {
@@ -162,7 +153,7 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
         const exists = (file: string) => fs.exists(file).pipe(Effect.orDie)
         const read = (file: string) => fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")))
         const remove = (file: string) => fs.remove(file).pipe(Effect.catch(() => Effect.void))
-        const locked = <A, E, R>(fx: Effect.Effect<A, E, R>) => lock(state.gitdir).withPermits(1)(fx)
+        const locked = withRepositoryLock(state.gitdir)
 
         const enabled = Effect.fnUntraced(function* () {
           if (state.vcs !== "git") return false

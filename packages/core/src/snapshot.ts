@@ -38,6 +38,8 @@ export interface RestoreInput {
 
 export interface PreviewInput extends RestoreInput {
   readonly context?: number
+  /** Compare the planned restore with this tree instead of the current worktree. */
+  readonly from?: ID
 }
 
 export interface Interface {
@@ -190,14 +192,16 @@ const layer = Layer.effect(
       if (!(yield* enabled())) return yield* new Error({ operation: "preview", message: "Snapshots are disabled" })
       const repo = yield* repository().pipe(Effect.mapError((cause) => failure("preview", cause)))
       const files = yield* plan("preview", input)
-      const current = yield* git.tree
-        .capture({
-          repository: repo,
-          scopes: Array.from(files.keys()),
-          ignores: source,
-          maximumUntrackedFileBytes: 2 * 1024 * 1024,
-        })
-        .pipe(Effect.mapError((cause) => failure("preview", cause)))
+      const current = input.from
+        ? Git.TreeID.make(input.from)
+        : yield* git.tree
+            .capture({
+              repository: repo,
+              scopes: Array.from(files.keys()),
+              ignores: source,
+              maximumUntrackedFileBytes: 2 * 1024 * 1024,
+            })
+            .pipe(Effect.mapError((cause) => failure("preview", cause)))
       return yield* git.tree
         .preview({
           repository: repo,
