@@ -4,6 +4,9 @@ import { SessionID } from "@/session/schema"
 import { Effect, Layer, Scope, Context } from "effect"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { InstanceState } from "@/effect/instance-state"
+import { AgentPermission } from "@/agent/agent-permission"
+import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { ShareNext } from "./share-next"
 
 export interface Interface {
@@ -22,6 +25,7 @@ const layer = Layer.effect(
     const shareNext = yield* ShareNext.Service
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
+    const locations = yield* LocationServiceMap.Service
 
     const share = Effect.fn("SessionShare.share")(function* (sessionID: SessionID) {
       const conf = yield* cfg.get()
@@ -37,9 +41,19 @@ const layer = Layer.effect(
     })
 
     const create = Effect.fn("SessionShare.create")(function* (input?: Session.CreateOptions) {
-      const result = yield* session.create(input)
-      if (result.parentID) return result
+      if (input?.parentID) return yield* session.create(input)
+      const ctx = yield* InstanceState.context
       const conf = yield* cfg.get()
+      const permission = yield* AgentPermission.resolveSessionPermission(locations, {
+        permission: input?.permission,
+        directory: ctx.directory,
+        target: input?.target,
+        withReferences: Object.keys(conf.references ?? conf.reference ?? {}).length > 0,
+      })
+      const result = yield* session.create({
+        ...input,
+        permission,
+      })
       if (!(flags.autoShare || conf.share === "auto")) return result
       yield* share(result.id).pipe(Effect.ignore, Effect.forkIn(scope))
       return result
@@ -52,7 +66,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, Session.node, ShareNext.node, RuntimeFlags.node],
+  deps: [Config.node, Session.node, ShareNext.node, RuntimeFlags.node, LocationServiceMap.node],
 })
 
 export * as SessionShare from "./session"
