@@ -29,6 +29,8 @@ import { skillCommand, type SkillCommandContext } from "../command-toolkit/skill
 import { useSkillManager } from "../component/skill-manager"
 import { harnessCommand, type HarnessCommandContext } from "../command-toolkit/harness"
 import { useHarnessManager } from "../component/harness-manager"
+import { recentCommand, type RecentCommandContext } from "../command-toolkit/recent"
+import { RecentLocations, useRecentLocations } from "./home/recent"
 
 let once = false
 const placeholder = {
@@ -41,6 +43,14 @@ export function openQuickStartSync(open: (view: "overview") => Promise<unknown> 
 }
 
 export function Home() {
+  return (
+    <HomeSessionDestinationProvider>
+      <HomeContent />
+    </HomeSessionDestinationProvider>
+  )
+}
+
+function HomeContent() {
   const pluginRuntime = usePluginRuntime()
   const sync = useSync()
   const route = useRouteData("home")
@@ -63,6 +73,7 @@ export function Home() {
     value.getCommandEntries({ visibility: "reachable", namespace: "palette" }),
   )
   const kv = useKV()
+  const recent = useRecentLocations(targetManager.targets)
   const syncColor = createMemo(() => {
     const state = syncSettings.model().state
     if (state === "idle") return theme.success
@@ -76,13 +87,15 @@ export function Home() {
         SyncCommandContext &
         TargetCommandContext &
         SkillCommandContext &
-        HarnessCommandContext
+        HarnessCommandContext &
+        RecentCommandContext
     >({
       register: (registry) => {
         registry.register(approvalModeCommand)
         registry.register(targetCommand)
         registry.register(skillCommand)
         registry.register(harnessCommand)
+        registry.register(recentCommand)
         syncCommands.forEach((command) => registry.register(command))
       },
       context: (source) => ({
@@ -106,6 +119,7 @@ export function Home() {
         openSkillManager: skillManager.open,
         openHarnessManager: harnessManager.open,
         openSyncSettings: syncSettings.open,
+        openRecentLocations: recent.open,
       }),
       upstream: () => [
         ...adaptServerCommands(sync.data.command),
@@ -161,7 +175,7 @@ export function Home() {
   })
 
   return (
-    <HomeSessionDestinationProvider>
+    <>
       <box flexGrow={1} alignItems="center" paddingLeft={2} paddingRight={2}>
         <box flexGrow={1} minHeight={0} />
         <box height={4} minHeight={0} flexShrink={1} />
@@ -186,6 +200,7 @@ export function Home() {
             Sync {syncSettings.status()}
           </text>
         </box>
+        <RecentLocations recent={recent} width={promptMaxWidth()} />
         <pluginRuntime.Slot name="home_bottom" />
         <box flexGrow={1} minHeight={0} />
         <Toast />
@@ -193,6 +208,6 @@ export function Home() {
       <box width="100%" flexShrink={0}>
         <pluginRuntime.Slot name="home_footer" mode="single_winner" />
       </box>
-    </HomeSessionDestinationProvider>
+    </>
   )
 }

@@ -99,3 +99,25 @@ describe("tui thread", () => {
     }),
   )
 })
+
+test("worker fetch honors the Request signal while the worker keeps serving other calls", async () => {
+  const { Rpc } = await import("../../../src/util/rpc")
+  const { createWorkerFetch } = await import("../../../src/cli/cmd/tui")
+  const worker = new Worker(new URL("../../fixture/rpc/worker.ts", import.meta.url).href, { preload: [] })
+  const client = Rpc.client<typeof import("../../../src/cli/tui/worker").rpc>(worker)
+  try {
+    const fetch = createWorkerFetch(client)
+    const controller = new AbortController()
+    const pending = fetch(new Request("http://test/pending", { signal: controller.signal })).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    controller.abort()
+    expect(await pending).toMatchObject({ name: "AbortError" })
+    const response = await fetch("http://test/healthy")
+    expect(await response.text()).toBe("http://test/healthy")
+  } finally {
+    client.dispose()
+    worker.terminate()
+  }
+})
