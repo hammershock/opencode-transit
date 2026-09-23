@@ -22,11 +22,12 @@ RFC（Request for Comments）用于记录本 fork 中影响多个模块或核心
 | [0014](0014-subagent-economics.md)           | Economics-aware Subagent Routing       | Accepted |
 | [0016](0016-subagent-access-manager.md)      | Subagent Access and Definition Manager | Accepted |
 | [0017](0017-agent-slash-commands.md)         | Agent Slash Commands                   | Accepted |
+| [0018](0018-subagent-destinations.md)        | Subagent Execution Destinations        | Accepted |
 | [0018](0018-subagent-destinations.md)        | Subagent Execution Destinations        | Draft    |
 | [0019](0019-target-descriptions.md)          | Target Descriptions                    | Accepted |
 | [0020](0020-model-context-inspection.md)     | Model Context Inspection               | Draft    |
 
-RFC-0018 的前置设计为 RFC-0017（[PR #465](https://github.com/hammershock/opencode-transit/pull/465)），该依赖完成后才开始选址实现。
+RFC-0018 的前置设计 RFC-0017（[PR #502](https://github.com/hammershock/opencode-transit/pull/502)）已交付；RFC-0018 另依赖 RFC-0019 与 RFC-0021。已接受的 RFC-0018 不代表跨 Target Task 能力已实现。
 
 ## 状态
 
