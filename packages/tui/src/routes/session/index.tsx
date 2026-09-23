@@ -772,7 +772,7 @@ export function Session() {
             tools: ModelContextGeneration["tools"] | null
             model: { id: string; providerID: string; variant?: string } | null
             headers: Readonly<Record<string, string>> | null
-            compaction: { reason: "auto" | "manual"; summary: string; recent: string } | null
+            compaction: { reason: "auto" | "manual"; summary: string; recent: string; source?: "legacy" } | null
             subagentCatalog: ModelContextGeneration["subagentCatalog"] | null
             subagentGuidance: string | null
             subagentRefresh: ModelContextGeneration["subagentRefresh"]

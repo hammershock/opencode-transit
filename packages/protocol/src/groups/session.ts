@@ -409,6 +409,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
               reason: Schema.Literals(["auto", "manual"]),
               summary: Schema.String,
               recent: Schema.String,
+              source: Schema.optional(Schema.Literal("legacy")),
             }),
           ),
           subagentCatalog: Schema.optional(Schema.NullOr(SubagentEconomicsCatalog)),
