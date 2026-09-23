@@ -24,6 +24,33 @@ describe("opencode run (non-interactive subprocess)", () => {
   )
 
   cliIt.concurrent(
+    "offers enabled tools on the first turn of a fresh standalone run",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        yield* llm.text("tools received")
+        const result = yield* opencode.run("check tool availability", { extraArgs: ["--auto"] })
+        opencode.expectExit(result, 0)
+        expect(result.stdout).toBe("tools received\n")
+
+        const requests = yield* llm.inputs
+        expect(
+          requests.some((request) => {
+            const tools = request.tools
+            if (!Array.isArray(tools)) return false
+            const names = tools.flatMap((item) => {
+              if (typeof item !== "object" || item === null || !("function" in item)) return []
+              const fn = item.function
+              if (typeof fn !== "object" || fn === null || !("name" in fn)) return []
+              return typeof fn.name === "string" ? [fn.name] : []
+            })
+            return names.includes("bash") && names.includes("task")
+          }),
+        ).toBe(true)
+      }),
+    60_000,
+  )
+
+  cliIt.concurrent(
     "prints each completed text part in order around a tool continuation",
     ({ llm, opencode }) =>
       Effect.gen(function* () {
