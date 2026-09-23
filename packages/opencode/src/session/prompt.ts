@@ -1158,7 +1158,9 @@ const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
-    const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
+    type RunLoop = (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts, never, Scope.Scope>
+    const runLoop: RunLoop = Effect.fn("SessionPrompt.run")(
+      // The caller scopes this effect so the Location lease closes with the loop.
       function* (sessionID: SessionID) {
         yield* locationAccess.require(sessionID).pipe(Effect.catch(Effect.die))
         const ctx = yield* InstanceState.context
@@ -1167,7 +1169,10 @@ const layer = Layer.effect(
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
         const loopLocation = yield* sessionLocation(sessionID)
         const locationLayer = locations.get(loopLocation)
-        const locationTools = yield* LocationToolRegistry.Service.pipe(Effect.provide(locationLayer))
+        // Tool materializations retain registration identities and permission services from this context.
+        // Keep the Location lease for the whole loop so the LayerMap TTL cannot dispose them mid-turn.
+        const locationContext = yield* Layer.build(locationLayer)
+        const locationTools = Context.get(locationContext, LocationToolRegistry.Service)
         const materializedLocationTools = yield* locationTools.materialize()
         const locationToolMaterialization =
           loopLocation.target.type === "rexd"
@@ -1178,20 +1183,8 @@ const layer = Layer.effect(
                   ["read", "skill"].includes(definition.name),
                 ),
               }
-        const locationRegistry = yield* ToolRegistry.Service.pipe(
-          Effect.provide(locationLayer),
-          Effect.provideService(FSUtil.Service, fsys),
-          Effect.provideService(ToolRegistry.Service, registry),
-          Effect.provideService(TargetRegistry.Service, targetRegistry),
-          Effect.provideService(LocationServiceMap.Service, locations),
-        )
-        const locationFilesystem = yield* FSUtil.Service.pipe(
-          Effect.provide(locationLayer),
-          Effect.provideService(FSUtil.Service, fsys),
-          Effect.provideService(ToolRegistry.Service, registry),
-          Effect.provideService(TargetRegistry.Service, targetRegistry),
-          Effect.provideService(LocationServiceMap.Service, locations),
-        )
+        const locationRegistry = registry
+        const locationFilesystem = fsys
         yield* contextAt({ sessionID, agent: session.agent ?? "build", location: loopLocation })
 
         while (true) {
@@ -1453,7 +1446,7 @@ const layer = Layer.effect(
       return yield* state.ensureRunning(
         input.sessionID,
         lastAssistant(input.sessionID),
-        activity.withActivity(input.sessionID, "process_execution", runLoop(input.sessionID)),
+        activity.withActivity(input.sessionID, "process_execution", runLoop(input.sessionID).pipe(Effect.scoped)),
       )
     })
 
