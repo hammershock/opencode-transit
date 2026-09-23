@@ -14,6 +14,20 @@ afterEach(async () => {
 })
 
 describe("session action routes", () => {
+  for (const enabled of [true, false]) {
+    it.instance(
+      `capabilities report configured background subagents: ${enabled}`,
+      () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const response = yield* requestInDirectory("/experimental/capabilities", test.directory)
+          expect(response.status).toBe(200)
+          expect(yield* response.json).toEqual({ backgroundSubagents: enabled })
+        }),
+      { config: { experimental: { background_subagents: enabled } } },
+    )
+  }
+
   it.instance(
     "session routes expose metadata on create, update, get, and fork",
     () =>

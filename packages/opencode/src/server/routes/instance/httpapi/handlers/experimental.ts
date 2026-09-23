@@ -1,3 +1,4 @@
+import { ConfigExperimental } from "@opencode-ai/core/config/experimental"
 import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
 import { BackgroundJob } from "@/background/job"
@@ -37,7 +38,12 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const flags = yield* RuntimeFlags.Service
 
     const capabilities = Effect.fn("ExperimentalHttpApi.capabilities")(function* () {
-      return { backgroundSubagents: flags.experimentalBackgroundSubagents }
+      return {
+        backgroundSubagents: ConfigExperimental.backgroundSubagents(
+          yield* config.get(),
+          flags.experimentalBackgroundSubagents,
+        ),
+      }
     })
 
     const getConsole = Effect.fn("ExperimentalHttpApi.console")(function* () {
@@ -159,7 +165,8 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
     const sessionBackground = Effect.fn("ExperimentalHttpApi.sessionBackground")(function* (ctx: {
       params: { sessionID: SessionID }
     }) {
-      if (!flags.experimentalBackgroundSubagents) return false
+      if (!ConfigExperimental.backgroundSubagents(yield* config.get(), flags.experimentalBackgroundSubagents))
+        return false
       const jobs = (yield* background.list()).filter(
         (job) =>
           job.type === "task" &&

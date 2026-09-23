@@ -73,10 +73,13 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
       typeof plugin === "string" ? plugin : { package: plugin[0], options: plugin[1] },
     ),
     experimental:
-      info.experimental?.policies || info.experimental?.subagent_economics !== undefined
+      info.experimental?.policies ||
+      info.experimental?.subagent_economics !== undefined ||
+      info.experimental?.background_subagents !== undefined
         ? {
             policies: info.experimental.policies,
             subagent_economics: info.experimental.subagent_economics,
+            background_subagents: info.experimental.background_subagents,
           }
         : undefined,
     providers: providers(info.provider),

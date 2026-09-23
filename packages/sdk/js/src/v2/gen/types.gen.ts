@@ -2179,6 +2179,7 @@ export type Config = {
     continue_loop_on_deny?: boolean
     user_shell_cwd?: boolean
     location_env?: boolean
+    background_subagents?: boolean
     subagent_economics?: boolean
     mcp_timeout?: number
     policies?: Array<ConfigV2ExperimentalPolicy>

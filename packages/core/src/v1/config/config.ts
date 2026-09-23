@@ -190,6 +190,9 @@ export const Info = Schema.Struct({
       location_env: Schema.optional(Schema.Boolean).annotate({
         description: "Load target-side user and project dotenv files for Location processes (default: false)",
       }),
+      background_subagents: Schema.optional(Schema.Boolean).annotate({
+        description: "Enable background subagents; when omitted, use the experimental environment flags",
+      }),
       subagent_economics: Schema.optional(Schema.Boolean).annotate({
         description: "Provide device-local model economics to the parent Agent for subagent routing (default: false)",
       }),
