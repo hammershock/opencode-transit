@@ -122,6 +122,14 @@ export const make = Effect.gen(function* () {
     jobs: yield* SynchronizedRef.make(new Map()),
     scope: yield* Scope.Scope,
   }
+  yield* Effect.addFinalizer(() =>
+    Effect.gen(function* () {
+      const running = Array.from((yield* SynchronizedRef.get(state.jobs)).values())
+        .filter((job) => job.info.status === "running")
+        .map((job) => ({ id: job.info.id, type: job.info.type }))
+      if (running.length > 0) yield* Effect.logInfo("background job owner scope closed", { running })
+    }),
+  )
 
   const settle = Effect.fn("BackgroundJob.settle")(function* (
     id: string,
