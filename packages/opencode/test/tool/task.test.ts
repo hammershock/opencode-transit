@@ -1230,6 +1230,42 @@ describe("tool.task", () => {
     },
   )
 
+  background.instance(
+    "explicit config off overrides the enabled environment for execution and schema",
+    () =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        expect(def.description).not.toContain("Background mode:")
+        expect(def.jsonSchema?.properties).not.toHaveProperty("background")
+
+        const exit = yield* def
+          .execute(
+            {
+              description: "inspect bug",
+              prompt: "look into the cache key path",
+              subagent_type: "general",
+              background: true,
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps: stubOps() },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+          .pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+      }),
+    { config: { experimental: { background_subagents: false } } },
+  )
+
   it.instance("rejects background execution when the experiment is disabled", () =>
     Effect.gen(function* () {
       const { chat, assistant } = yield* seed()
@@ -1325,6 +1361,49 @@ describe("tool.task", () => {
       expect((yield* Deferred.await(injected)).parts[0]?.type).toBe("text")
       expect(runs).toBe(1)
     }),
+  )
+
+  it.instance(
+    "config enables background execution without an environment flag",
+    () =>
+      Effect.gen(function* () {
+        const jobs = yield* BackgroundJob.Service
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        expect(def.description).toContain("Background mode:")
+        expect(def.jsonSchema).toBeUndefined()
+
+        const result = yield* def.execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+            background: true,
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: {
+              promptOps: {
+                ...stubOps(),
+                prompt: () => Effect.never,
+              } satisfies TaskPromptOps,
+            },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        const job = yield* jobs.get(result.metadata.sessionId)
+        expect(result.metadata.background).toBe(true)
+        expect(result.output).toContain(`state="running"`)
+        expect(job?.status).toBe("running")
+      }),
+    { config: { experimental: { background_subagents: true } } },
   )
 
   background.instance("execute launches background tasks without waiting for completion", () =>

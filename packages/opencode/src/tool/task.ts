@@ -1,4 +1,5 @@
 import * as Tool from "./tool"
+import { ConfigExperimental } from "@opencode-ai/core/config/experimental"
 import DESCRIPTION from "./task.txt"
 import { ToolJsonSchema } from "./json-schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
@@ -104,9 +105,11 @@ export const TaskTool = Tool.define(
     ) {
       const cfg = yield* config.get()
       const runInBackground = params.background === true
-      if (runInBackground && !flags.experimentalBackgroundSubagents) {
+      if (runInBackground && !ConfigExperimental.backgroundSubagents(cfg, flags.experimentalBackgroundSubagents)) {
         return yield* Effect.fail(
-          new Error("Background subagents require OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true"),
+          new Error(
+            "Background subagents are disabled. Enable experimental.background_subagents in config or the experimental features menu.",
+          ),
         )
       }
 
@@ -389,14 +392,19 @@ export const TaskTool = Tool.define(
       )
     })
 
-    return {
-      description: flags.experimentalBackgroundSubagents
-        ? [DESCRIPTION, BACKGROUND_DESCRIPTION].join("\n\n")
-        : DESCRIPTION,
-      parameters: Parameters,
-      jsonSchema: flags.experimentalBackgroundSubagents ? undefined : ToolJsonSchema.fromSchema(BaseParameters),
-      execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
-        run(params, ctx).pipe(Effect.orDie),
-    }
+    return () =>
+      Effect.gen(function* () {
+        const backgroundEnabled = ConfigExperimental.backgroundSubagents(
+          yield* config.get(),
+          flags.experimentalBackgroundSubagents,
+        )
+        return {
+          description: backgroundEnabled ? [DESCRIPTION, BACKGROUND_DESCRIPTION].join("\n\n") : DESCRIPTION,
+          parameters: Parameters,
+          jsonSchema: backgroundEnabled ? undefined : ToolJsonSchema.fromSchema(BaseParameters),
+          execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
+            run(params, ctx).pipe(Effect.orDie),
+        }
+      })
   }),
 )

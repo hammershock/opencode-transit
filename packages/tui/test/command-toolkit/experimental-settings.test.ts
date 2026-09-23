@@ -2,11 +2,29 @@ import { describe, expect, test } from "bun:test"
 import {
   experimentalCommandSettings,
   persistLocationEnvironment,
+  persistBackgroundSubagents,
   persistSubagentEconomics,
   persistUserShellCwd,
 } from "../../src/command-toolkit/experimental-settings"
 
 describe("experimental settings", () => {
+  test.each([true, false])("persists background subagents %s through the canonical config patch", async (value) => {
+    const patches: unknown[] = []
+    expect(
+      await persistBackgroundSubagents(value, async (config) => {
+        patches.push(config)
+      }),
+    ).toBe(value)
+    expect(patches).toEqual([{ experimental: { background_subagents: value } }])
+  })
+
+  test("does not report saved background subagents when persistence fails", async () => {
+    await expect(
+      persistBackgroundSubagents(true, async () => {
+        throw new Error("write failed")
+      }),
+    ).rejects.toThrow("write failed")
+  })
   test("uses one discoverable default-off setting per override", () => {
     expect(experimentalCommandSettings).toEqual([
       expect.objectContaining({

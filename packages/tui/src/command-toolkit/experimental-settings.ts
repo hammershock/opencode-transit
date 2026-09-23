@@ -69,3 +69,11 @@ export async function persistSubagentEconomics(
   await update({ experimental: { subagent_economics: enabled } })
   return enabled
 }
+
+export async function persistBackgroundSubagents(
+  enabled: boolean,
+  update: (config: { experimental: { background_subagents: boolean } }) => Promise<void>,
+) {
+  await update({ experimental: { background_subagents: enabled } })
+  return enabled
+}

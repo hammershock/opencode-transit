@@ -895,7 +895,8 @@ export const RunCommand = effectCmd({
             initialInput,
             createSession: createFreshSession,
             thinking,
-            backgroundSubagents: flags.experimentalBackgroundSubagents,
+            backgroundSubagents: (await client.experimental.capabilities.get({}, { throwOnError: true })).data
+              .backgroundSubagents,
             demo: args.demo,
           })
         } catch (error) {
@@ -932,7 +933,13 @@ export const RunCommand = effectCmd({
             files,
             initialInput,
             thinking,
-            backgroundSubagents: flags.experimentalBackgroundSubagents,
+            backgroundSubagents: (
+              await createOpencodeClient({
+                baseUrl: "http://opencode.internal",
+                fetch: fetchFn,
+                directory: directory ?? root,
+              }).experimental.capabilities.get({}, { throwOnError: true })
+            ).data.backgroundSubagents,
             demo: args.demo,
           })
         } catch (error) {

@@ -8,7 +8,11 @@ import { Config } from "../../src/config/config"
 import { Server } from "../../src/server/server"
 import { tmpdir } from "../fixture/fixture"
 
-test.each(["/global/config", "/config"])("saving %s preserves live tasks and config snapshots", async (endpoint) => {
+test.each(
+  ["/global/config", "/config"].flatMap((endpoint) =>
+    (["subagent_economics", "background_subagents"] as const).map((setting) => ({ endpoint, setting })),
+  ),
+)("saving $endpoint $setting preserves live tasks and config snapshots", async ({ endpoint, setting }) => {
   await using first = await tmpdir({ config: { formatter: false, lsp: false } })
   await using second = await tmpdir({ config: { formatter: false, lsp: false } })
   await AppRuntime.runPromise(
@@ -38,7 +42,7 @@ test.each(["/global/config", "/config"])("saving %s preserves live tasks and con
                 Server.Default().app.request(endpoint, {
                   method: "PATCH",
                   headers: { "content-type": "application/json", "x-opencode-directory": first.path },
-                  body: JSON.stringify({ experimental: { subagent_economics: enabled } }),
+                  body: JSON.stringify({ experimental: { [setting]: enabled } }),
                 }),
               ),
             )
@@ -52,7 +56,7 @@ test.each(["/global/config", "/config"])("saving %s preserves live tasks and con
             }
           }
           if (endpoint === "/global/config") {
-            expect((yield* config.getGlobal()).experimental?.subagent_economics).toBe(true)
+            expect((yield* config.getGlobal()).experimental?.[setting]).toBe(true)
           }
           yield* Deferred.succeed(release, undefined)
           yield* Effect.forEach(fibers, Fiber.join)
@@ -65,9 +69,9 @@ test.each(["/global/config", "/config"])("saving %s preserves live tasks and con
           const cancelled = yield* Fiber.await(fiber)
           expect(Exit.isFailure(cancelled) && Cause.hasInterruptsOnly(cancelled.cause)).toBe(true)
           const fresh = yield* store.load({ directory: first.path })
-          expect(
-            (yield* config.get().pipe(Effect.provideService(InstanceRef, fresh))).experimental?.subagent_economics,
-          ).toBe(true)
+          expect((yield* config.get().pipe(Effect.provideService(InstanceRef, fresh))).experimental?.[setting]).toBe(
+            true,
+          )
         } finally {
           yield* store.disposeAll()
         }
