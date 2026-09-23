@@ -175,6 +175,8 @@ export const {
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
+    const resolvingSessions = new Map<string, Promise<Session | undefined>>()
+    const autoPermissionReplies = new Map<string, Promise<boolean>>()
     const hydratingSessions = new Map<
       string,
       { messages: Set<string>; parts: Set<string>; permissions: Set<string>; questions: Set<string> }
@@ -220,6 +222,46 @@ export const {
         .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
     }
 
+    function resolveSession(sessionID: string) {
+      const cached = store.session.find((item) => item.id === sessionID)
+      if (cached?.approvalMode) return Promise.resolve(cached)
+      const resolving = resolvingSessions.get(sessionID)
+      if (resolving) return resolving
+      const task = sdk.client.session
+        .get({ sessionID }, { throwOnError: true })
+        .then((result) => {
+          const session = result.data
+          if (!session) return
+          const match = search(store.session, sessionID, (item) => item.id)
+          if (match.found) setStore("session", match.index, reconcile(session))
+          if (!match.found) {
+            setStore(
+              "session",
+              produce((draft) => draft.splice(match.index, 0, session)),
+            )
+          }
+          return session
+        })
+        .catch(() => undefined)
+        .finally(() => resolvingSessions.delete(sessionID))
+      resolvingSessions.set(sessionID, task)
+      return task
+    }
+
+    function autoReplyPermission(key: string, reply: () => Promise<unknown>) {
+      const existing = autoPermissionReplies.get(key)
+      if (existing) return existing
+      const task = reply().then(
+        () => true,
+        () => false,
+      )
+      autoPermissionReplies.set(key, task)
+      void task.then((ok) => {
+        if (!ok) autoPermissionReplies.delete(key)
+      })
+      return task
+    }
+
     async function syncSession(sessionID: string) {
       if (fullSyncedSessions.has(sessionID)) return
       const syncing = syncingSessions.get(sessionID)
@@ -245,14 +287,13 @@ export const {
             ? (
                 await Promise.all(
                   permissions.data.data.map(async (request) => {
-                    try {
-                      await sdk.client.v2.session.permission.reply(
+                    const replied = await autoReplyPermission(`${sessionID}:v2:${request.id}`, () =>
+                      sdk.client.v2.session.permission.reply(
                         { sessionID, requestID: request.id, reply: "once" },
                         { throwOnError: true },
-                      )
-                    } catch {
-                      return request
-                    }
+                      ),
+                    )
+                    if (!replied) return request
                   }),
                 )
               ).filter((request) => request !== undefined)
@@ -352,9 +393,7 @@ export const {
           // not drop out of the store and flash local fallbacks during the
           // re-sync gap. Deletion remains event-driven via `session.deleted`.
           const listed = new Set(sessions.map((session) => session.id))
-          const retained = store.session.filter(
-            (session) => hydrated.includes(session.id) && !listed.has(session.id),
-          )
+          const retained = store.session.filter((session) => hydrated.includes(session.id) && !listed.has(session.id))
           setStore("session", reconcile([...sessions, ...retained]))
           fullSyncedSessions.clear()
           await Promise.allSettled(hydrated.map(syncSession))
@@ -366,7 +405,7 @@ export const {
       return projectionRefreshFlight
     }
 
-    event.subscribe((event, { directory, workspace }) => {
+    event.subscribe((event, { workspace }) => {
       switch (event.type) {
         case "sync.projection.updated":
           void refreshProjectedSessions().catch(() => undefined)
@@ -393,11 +432,13 @@ export const {
         case "permission.asked": {
           const request = event.properties
           touchPermission(request.sessionID, request.id)
-          const session = store.session.find((item) => item.id === request.sessionID)
-          const approvalMode = session?.approvalMode ?? "normal"
-          if (permission.effective(approvalMode) === "auto") {
-            const response =
-              session?.target?.type === "rexd"
+          void resolveSession(request.sessionID).then((session) => {
+            if (!session || permission.effective(session.approvalMode ?? "normal") !== "auto") {
+              insertPermission(request)
+              return
+            }
+            void autoReplyPermission(`${request.sessionID}:legacy:${request.id}`, () =>
+              session.target?.type === "rexd"
                 ? sdk.client.permission.reply(
                     { requestID: request.id, reply: "once" },
                     { throwOnError: true, headers: { "x-opencode-target": session.target.targetID } },
@@ -406,29 +447,35 @@ export const {
                     {
                       requestID: request.id,
                       reply: "once",
-                      directory: session?.directory ?? directory,
-                      workspace: session?.workspaceID ?? workspace,
+                      directory: session.directory,
+                      workspace: session.workspaceID,
                     },
                     { throwOnError: true },
-                  )
-            void response.catch(() => insertPermission(request))
-            break
-          }
-          insertPermission(request)
+                  ),
+            ).then((replied) => {
+              if (!replied) insertPermission(request)
+            })
+          })
           break
         }
 
         case "permission.v2.asked": {
           const request = legacyPermission(event.properties)
           touchPermission(request.sessionID, request.id)
-          const approvalMode = store.session.find((item) => item.id === request.sessionID)?.approvalMode ?? "normal"
-          if (permission.effective(approvalMode) === "auto") {
-            void sdk.client.v2.session.permission
-              .reply({ sessionID: request.sessionID, requestID: request.id, reply: "once" }, { throwOnError: true })
-              .catch(() => insertPermission(request))
-            break
-          }
-          insertPermission(request)
+          void resolveSession(request.sessionID).then((session) => {
+            if (!session || permission.effective(session.approvalMode ?? "normal") !== "auto") {
+              insertPermission(request)
+              return
+            }
+            void autoReplyPermission(`${request.sessionID}:v2:${request.id}`, () =>
+              sdk.client.v2.session.permission.reply(
+                { sessionID: request.sessionID, requestID: request.id, reply: "once" },
+                { throwOnError: true },
+              ),
+            ).then((replied) => {
+              if (!replied) insertPermission(request)
+            })
+          })
           break
         }
 
@@ -529,6 +576,9 @@ export const {
           break
 
         case "session.deleted": {
+          for (const key of autoPermissionReplies.keys()) {
+            if (key.startsWith(`${event.properties.info.id}:`)) autoPermissionReplies.delete(key)
+          }
           const result = search(store.session, event.properties.info.id, (s) => s.id)
           if (result.found) {
             setStore(

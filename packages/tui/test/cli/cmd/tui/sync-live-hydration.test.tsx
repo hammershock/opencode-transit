@@ -252,6 +252,58 @@ test("session hydration auto-approves pending V2 permissions", async () => {
   }
 })
 
+test("live and hydrated auto permissions share one reply", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const permission = {
+    id: "per_auto_race",
+    sessionID,
+    action: "external_directory",
+    resources: ["/tmp/outside/*"],
+  }
+  let resolvePermissions!: (response: Response) => void
+  const permissions = new Promise<Response>((resolve) => {
+    resolvePermissions = resolve
+  })
+  const replies: Request[] = []
+  let requested = false
+  const { app, emit, sync } = await mount((url, request) => {
+    if (url.pathname === `/session/${sessionID}`) return json({ ...session, approvalMode: "auto" })
+    if (url.pathname === `/session/${sessionID}/message`) return json([])
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    if (url.pathname === `/api/session/${sessionID}/permission`) {
+      requested = true
+      return permissions
+    }
+    if (url.pathname === `/api/session/${sessionID}/permission/${permission.id}/reply`) {
+      replies.push(request)
+      return new Response(null, { status: 204 })
+    }
+    return undefined
+  }, tmp.path)
+
+  try {
+    const hydrate = sync.session.sync(sessionID)
+    await wait(() => requested)
+    emit(
+      global({
+        id: "evt_auto_permission_race",
+        type: "permission.v2.asked",
+        properties: permission,
+      }),
+    )
+    resolvePermissions(json({ data: [permission] }))
+    await hydrate
+    await wait(() => replies.length === 1)
+    await Bun.sleep(30)
+
+    expect(replies).toHaveLength(1)
+    expect(sync.data.permission[sessionID]).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("a projection committed by another process refreshes an already loaded session", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")
