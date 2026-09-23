@@ -40,6 +40,7 @@ import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
 import { Pty } from "./pty"
 import { PermissionV2 } from "./permission"
+import { ExecutionPolicy } from "./permission/policy"
 import { QuestionV2 } from "./question"
 import { SessionActivity } from "./session/activity"
 import { SessionLocationAccess } from "./session/location-access"
@@ -824,7 +825,9 @@ const layer = Layer.effect(
             const instructions = yield* InstructionContext.Service
             const location = yield* Location.Service
             const tools = yield* ToolRegistry.Service
-            const materialization = yield* tools.materialize(agent.info?.permissions)
+            const policy = yield* ExecutionPolicy.Service
+            const snapshot = yield* policy.resolve(sessionID, agent.id)
+            const materialization = yield* tools.materialize(snapshot.rules, snapshot.ceilings)
             const environment = buildEnvironment(location)
             return {
               agentSystem: agent.info?.system ?? null,

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
-import { testRender, useRenderer } from "@opentui/solid"
+import { useRenderer } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
@@ -19,6 +19,7 @@ import { tmpdir } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { eventSource, json } from "../../fixture/tui-sdk"
+import { testRenderExclusive } from "../../fixture/tui-renderer"
 
 const targetID = "target-test"
 const request: RoutedPermissionRequest = {
@@ -104,11 +105,11 @@ async function mountPermission(input: { root: string; fail?: boolean; local?: bo
     )
   }
 
-  const app = await testRender(() => <Harness />, { width: 80, height: 24, kittyKeyboard: true })
+  const rendered = await testRenderExclusive(() => <Harness />, { width: 80, height: 24, kittyKeyboard: true })
   await ready
-  await app.renderOnce()
+  await rendered.app.renderOnce()
   await Bun.sleep(10)
-  return { app, calls }
+  return { app: rendered.app, calls, destroy: rendered.destroy }
 }
 
 test("legacy Rexd permission replies route through the target", async () => {
@@ -121,7 +122,7 @@ test("legacy Rexd permission replies route through the target", async () => {
     expect(permission.calls[0]!.headers.get("x-opencode-target")).toBe(targetID)
     expect(new URL(permission.calls[0]!.url).searchParams.has("directory")).toBe(false)
   } finally {
-    permission.app.renderer.destroy()
+    await permission.destroy()
   }
 })
 
@@ -135,7 +136,7 @@ test("local legacy permission replies retain directory and workspace", async () 
     expect(url.searchParams.get("directory")).toBe("/Users/test/project")
     expect(url.searchParams.get("workspace")).toBe("workspace-test")
   } finally {
-    permission.app.renderer.destroy()
+    await permission.destroy()
   }
 })
 
@@ -150,7 +151,7 @@ test("canonical permission replies use the Session-scoped API", async () => {
     )
     expect(permission.calls[0]!.headers.has("x-opencode-target")).toBe(false)
   } finally {
-    permission.app.renderer.destroy()
+    await permission.destroy()
   }
 })
 
@@ -162,6 +163,6 @@ test("permission reply failures are visible", async () => {
     await permission.app.waitFor(() => permission.calls.length === 1)
     await permission.app.waitFor(() => permission.app.captureCharFrame().includes("Permission request not found"))
   } finally {
-    permission.app.renderer.destroy()
+    await permission.destroy()
   }
 })

@@ -25,6 +25,7 @@ export class Failure extends Error {
 
 export type Attachment = {
   readonly path: string
+  readonly active: () => boolean
   readonly renew: () => Promise<void>
   readonly release: () => Promise<void>
 }
@@ -239,19 +240,19 @@ export class Materializer {
     )
     let timer: ReturnType<typeof setInterval> | undefined
     let released = false
+    let expiresAt = 0
     const renew = async () => {
       if (released) return
-      await this.#files.write(
-        record,
-        "/",
-        Buffer.from(JSON.stringify({ digest: snapshot.digest, expiresAt: this.#now() + this.#ttlMs })),
-      )
+      const expires = this.#now() + this.#ttlMs
+      await this.#files.write(record, "/", Buffer.from(JSON.stringify({ digest: snapshot.digest, expiresAt: expires })))
+      expiresAt = expires
       if (timer) return
       timer = setInterval(() => void renew().catch(() => undefined), Math.max(1_000, Math.floor(this.#ttlMs / 3)))
       timer.unref?.()
     }
     const attachment: Attachment = {
       path: packagePath,
+      active: () => !released && expiresAt > this.#now(),
       renew,
       release: async () => {
         if (released) return

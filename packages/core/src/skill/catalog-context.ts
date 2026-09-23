@@ -13,6 +13,7 @@ import { SkillInvocation } from "@opencode-ai/schema/skill-invocation"
 import { Hash } from "../util/hash"
 import { SessionSkillCatalog } from "../session/skill-catalog"
 import { SkillPackageAccess } from "./package-access"
+import { ExecutionPolicy } from "../permission/policy"
 
 export type { Loaded, Interface } from "./catalog-context-service"
 export { Service } from "./catalog-context-service"
@@ -25,6 +26,7 @@ const layer = Layer.effect(
     const agents = yield* AgentV2.Service
     const registry = yield* SkillRegistry.Service
     const packages = yield* SkillPackageAccess.Service
+    const policies = yield* ExecutionPolicy.Service
     const current = yield* Ref.make<Skill.RegistrySnapshot | undefined>(undefined)
 
     return SkillCatalogContextService.Service.of({
@@ -92,6 +94,22 @@ const layer = Layer.effect(
                 skillID: mention.id,
                 name: mention.name,
               })
+            const policy = yield* policies.resolve(input.sessionID, agent.id).pipe(
+              Effect.mapError(
+                () =>
+                  new SkillCatalogContextService.AdmissionError({
+                    kind: "unavailable",
+                    skillID: mention.id,
+                    name: mention.name,
+                  }),
+              ),
+            )
+            if (ExecutionPolicy.denied(policy, "skill", match.entry.metadata.name))
+              return yield* new SkillCatalogContextService.AdmissionError({
+                kind: "permission-denied",
+                skillID: mention.id,
+                name: mention.name,
+              })
             if (!SessionSkillCatalog.admitted(input.admittedCatalog, match.entry.metadata))
               return yield* new SkillCatalogContextService.AdmissionError({
                 kind: "stale-catalog",
@@ -149,7 +167,7 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: SkillCatalogContextService.Service,
   layer,
-  deps: [PluginV2.node, SkillV2.node, AgentV2.node, SkillRegistry.node, SkillPackageAccess.node],
+  deps: [PluginV2.node, SkillV2.node, AgentV2.node, SkillRegistry.node, SkillPackageAccess.node, ExecutionPolicy.node],
 })
 
 function validate(text: string, mentions: SkillCatalogContextService.AdmissionInput["mentions"]) {

@@ -12,9 +12,14 @@ import { PermissionSaved } from "@opencode-ai/core/permission/saved"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
+import { RelativePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
+import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
+import { SkillPackageAccess } from "@opencode-ai/core/skill/package-access"
+import { SkillRegistry } from "@opencode-ai/core/skill/registry"
+import { Skill } from "@opencode-ai/schema/skill"
 import { eq, sql } from "drizzle-orm"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
@@ -36,19 +41,38 @@ const remote = Layer.succeed(
   }),
 )
 const nodes = LayerNode.group([
+  Location.node,
   Database.node,
   EventV2.node,
   SessionStore.node,
   PermissionSaved.node,
   AgentV2.node,
+  SkillPackageAccess.node,
   PermissionV2.node,
 ])
 const it = testEffect(AppNodeBuilder.build(nodes, [[Location.node, current]]))
-const remoteIt = testEffect(AppNodeBuilder.build(nodes, [[Location.node, remote]]))
+const remoteRef = Location.Ref.make({
+  target: { type: "rexd", targetID: Location.TargetID.make("00000000-0000-4000-8000-000000000001") },
+  directory: remoteDirectory,
+})
+const remoteIt = testEffect(
+  AppNodeBuilder.build(nodes, [
+    [Location.node, remote],
+    // This unit fixture supplies a resolved placement, not an SSH connection.
+    [
+      SessionLocationAccess.node,
+      Layer.succeed(SessionLocationAccess.Service, {
+        require: () => Effect.succeed(remoteRef),
+        resolve: () => Effect.succeed({ status: "resolved" as const, location: remoteRef }),
+      }),
+    ],
+  ]),
+)
 
 function setup(rules: PermissionV2.Ruleset = []) {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
+    const selected = yield* Location.Service
     yield* db
       .insert(ProjectTable)
       .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
@@ -61,7 +85,8 @@ function setup(rules: PermissionV2.Ruleset = []) {
         id: SessionV2.ID.make("ses_test"),
         project_id: Project.ID.global,
         slug: "test",
-        directory: "/project",
+        directory: selected.directory,
+        target: selected.target,
         title: "test",
         version: "test",
         agent: "test",
@@ -98,14 +123,17 @@ function waitForRequest(input: Partial<PermissionV2.AssertInput> = {}) {
   return Effect.gen(function* () {
     const service = yield* PermissionV2.Service
     const events = yield* EventV2.Service
-    const asked = yield* Deferred.make<PermissionV2.Request>()
+    const asked = yield* Deferred.make<PermissionV2.Request, unknown>()
     const unsubscribe = yield* events.listen((event) =>
       event.type === PermissionV2.Event.Asked.type
         ? Deferred.succeed(asked, event.data as PermissionV2.Request).pipe(Effect.asVoid)
         : Effect.void,
     )
     yield* Effect.addFinalizer(() => unsubscribe)
-    const fiber = yield* service.assert(assertion(input)).pipe(Effect.forkScoped)
+    const fiber = yield* service.assert(assertion(input)).pipe(
+      Effect.onError((cause) => Deferred.failCause(asked, cause)),
+      Effect.forkScoped,
+    )
     const request = yield* Deferred.await(asked)
     return { service, fiber, request }
   })
@@ -286,6 +314,102 @@ describe("PermissionV2", () => {
     }),
   )
 
+  it.effect("scopes prepared package defaults to one Session and lets explicit ask or deny override them", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const packages = yield* SkillPackageAccess.Service
+      const root = AbsolutePath.make("/tmp/policy-package")
+      const entry: SkillRegistry.Entry = {
+        metadata: Skill.Metadata.make({
+          id: Skill.ID.make(`skl_${"1".repeat(64)}`),
+          name: "policy-package",
+          description: "Policy package",
+          sourceLabel: "Test",
+          digest: Skill.Digest.make("2".repeat(64)),
+        }),
+        source: Skill.SourceDetail.make({
+          kind: "imported",
+          label: "Test",
+          root,
+          relativePath: RelativePath.make("SKILL.md"),
+        }),
+        sourceKey: "test:policy-package",
+        location: AbsolutePath.make(`${root}/SKILL.md`),
+        content: "# Policy package",
+      }
+      yield* packages.prepare({ entry, sessionID: SessionV2.ID.make("ses_test") })
+      const service = yield* PermissionV2.Service
+      const input = { action: "external_directory", resources: [`${root}/asset.txt`] }
+      expect(
+        yield* service.ask(assertion({ id: PermissionV2.ID.create("per_package_allow"), ...input })),
+      ).toMatchObject({
+        effect: "allow",
+      })
+
+      yield* setRules([{ action: "external_directory", resource: `${root}/*`, effect: "ask" }])
+      expect(yield* service.ask(assertion({ id: PermissionV2.ID.create("per_package_ask"), ...input }))).toMatchObject({
+        effect: "ask",
+      })
+      yield* setRules([{ action: "external_directory", resource: `${root}/*`, effect: "deny" }])
+      expect(yield* service.ask(assertion({ id: PermissionV2.ID.create("per_package_deny"), ...input }))).toMatchObject(
+        {
+          effect: "deny",
+        },
+      )
+
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: SessionV2.ID.make("ses_other"),
+          project_id: Project.ID.global,
+          slug: "other",
+          directory: AbsolutePath.make("/project"),
+          target: { type: "local" },
+          title: "other",
+          version: "test",
+          agent: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* setRules([])
+      expect(
+        yield* service.ask({
+          ...assertion({ id: PermissionV2.ID.create("per_package_other"), ...input }),
+          sessionID: SessionV2.ID.make("ses_other"),
+        }),
+      ).toMatchObject({ effect: "ask" })
+    }),
+  )
+
+  it.effect("keeps captured parent boundaries as hard ceilings for child Sessions", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "*", effect: "allow" }])
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({
+          parent_id: SessionV2.ID.make("ses_parent"),
+          permission_boundary: [[{ action: "bash", resource: "rm *", effect: "deny" }]],
+        })
+        .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+
+      const service = yield* PermissionV2.Service
+      expect(yield* service.ask(assertion({ action: "bash", resources: ["echo ok"] }))).toMatchObject({
+        effect: "allow",
+      })
+      expect(
+        yield* service.ask(
+          assertion({ id: PermissionV2.ID.create("per_parent_deny"), action: "bash", resources: ["rm file"] }),
+        ),
+      ).toMatchObject({
+        effect: "deny",
+      })
+    }),
+  )
+
   it.effect("resolves an asked permission once", () =>
     Effect.gen(function* () {
       yield* setup()
@@ -346,6 +470,30 @@ describe("PermissionV2", () => {
       yield* service.assert(assertion({ id: PermissionV2.ID.create("per_next"), resources: ["src/next.ts"] }))
       yield* saved.remove(id)
       expect(yield* saved.list()).toEqual([])
+    }),
+  )
+
+  it.effect("keeps legacy always approvals in memory instead of saving them", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { service, fiber, request } = yield* waitForRequest({
+        id: PermissionV2.ID.create("per_runtime"),
+        resources: ["src/runtime.ts"],
+        save: ["src/*"],
+        remember: "runtime",
+      })
+      yield* service.reply({ requestID: request.id, reply: "always" })
+      yield* Fiber.join(fiber)
+
+      expect(
+        yield* service.ask(
+          assertion({
+            id: PermissionV2.ID.create("per_runtime_next"),
+            resources: ["src/next.ts"],
+          }),
+        ),
+      ).toMatchObject({ effect: "allow" })
+      expect(yield* (yield* Database.Service).db.select().from(PermissionTable).all()).toEqual([])
     }),
   )
 

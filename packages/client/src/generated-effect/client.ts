@@ -487,6 +487,40 @@ const Endpoint9_6 = (raw: RawClient["server.permission"]) => (input: Endpoint9_6
     payload: { reply: input["reply"], message: input["message"] },
   }).pipe(Effect.mapError(mapClientError))
 
+type Endpoint9_7Request = Parameters<RawClient["server.permission"]["session.policy.inspect"]>[0]
+type Endpoint9_7Input = { readonly sessionID: Endpoint9_7Request["params"]["sessionID"] }
+const Endpoint9_7 = (raw: RawClient["server.permission"]) => (input: Endpoint9_7Input) =>
+  raw["session.policy.inspect"]({ params: { sessionID: input["sessionID"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint9_8Request = Parameters<RawClient["server.permission"]["session.policy.review"]>[0]
+type Endpoint9_8Input = {
+  readonly sessionID: Endpoint9_8Request["params"]["sessionID"]
+  readonly requestID: Endpoint9_8Request["payload"]["requestID"]
+  readonly expectedRevision: Endpoint9_8Request["payload"]["expectedRevision"]
+  readonly legacyDigest: Endpoint9_8Request["payload"]["legacyDigest"]
+  readonly locationRevision: Endpoint9_8Request["payload"]["locationRevision"]
+  readonly location: Endpoint9_8Request["payload"]["location"]
+  readonly accepted: Endpoint9_8Request["payload"]["accepted"]
+}
+const Endpoint9_8 = (raw: RawClient["server.permission"]) => (input: Endpoint9_8Input) =>
+  raw["session.policy.review"]({
+    params: { sessionID: input["sessionID"] },
+    payload: {
+      requestID: input["requestID"],
+      expectedRevision: input["expectedRevision"],
+      legacyDigest: input["legacyDigest"],
+      locationRevision: input["locationRevision"],
+      location: input["location"],
+      accepted: input["accepted"],
+    },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
 const adaptGroup9 = (raw: RawClient["server.permission"]) => ({
   listRequests: Endpoint9_0(raw),
   listSaved: Endpoint9_1(raw),
@@ -495,6 +529,8 @@ const adaptGroup9 = (raw: RawClient["server.permission"]) => ({
   list: Endpoint9_4(raw),
   get: Endpoint9_5(raw),
   reply: Endpoint9_6(raw),
+  inspect: Endpoint9_7(raw),
+  review: Endpoint9_8(raw),
 })
 
 type Endpoint10_0Request = Parameters<RawClient["server.fs"]["fs.directoryStatus"]>[0]

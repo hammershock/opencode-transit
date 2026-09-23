@@ -78,6 +78,7 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     tokens_cache_write: (info.tokens ?? { cache: { write: 0 } }).cache.write,
     revert: info.revert ? { ...info.revert, messageID: SessionMessage.ID.make(info.revert.messageID) } : null,
     permission: info.permission ? [...info.permission] : undefined,
+    permission_boundary: info.permissionBoundary,
     subagent_access: info.subagentAccess ?? null,
     time_created: info.time.created,
     time_updated: info.time.updated,
@@ -286,7 +287,12 @@ const layer = Layer.effectDiscard(
           .update(SessionTable)
           .set({
             ...metadata,
-            ...(changed ? { permission_revision: sql`${SessionTable.permission_revision} + 1` } : {}),
+            ...(changed
+              ? {
+                  permission_revision: sql`${SessionTable.permission_revision} + 1`,
+                  permission_basis_revision: sql`${SessionTable.permission_basis_revision} + 1`,
+                }
+              : {}),
           })
           .where(eq(SessionTable.id, event.data.sessionID))
           .run()
@@ -328,7 +334,12 @@ const layer = Layer.effectDiscard(
             path: event.data.subdirectory,
             workspace_id: event.data.location.workspaceID ? WorkspaceV2.ID.make(event.data.location.workspaceID) : null,
             time_updated: DateTime.toEpochMillis(event.data.timestamp),
-            ...(changed ? { permission_revision: sql`${SessionTable.permission_revision} + 1` } : {}),
+            ...(changed
+              ? {
+                  permission_revision: sql`${SessionTable.permission_revision} + 1`,
+                  permission_basis_revision: sql`${SessionTable.permission_basis_revision} + 1`,
+                }
+              : {}),
           })
           .where(eq(SessionTable.id, event.data.sessionID))
           .run()
@@ -346,6 +357,7 @@ const layer = Layer.effectDiscard(
             portable_target_label: null,
             workspace_id: event.data.location.workspaceID ? WorkspaceV2.ID.make(event.data.location.workspaceID) : null,
             location_revision: event.data.revision,
+            permission_basis_revision: sql`${SessionTable.permission_basis_revision} + 1`,
             time_updated: DateTime.toEpochMillis(event.data.timestamp),
           })
           .where(

@@ -52,6 +52,8 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import { RuntimeContext } from "@opencode-ai/core/runtime-context"
 import { AgentV2 } from "@opencode-ai/core/agent"
+import { PermissionContext } from "@/agent/permission-context"
+import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { eq } from "drizzle-orm"
@@ -1174,16 +1176,7 @@ const layer = Layer.effect(
         // Keep the Location lease for the whole loop so the LayerMap TTL cannot dispose them mid-turn.
         const locationContext = yield* Layer.build(locationLayer)
         const locationTools = Context.get(locationContext, LocationToolRegistry.Service)
-        const materializedLocationTools = yield* locationTools.materialize()
-        const locationToolMaterialization =
-          loopLocation.target.type === "rexd"
-            ? materializedLocationTools
-            : {
-                ...materializedLocationTools,
-                definitions: materializedLocationTools.definitions.filter((definition) =>
-                  ["read", "skill"].includes(definition.name),
-                ),
-              }
+        const locationPolicy = Context.get(locationContext, ExecutionPolicy.Service)
         const locationRegistry = registry
         const locationFilesystem = fsys
         yield* contextAt({ sessionID, agent: session.agent ?? "build", location: loopLocation })
@@ -1279,6 +1272,18 @@ const layer = Layer.effect(
             throw error
           }
           const maxSteps = agent.steps ?? Infinity
+          const policy = yield* locationPolicy.resolve(sessionID, agent.id ?? agent.name).pipe(Effect.orDie)
+          const effectiveAgent = { ...agent, permission: PermissionContext.legacy(policy.rules) }
+          const materializedLocationTools = yield* locationTools.materialize(policy.rules, policy.ceilings)
+          const locationToolMaterialization =
+            loopLocation.target.type === "rexd"
+              ? materializedLocationTools
+              : {
+                  ...materializedLocationTools,
+                  definitions: materializedLocationTools.definitions.filter((definition) =>
+                    ["read", "skill"].includes(definition.name),
+                  ),
+                }
           const isLastStep = step >= maxSteps
           msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
             Effect.provideService(RuntimeFlags.Service, flags),
@@ -1328,7 +1333,7 @@ const layer = Layer.effect(
             const promptOps = yield* ops()
 
             const tools = yield* SessionTools.resolve({
-              agent,
+              agent: effectiveAgent,
               session,
               model,
               processor: handle,
@@ -1336,6 +1341,7 @@ const layer = Layer.effect(
               messages: msgs,
               promptOps,
               locationTools: locationToolMaterialization,
+              policy,
             }).pipe(
               Effect.provideService(Plugin.Service, plugin),
               Effect.provideService(Permission.Service, permission),
@@ -1363,9 +1369,9 @@ const layer = Layer.effect(
               MessageV2.toModelMessagesEffect(msgs, model),
               systemAssembly.assemble({
                 sessionID,
-                agent,
+                agent: effectiveAgent,
                 model,
-                permission: session.permission,
+                permission: [],
               }),
             ])
             const system = [...assembled.system]
@@ -1373,8 +1379,8 @@ const layer = Layer.effect(
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({
               user: lastUser,
-              agent,
-              permission: session.permission,
+              agent: effectiveAgent,
+              permission: [],
               sessionID,
               parentSessionID: session.parentID,
               system,

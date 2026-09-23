@@ -237,6 +237,7 @@ export type Session = {
     archived?: number
   }
   permission?: PermissionRuleset
+  permissionBoundary?: SessionPolicyBoundary
   subagentAccess?: SessionSubagentAccess
   revert?: {
     messageID: string
@@ -2474,6 +2475,7 @@ export type GlobalSession = {
     archived?: number
   }
   permission?: PermissionRuleset
+  permissionBoundary?: SessionPolicyBoundary
   subagentAccess?: SessionSubagentAccess
   revert?: {
     messageID: string
@@ -3372,6 +3374,18 @@ export type LocationRexdTarget = {
 }
 
 export type LocationTarget = LocationLocalTarget | LocationRexdTarget
+
+export type PermissionV2Effect = "allow" | "deny" | "ask"
+
+export type PermissionV2Rule = {
+  action: string
+  resource: string
+  effect: PermissionV2Effect
+}
+
+export type PermissionV2Ruleset = Array<PermissionV2Rule>
+
+export type SessionPolicyBoundary = Array<PermissionV2Ruleset>
 
 export type ModelRef = {
   id: string
@@ -4396,16 +4410,6 @@ export type ProviderRequest = {
 }
 
 export type AgentColor = string | "primary" | "secondary" | "accent" | "success" | "warning" | "error" | "info"
-
-export type PermissionV2Effect = "allow" | "deny" | "ask"
-
-export type PermissionV2Rule = {
-  action: string
-  resource: string
-  effect: PermissionV2Effect
-}
-
-export type PermissionV2Ruleset = Array<PermissionV2Rule>
 
 export type AgentV2Info = {
   id: string
@@ -5663,6 +5667,46 @@ export type PermissionSavedInfo = {
   projectID: string
   action: string
   resource: string
+}
+
+export type SessionPolicyDigest = string
+
+export type SessionPolicyRequestId = string
+
+export type SessionPolicyReview = {
+  version: 1
+  sessionID: string
+  requestID: SessionPolicyRequestId
+  deviceID: string
+  previousRevision: number
+  revision: number
+  basisRevision?: number
+  legacyDigest: SessionPolicyDigest
+  locationRevision: number
+  directory: string
+  portableTargetLabel?: string
+  baseline: PermissionV2Ruleset
+  accepted: Array<boolean>
+}
+
+export type SessionPolicyView = {
+  status: "current" | "pending" | "reviewed"
+  revision: number
+  legacyDigest: SessionPolicyDigest
+  location: LocationRef
+  locationRevision: number
+  baseline: PermissionV2Ruleset
+  rules: PermissionV2Ruleset
+  review?: SessionPolicyReview
+}
+
+export type SessionPolicyRequest = {
+  requestID: SessionPolicyRequestId
+  expectedRevision: number
+  legacyDigest: SessionPolicyDigest
+  locationRevision: number
+  location: LocationRef
+  accepted: Array<boolean>
 }
 
 export type FileSystemDirectoryStatus = {
@@ -15826,6 +15870,10 @@ export type V2SessionPermissionCreateErrors = {
    * SessionNotFoundError
    */
   404: SessionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type V2SessionPermissionCreateError = V2SessionPermissionCreateErrors[keyof V2SessionPermissionCreateErrors]
@@ -15909,6 +15957,10 @@ export type V2SessionPermissionReplyErrors = {
    * SessionNotFoundError | PermissionNotFoundError
    */
   404: PermissionNotFoundError | SessionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type V2SessionPermissionReplyError = V2SessionPermissionReplyErrors[keyof V2SessionPermissionReplyErrors]
@@ -15922,6 +15974,96 @@ export type V2SessionPermissionReplyResponses = {
 
 export type V2SessionPermissionReplyResponse =
   V2SessionPermissionReplyResponses[keyof V2SessionPermissionReplyResponses]
+
+export type V2SessionPolicyInspectData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/policy"
+}
+
+export type V2SessionPolicyInspectErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionPolicyInspectError = V2SessionPolicyInspectErrors[keyof V2SessionPolicyInspectErrors]
+
+export type V2SessionPolicyInspectResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionPolicyView
+  }
+}
+
+export type V2SessionPolicyInspectResponse = V2SessionPolicyInspectResponses[keyof V2SessionPolicyInspectResponses]
+
+export type V2SessionPolicyReviewData = {
+  body: SessionPolicyRequest
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/policy/review"
+}
+
+export type V2SessionPolicyReviewErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionPolicyReviewError = V2SessionPolicyReviewErrors[keyof V2SessionPolicyReviewErrors]
+
+export type V2SessionPolicyReviewResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionPolicyReview
+  }
+}
+
+export type V2SessionPolicyReviewResponse = V2SessionPolicyReviewResponses[keyof V2SessionPolicyReviewResponses]
 
 export type V2FsReadData = {
   body?: never

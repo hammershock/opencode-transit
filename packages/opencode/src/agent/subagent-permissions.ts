@@ -19,7 +19,7 @@ export function deriveSubagentSessionPermission(input: {
   const canTodo = input.subagent.permission.some((rule) => rule.permission === "todowrite")
   return [
     ...input.parentSessionPermission.filter(
-      (rule) => rule.permission === "external_directory" || rule.action === "deny",
+      (rule) => rule.action === "deny" || (rule.permission === "external_directory" && rule.action === "ask"),
     ),
     ...(canTodo ? [] : [{ permission: "todowrite" as const, pattern: "*" as const, action: "deny" as const }]),
     ...(canTask ? [] : [{ permission: "task" as const, pattern: "*" as const, action: "deny" as const }]),

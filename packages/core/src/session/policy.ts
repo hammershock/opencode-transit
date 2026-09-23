@@ -136,7 +136,12 @@ export function make(input: {
     const latest = yield* db
       .select()
       .from(SessionPolicyReviewTable)
-      .where(eq(SessionPolicyReviewTable.session_id, sessionID))
+      .where(
+        and(
+          eq(SessionPolicyReviewTable.session_id, sessionID),
+          eq(SessionPolicyReviewTable.device_id, input.deviceID),
+        ),
+      )
       .orderBy(desc(SessionPolicyReviewTable.seq))
       .limit(1)
       .get()
@@ -148,13 +153,14 @@ export function make(input: {
       (review.sessionID !== sessionID || review.deviceID !== latest.device_id || review.requestID !== latest.request_id)
     )
       return yield* new Failure({ kind: "unavailable", message: "Policy review identity is inconsistent" })
-    const activation = review?.deviceID === input.deviceID ? yield* receipt(sessionID, review.requestID) : undefined
+    const activation = review ? yield* receipt(sessionID, review.requestID) : undefined
     const bound = activation ? decodeLocation(activation.location) : undefined
     const valid =
       review &&
       bound &&
       review.sessionID === sessionID &&
-      review.revision === stored.permission_revision &&
+      review.basisRevision !== undefined &&
+      review.basisRevision === stored.permission_basis_revision &&
       review.legacyDigest === digest(baseline) &&
       review.locationRevision === stored.location_revision &&
       locationKey(bound) === locationKey(location)
@@ -230,6 +236,7 @@ export function make(input: {
       deviceID: input.deviceID,
       previousRevision: current.revision,
       revision: current.revision + 1,
+      basisRevision: stored.permission_basis_revision,
       legacyDigest: current.legacyDigest,
       locationRevision: current.locationRevision,
       directory: current.location.directory,
@@ -246,6 +253,7 @@ export function make(input: {
             const latest = yield* row(request.sessionID).pipe(Effect.orDie)
             if (
               latest.permission_revision !== result.revision ||
+              latest.permission_basis_revision !== result.basisRevision ||
               latest.location_revision !== result.locationRevision ||
               digest(legacyRules(latest.permission)) !== result.legacyDigest ||
               locationKey(locationFromRow(latest)) !== locationKey(locationFromRow(stored))
@@ -281,7 +289,9 @@ export function make(input: {
   const errors = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(Effect.catchDefect((cause) => (cause instanceof Failure ? Effect.fail(cause) : Effect.die(cause))))
   return {
-    inspect: (sessionID: SessionSchema.ID) => input.mutation.withLock(errors(inspect(sessionID))),
+    // Read-only composition also runs inside prompt admission/rebind locks.
+    // Review still owns serialization and rechecks every token at commit.
+    inspect: (sessionID: SessionSchema.ID) => errors(inspect(sessionID)),
     review: (request: ReviewInput) => input.mutation.withLock(errors(review(request))),
   }
 }

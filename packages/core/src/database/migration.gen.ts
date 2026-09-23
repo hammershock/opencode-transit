@@ -50,5 +50,7 @@ export const migrations = (
     import("./migration/20260912054016_session-skill-guidance"),
     import("./migration/20260918054937_session-subagent-access"),
     import("./migration/20260922185212_session-policy-review"),
+    import("./migration/20260922205840_policy-runtime-binding"),
+    import("./migration/20260923052013_policy-basis-revision"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

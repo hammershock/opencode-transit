@@ -37,14 +37,27 @@ export function DialogPermissionModes(props: {
   sessionMode: PermissionMode
   setDefault: (mode: PermissionMode) => Promise<void> | void
   setSession: (mode: PermissionMode) => Promise<void> | void
+  review?: () => Promise<void> | void
 }) {
   const dialog = useDialog()
   const choices = () => permissionModeActions(props)
   return (
     <DialogSelect
       title="Permission modes"
-      options={choices()}
+      options={[
+        ...choices(),
+        ...(props.review
+          ? [
+              {
+                title: "Review Session permissions",
+                description: "Inspect and review historical path/tool grants",
+                value: "review" as const,
+              },
+            ]
+          : []),
+      ]}
       onSelect={async (option) => {
+        if (option.value === "review") return props.review?.()
         await choices()
           .find((choice) => choice.value === option.value)!
           .run()

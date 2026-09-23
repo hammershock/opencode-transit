@@ -55,6 +55,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { makeGlobalNode } from "@opencode-ai/core/effect/app-node"
 import { AppNodeBuilderV1 } from "./app-node-builder-v1"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
 import { ProviderUsage } from "@/provider/usage"
@@ -99,6 +100,7 @@ export const AppLayer = AppNodeBuilderV1.build(
     Todo.node,
     Session.node,
     SessionProjector.node,
+    SessionPolicyAccess.node,
     SessionStatus.node,
     BackgroundJob.node,
     RuntimeFlags.node,

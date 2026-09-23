@@ -4,7 +4,16 @@ import { PermissionSaved } from "@opencode-ai/core/permission/saved"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { PermissionNotFoundError, SessionNotFoundError } from "@opencode-ai/protocol/errors"
+import {
+  ConflictError,
+  InvalidRequestError,
+  PermissionNotFoundError,
+  ServiceUnavailableError,
+  SessionNotFoundError,
+} from "@opencode-ai/protocol/errors"
+import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
+import type { SessionPolicyStore } from "@opencode-ai/core/session/policy"
+import type { SessionSchema } from "@opencode-ai/core/session/schema"
 import { response } from "../location"
 
 function missingRequest(id: PermissionV2.ID) {
@@ -13,6 +22,7 @@ function missingRequest(id: PermissionV2.ID) {
 
 export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", (handlers) =>
   Effect.gen(function* () {
+    const policies = yield* SessionPolicyAccess.Service
     return handlers
       .handle(
         "permission.request.list",
@@ -45,6 +55,10 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
                       message: `Session not found: ${error.sessionID}`,
                     }),
                 ),
+                Effect.catchTag(
+                  "SessionPolicy.Failure",
+                  (error) => new ServiceUnavailableError({ message: error.message, service: "session.policy" }),
+                ),
               ),
           }
         }),
@@ -72,7 +86,13 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
           if (!request || request.sessionID !== ctx.params.sessionID) return yield* missingRequest(ctx.params.requestID)
           yield* permission
             .reply({ requestID: ctx.params.requestID, reply: ctx.payload.reply, message: ctx.payload.message })
-            .pipe(Effect.catchTag("PermissionV2.NotFoundError", () => missingRequest(ctx.params.requestID)))
+            .pipe(
+              Effect.catchTag("PermissionV2.NotFoundError", () => missingRequest(ctx.params.requestID)),
+              Effect.catchTag(
+                "SessionPolicy.Failure",
+                (error) => new ServiceUnavailableError({ message: error.message, service: "session.policy" }),
+              ),
+            )
           return HttpApiSchema.NoContent.make()
         }),
       )
@@ -88,6 +108,34 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
         }),
       )
       .handle(
+        "session.policy.inspect",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* policies
+              .inspect(ctx.params.sessionID)
+              .pipe(
+                Effect.catchTag("SessionPolicy.Failure", (error) =>
+                  Effect.fail(policyError(ctx.params.sessionID, error)),
+                ),
+              ),
+          }
+        }),
+      )
+      .handle(
+        "session.policy.review",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* policies
+              .review({ sessionID: ctx.params.sessionID, ...ctx.payload })
+              .pipe(
+                Effect.catchTag("SessionPolicy.Failure", (error) =>
+                  Effect.fail(policyError(ctx.params.sessionID, error)),
+                ),
+              ),
+          }
+        }),
+      )
+      .handle(
         "permission.saved.remove",
         Effect.fn(function* (ctx) {
           yield* (yield* PermissionSaved.Service).remove(ctx.params.id)
@@ -96,3 +144,10 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
       )
   }),
 )
+
+function policyError(sessionID: SessionSchema.ID, error: SessionPolicyStore.Failure) {
+  if (error.kind === "not-found") return new SessionNotFoundError({ sessionID, message: error.message })
+  if (error.kind === "conflict") return new ConflictError({ message: error.message, resource: "session.policy" })
+  if (error.kind === "invalid-review") return new InvalidRequestError({ message: error.message, kind: "policy-review" })
+  return new ServiceUnavailableError({ message: error.message, service: "session.policy" })
+}

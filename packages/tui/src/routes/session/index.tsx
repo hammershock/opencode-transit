@@ -830,6 +830,10 @@ export function Session() {
             open: () =>
               dialog.replace(() => (
                 <DialogPermissionModes
+                  review={async () => {
+                    const { DialogSessionPolicy } = await import("../../component/dialog-session-policy")
+                    dialog.replace(() => <DialogSessionPolicy sessionID={route.sessionID} />)
+                  }}
                   defaultMode={local.permission.defaultMode}
                   sessionMode={session()?.approvalMode ?? "normal"}
                   setDefault={(approvalMode) => local.permission.setDefault(approvalMode)}

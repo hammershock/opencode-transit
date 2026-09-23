@@ -81,6 +81,10 @@ import type {
   PermissionsGetOutput,
   PermissionsReplyInput,
   PermissionsReplyOutput,
+  PermissionsInspectInput,
+  PermissionsInspectOutput,
+  PermissionsReviewInput,
+  PermissionsReviewOutput,
   FilesDirectoryStatusInput,
   FilesDirectoryStatusOutput,
   FilesEnsureDirectoryInput,
@@ -822,7 +826,7 @@ export function make(options: ClientOptions) {
               agent: input["agent"],
             },
             successStatus: 200,
-            declaredStatuses: [404, 400, 401],
+            declaredStatuses: [404, 503, 400, 401],
             empty: false,
           },
           requestOptions,
@@ -856,11 +860,41 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/permission/${encodeURIComponent(input.requestID)}/reply`,
             body: { reply: input["reply"], message: input["message"] },
             successStatus: 204,
-            declaredStatuses: [404, 400, 401],
+            declaredStatuses: [404, 503, 400, 401],
             empty: true,
           },
           requestOptions,
         ),
+      inspect: (input: PermissionsInspectInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: PermissionsInspectOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/policy`,
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      review: (input: PermissionsReviewInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: PermissionsReviewOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/policy/review`,
+            body: {
+              requestID: input["requestID"],
+              expectedRevision: input["expectedRevision"],
+              legacyDigest: input["legacyDigest"],
+              locationRevision: input["locationRevision"],
+              location: input["location"],
+              accepted: input["accepted"],
+            },
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
     },
     files: {
       directoryStatus: (input: FilesDirectoryStatusInput, requestOptions?: RequestOptions) =>

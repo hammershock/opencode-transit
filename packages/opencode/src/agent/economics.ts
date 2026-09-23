@@ -23,6 +23,7 @@ import type { ModelContext } from "@opencode-ai/schema/model-context"
 import { ToolRegistry } from "@/tool/registry"
 import { MCP } from "@/mcp"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
 
 const MAX_GUIDANCE_BYTES = 16 * 1024
 
@@ -270,7 +271,9 @@ const contextLayer = Layer.effect(
     ) {
       const session = yield* sessions.get(sessionID)
       const agent = yield* agents.get(session.agent ?? "build")
-      const ref = modelOverride ?? (session.model ? { providerID: session.model.providerID, modelID: session.model.id } : undefined)
+      const ref =
+        modelOverride ??
+        (session.model ? { providerID: session.model.providerID, modelID: session.model.id } : undefined)
       if (!agent || !ref) return null
       const model = yield* provider
         .getModel(ProviderV2.ID.make(ref.providerID), ModelV2.ID.make(ref.modelID))
@@ -293,7 +296,9 @@ const contextLayer = Layer.effect(
       const locationLayer = locations.get(locationRef)
       const materialization = yield* Effect.gen(function* () {
         const locationRegistry = yield* LocationToolRegistry.Service
-        return yield* locationRegistry.materialize()
+        const policy = yield* ExecutionPolicy.Service
+        const snapshot = yield* policy.resolve(sessionID, agent.id ?? agent.name)
+        return { tools: yield* locationRegistry.materialize(snapshot.rules, snapshot.ceilings), policy: snapshot }
       }).pipe(Effect.provide(locationLayer))
       return yield* resolveDefinitions({
         agent,
@@ -301,7 +306,8 @@ const contextLayer = Layer.effect(
         providerID: session.model.providerID,
         permission: session.permission,
         sessionID,
-        locationTools: materialization,
+        locationTools: materialization.tools,
+        policy: materialization.policy,
       }).pipe(
         Effect.provideService(ToolRegistry.Service, registry),
         Effect.provideService(MCP.Service, mcp),

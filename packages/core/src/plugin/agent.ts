@@ -97,6 +97,7 @@ export const Plugin = define({
   id: "agent",
   effect: Effect.fn(function* (ctx) {
     const location = yield* Location.Service
+    const agents = yield* AgentV2.Service
     const worktree = location.directory
     const whitelistedDirs = [TRUNCATION_GLOB, path.join(Global.Path.tmp, "*")]
     const readonlyExternalDirectory: PermissionV2.Ruleset = [
@@ -197,6 +198,11 @@ export const Plugin = define({
         item.system = PROMPT_SUMMARY
         item.permissions.push(...PermissionV2.merge(defaults, [{ action: "*", resource: "*", effect: "deny" }]))
       })
+      return Effect.forEach(
+        draft.list(),
+        (agent) => agents.capturePermissionDefaults(AgentV2.ID.make(agent.id), agent.permissions),
+        { discard: true },
+      )
     })
   }),
 })

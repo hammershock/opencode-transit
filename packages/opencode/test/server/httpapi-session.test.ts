@@ -27,6 +27,8 @@ import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -45,7 +47,10 @@ const noopBootstrapLayer = Layer.succeed(
 )
 const appLayer = AppNodeBuilder.build(
   LayerNode.group([InstanceStore.node, Project.node, Session.node, Workspace.node, Database.node, Ripgrep.node]),
-  [[InstanceStore.bootstrapNode, noopBootstrapLayer]],
+  [
+    [InstanceStore.bootstrapNode, noopBootstrapLayer],
+    [SessionExecution.node, SessionExecutionLocal.node],
+  ],
 )
 const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
   HttpApiApp.routes,
@@ -397,6 +402,80 @@ describe("session HttpApi", () => {
             headers,
           })).data,
         ).toMatchObject([{ type: "assistant" }])
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "inspects and reviews legacy policy with idempotency and conflict responses",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const session = yield* createSession({
+          permission: [
+            { permission: "read", pattern: "*.env", action: "deny" },
+            { permission: "external_directory", pattern: "/historical/*", action: "allow" },
+          ],
+        })
+        const inspect = yield* request(`/api/session/${session.id}/policy`, { headers })
+        expect(inspect.status).toBe(200)
+        const inspectBody = yield* responseJson(inspect)
+        const view = (
+          inspectBody as {
+            data: {
+              status: string
+              revision: number
+              legacyDigest: string
+              locationRevision: number
+              location: { directory: string; target: { type: "local" } }
+              baseline: unknown[]
+              rules: unknown[]
+            }
+          }
+        ).data
+        expect(view).toMatchObject({ status: "pending", revision: 0 })
+        expect(view.baseline).toHaveLength(2)
+        expect(view.rules).toEqual([{ action: "read", resource: "*.env", effect: "deny" }])
+
+        const payload = {
+          requestID: "http-review",
+          expectedRevision: view.revision,
+          legacyDigest: view.legacyDigest,
+          locationRevision: view.locationRevision,
+          location: view.location,
+          accepted: [true],
+        }
+        const review = yield* request(`/api/session/${session.id}/policy/review`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        })
+        expect(review.status).toBe(200)
+        const receipt = yield* responseJson(review)
+        expect(receipt).toMatchObject({ data: { revision: 1 } })
+
+        const retry = yield* request(`/api/session/${session.id}/policy/review`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        })
+        expect(retry.status).toBe(200)
+        expect(yield* responseJson(retry)).toEqual(receipt)
+
+        const conflict = yield* request(`/api/session/${session.id}/policy/review`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ ...payload, accepted: [false] }),
+        })
+        expect(conflict.status).toBe(409)
+        expect(yield* responseJson(conflict)).toMatchObject({
+          _tag: "ConflictError",
+          resource: "session.policy",
+        })
+
+        const missing = yield* request(`/api/session/${SessionID.descending()}/policy`, { headers })
+        expect(missing.status).toBe(404)
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

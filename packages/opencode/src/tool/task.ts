@@ -15,6 +15,7 @@ import { Effect, Exit, Option, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
+import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -95,6 +96,7 @@ export const TaskTool = Tool.define(
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    const policies = yield* SessionPolicyAccess.Service
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -109,6 +111,7 @@ export const TaskTool = Tool.define(
       }
 
       const parent = yield* sessions.get(ctx.sessionID)
+      const parentPolicy = yield* policies.inspect(ctx.sessionID).pipe(Effect.orDie)
       const catalog = subagents
         ? yield* subagents.resolve({
             parentAgentID: ctx.agent,
@@ -184,6 +187,7 @@ export const TaskTool = Tool.define(
           parentID: ctx.sessionID,
           title: params.description + ` (@${next.name} subagent)`,
           agent: next.id ?? next.name,
+          permissionBoundary: [...(parent.permissionBoundary ?? []), parentPolicy.rules],
           permission: [
             ...childPermission,
             ...childToolDenies.filter(
