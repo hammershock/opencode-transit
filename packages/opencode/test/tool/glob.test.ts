@@ -1,6 +1,7 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { describe, expect } from "bun:test"
 import path from "path"
+import fs from "fs/promises"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Cause, Effect, Exit, Layer } from "effect"
 import { GlobTool } from "../../src/tool/glob"
@@ -103,6 +104,63 @@ describe("tool.glob", () => {
       expect(result.metadata.count).toBe(1)
       expect(result.output).toContain(path.join(test.directory, "a.ts"))
       expect(result.output).not.toContain(path.join(test.directory, "b.txt"))
+    }),
+  )
+
+  it.instance("searches absolute patterns from their fixed directory prefix", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const library = path.join(test.directory, "papers", "library")
+      yield* Effect.promise(() => fs.mkdir(path.join(library, "nested"), { recursive: true }))
+      yield* Effect.promise(() => Bun.write(path.join(library, "nested", "paper.md"), "paper"))
+      yield* Effect.promise(() => Bun.write(path.join(test.directory, "unrelated.md"), "other"))
+      const info = yield* GlobTool
+      const glob = yield* info.init()
+      const absolute = path.join(library, "**", "*.md")
+
+      const result = yield* glob.execute({ pattern: absolute }, ctx)
+      expect(result.metadata.count).toBe(1)
+      expect(result.output).toContain(path.join(library, "nested", "paper.md"))
+      expect(result.output).not.toContain(path.join(test.directory, "unrelated.md"))
+
+      const explicit = yield* glob.execute({ pattern: absolute, path: test.directory }, ctx)
+      expect(explicit.output).toBe(result.output)
+    }),
+  )
+
+  it.instance("checks external access at the effective absolute glob root", () =>
+    Effect.gen(function* () {
+      const outer = yield* tmpdirScoped()
+      yield* Effect.promise(() => Bun.write(path.join(outer, "paper.md"), "paper"))
+      const requests = asks()
+      const info = yield* GlobTool
+      const glob = yield* info.init()
+      const result = yield* glob.execute({ pattern: path.join(outer, "*.md") }, requests.next)
+
+      expect(result.metadata.count).toBe(1)
+      expect(requests.items.some((request) => request.permission === "external_directory")).toBe(true)
+    }),
+  )
+
+  it.instance("rejects an absolute pattern outside an explicit path", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const info = yield* GlobTool
+      const glob = yield* info.init()
+      const exit = yield* glob
+        .execute(
+          { pattern: path.join(test.directory, "papers", "*.md"), path: path.join(test.directory, "other") },
+          ctx,
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        const error = Cause.squash(exit.cause)
+        expect(error instanceof Error ? error.message : String(error)).toContain(
+          "absolute glob pattern must be inside the specified path",
+        )
+      }
     }),
   )
 

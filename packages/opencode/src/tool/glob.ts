@@ -35,8 +35,22 @@ export const GlobTool = Tool.define(
             },
           })
 
-          let search = params.path ?? ins.directory
-          search = path.isAbsolute(search) ? search : path.resolve(ins.directory, search)
+          const requested = params.path ?? ins.directory
+          const absolute = path.isAbsolute(params.pattern)
+          const wildcard = params.pattern.search(/[*?[\]{}]/u)
+          const search =
+            absolute && params.path === undefined
+              ? path.dirname(wildcard < 0 ? params.pattern : params.pattern.slice(0, wildcard + 1))
+              : path.isAbsolute(requested)
+                ? requested
+                : path.resolve(ins.directory, requested)
+          const pattern = absolute ? path.relative(search, params.pattern) : params.pattern
+          if (
+            absolute &&
+            (!pattern || pattern === ".." || pattern.startsWith(`..${path.sep}`) || path.isAbsolute(pattern))
+          ) {
+            throw new Error("absolute glob pattern must be inside the specified path")
+          }
           const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
           if (info?.type === "File") {
             throw new Error(`glob path must be a directory: ${search}`)
@@ -47,7 +61,12 @@ export const GlobTool = Tool.define(
           })
 
           const limit = 100
-          const files = yield* ripgrep.glob({ cwd: search, pattern: params.pattern, limit, signal: ctx.abort })
+          const files = yield* ripgrep.glob({
+            cwd: search,
+            pattern: absolute ? pattern.replaceAll(path.sep, "/") : pattern,
+            limit,
+            signal: ctx.abort,
+          })
           const truncated = files.length === limit
 
           const output = []
