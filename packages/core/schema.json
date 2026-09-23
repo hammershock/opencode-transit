@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "48790c09-44d8-495f-b60e-7ed32d62d487",
+  "id": "73fe022e-9a8d-4042-9ae7-7e7a5ec23b3a",
   "prevIds": [
-    "72196b48-dd8f-405e-9b79-a7e1c306965b"
+    "9f718321-2288-4b99-b26a-30cdf0a15e65"
   ],
   "ddl": [
     {
@@ -12,6 +12,18 @@
     },
     {
       "name": "data_migration",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_policy_activation",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_policy_device",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_policy_review",
       "entityType": "tables"
     },
     {
@@ -185,6 +197,116 @@
       "name": "time_completed",
       "entityType": "columns",
       "table": "data_migration"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_policy_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "device_id",
+      "entityType": "columns",
+      "table": "session_policy_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "session_policy_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "location",
+      "entityType": "columns",
+      "table": "session_policy_activation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "session_policy_device"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "device_id",
+      "entityType": "columns",
+      "table": "session_policy_device"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_policy_review"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "device_id",
+      "entityType": "columns",
+      "table": "session_policy_review"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "session_policy_review"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "seq",
+      "entityType": "columns",
+      "table": "session_policy_review"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data",
+      "entityType": "columns",
+      "table": "session_policy_review"
     },
     {
       "type": "integer",
@@ -1427,6 +1549,36 @@
       "table": "session"
     },
     {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "permission_revision",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "permission_basis_revision",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "permission_boundary",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
       "type": "text",
       "notNull": false,
       "autoincrement": false,
@@ -1643,6 +1795,36 @@
     },
     {
       "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_policy_activation_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_policy_activation"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_policy_review_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_policy_review"
+    },
+    {
+      "columns": [
         "active_account_id"
       ],
       "tableTo": "account",
@@ -1838,6 +2020,28 @@
     },
     {
       "columns": [
+        "session_id",
+        "device_id",
+        "request_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_policy_activation_pk",
+      "entityType": "pks",
+      "table": "session_policy_activation"
+    },
+    {
+      "columns": [
+        "session_id",
+        "device_id",
+        "request_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_policy_review_pk",
+      "entityType": "pks",
+      "table": "session_policy_review"
+    },
+    {
+      "columns": [
         "email",
         "url"
       ],
@@ -1882,6 +2086,15 @@
       "nameExplicit": false,
       "name": "data_migration_pk",
       "table": "data_migration",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "session_policy_device_pk",
+      "table": "session_policy_device",
       "entityType": "pks"
     },
     {

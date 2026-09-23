@@ -9,6 +9,7 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { Agent } from "../../src/agent/agent"
 import { Subagent } from "@/agent/subagent"
@@ -31,8 +32,16 @@ import { disposeAllInstances } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
-import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
+import {
+  LocationServiceMap,
+  buildLocationServiceMap,
+  localProvider,
+  locationServiceMapLayer,
+} from "@opencode-ai/core/location-services"
 import { Location } from "@opencode-ai/core/location"
+import { AbsolutePath } from "@opencode-ai/schema/schema"
+import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
+import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { eq } from "drizzle-orm"
 import { Global } from "@opencode-ai/core/global"
@@ -48,7 +57,7 @@ const ref = {
   modelID: ModelV2.ID.make("test-model"),
 }
 
-const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
+const layer = (flags: Partial<RuntimeFlags.Info> = {}, replacements: LayerNode.Replacements = []) =>
   LayerNode.compile(
     LayerNode.group([
       Agent.node,
@@ -59,6 +68,7 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
       CrossSpawnSpawner.node,
       Session.node,
       SessionProjector.node,
+      SessionPolicyAccess.node,
       SessionRunState.node,
       SessionStatus.node,
       Truncate.node,
@@ -70,11 +80,87 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     [
       [RuntimeFlags.node, RuntimeFlags.layer(flags)],
       [LocationServiceMap.node, locationServiceMapLayer],
+      ...replacements,
     ],
   )
 
 const it = testEffect(layer())
 const background = testEffect(layer({ experimentalBackgroundSubagents: true }))
+const remoteTarget = Location.RexdTarget.make({
+  type: "rexd",
+  targetID: Location.TargetID.make("00000000-0000-4000-8000-000000000122"),
+})
+const remoteLocation = Location.Ref.make({ target: remoteTarget, directory: AbsolutePath.make("/home/agent/project") })
+const remote = testEffect(
+  layer({}, [
+    [
+      LocationServiceMap.node,
+      buildLocationServiceMap(
+        [],
+        [
+          localProvider,
+          {
+            target: "rexd",
+            build: (ref, replacements) =>
+              localProvider.build(
+                Location.Ref.make({ ...ref, directory: AbsolutePath.make(process.cwd()) }),
+                replacements.concat([
+                  [
+                    ExecutionPolicy.node,
+                    Layer.succeed(
+                      ExecutionPolicy.Service,
+                      ExecutionPolicy.Service.of({
+                        resolve: () =>
+                          Effect.succeed({
+                            agentRules: [],
+                            rules: [],
+                            ceilings: [],
+                            session: {
+                              status: "current",
+                              revision: 0,
+                              legacyDigest: "0".repeat(64),
+                              location: remoteLocation,
+                              locationRevision: 0,
+                              baseline: [],
+                              rules: [],
+                            },
+                          }),
+                      }),
+                    ),
+                  ],
+                ]),
+              ),
+          },
+        ],
+      ),
+    ],
+    [
+      SessionPolicyAccess.node,
+      Layer.mock(SessionPolicyAccess.Service, {
+        inspect: () =>
+          Effect.succeed({
+            status: "current" as const,
+            revision: 0,
+            legacyDigest: "0".repeat(64),
+            location: remoteLocation,
+            locationRevision: 0,
+            baseline: [],
+            rules: [],
+          }),
+      }),
+    ],
+    [
+      SessionLocationAccess.node,
+      Layer.succeed(
+        SessionLocationAccess.Service,
+        SessionLocationAccess.Service.of({
+          resolve: () => Effect.succeed({ status: "resolved", location: remoteLocation }),
+          require: () => Effect.succeed(remoteLocation),
+        }),
+      ),
+    ],
+  ]),
+)
 
 function defer<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -186,18 +272,14 @@ function reply(
 }
 
 describe("tool.task", () => {
-  it.instance("creates a subagent session at the parent session location", () =>
+  remote.instance("creates a subagent session at the parent session location", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       const { chat, assistant } = yield* seed()
-      const target = Location.RexdTarget.make({
-        type: "rexd",
-        targetID: Location.TargetID.make("00000000-0000-4000-8000-000000000122"),
-      })
       yield* db
         .update(SessionTable)
-        .set({ directory: "/home/agent/project", target, last_known_target_name: "a100-2gpu" })
+        .set({ directory: "/home/agent/project", target: remoteTarget, last_known_target_name: "a100-2gpu" })
         .where(eq(SessionTable.id, chat.id))
         .run()
         .pipe(Effect.orDie)
@@ -224,7 +306,7 @@ describe("tool.task", () => {
 
       expect((yield* sessions.children(chat.id))[0]).toMatchObject({
         directory: "/home/agent/project",
-        target,
+        target: remoteTarget,
         lastKnownTargetName: "a100-2gpu",
       })
     }),

@@ -40,6 +40,7 @@ import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
 import { Pty } from "./pty"
 import { PermissionV2 } from "./permission"
+import { ExecutionPolicy } from "./permission/policy"
 import { QuestionV2 } from "./question"
 import { SessionActivity } from "./session/activity"
 import { SessionLocationAccess } from "./session/location-access"
@@ -175,9 +176,7 @@ export interface Interface {
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<ModelContext.Generation | undefined, NotFoundError | ContextSnapshotDecodeError>
   /** Inspect the per-turn prepared request parts without resolving the Session Location: runtime parts, agent prompt, model, request headers, and the latest compaction checkpoint. */
-  readonly requestContext: (
-    sessionID: SessionSchema.ID,
-  ) => Effect.Effect<
+  readonly requestContext: (sessionID: SessionSchema.ID) => Effect.Effect<
     {
       runtimeParts: ReadonlyArray<RuntimeContext.Rendered>
       agentSystem: string | null
@@ -478,7 +477,10 @@ const layer = Layer.effect(
                 ...(skills.length === 0 ? {} : { invocations: skills }),
               })
               if (session.revert)
-                yield* SessionRevert.commit(session).pipe(Effect.provideService(EventV2.Service, events))
+                yield* SessionRevert.commit(session).pipe(
+                  Effect.provideService(EventV2.Service, events),
+                  Effect.provideService(Database.Service, database),
+                )
               const expected = { sessionID: input.sessionID, messageID, prompt: resolved, delivery }
               const admitted = yield* SessionInput.admit(db, events, {
                 id: messageID,
@@ -823,7 +825,9 @@ const layer = Layer.effect(
             const instructions = yield* InstructionContext.Service
             const location = yield* Location.Service
             const tools = yield* ToolRegistry.Service
-            const materialization = yield* tools.materialize(agent.info?.permissions)
+            const policy = yield* ExecutionPolicy.Service
+            const snapshot = yield* policy.resolve(sessionID, agent.id)
+            const materialization = yield* tools.materialize(snapshot.rules, snapshot.ceilings)
             const environment = buildEnvironment(location)
             return {
               agentSystem: agent.info?.system ?? null,
@@ -1020,6 +1024,7 @@ const layer = Layer.effect(
             "session_mutation",
             Effect.gen(function* () {
               yield* requireLocation(input.sessionID)
+              yield* execution.interrupt(input.sessionID)
               const session = yield* result.get(input.sessionID)
               return yield* SessionRevert.stage({ session, messageID: input.messageID, files: input.files }).pipe(
                 Effect.provideService(Database.Service, database),
@@ -1035,8 +1040,10 @@ const layer = Layer.effect(
             "session_mutation",
             Effect.gen(function* () {
               yield* requireLocation(sessionID)
+              yield* execution.interrupt(sessionID)
               const session = yield* result.get(sessionID)
               yield* SessionRevert.clear(session).pipe(
+                Effect.provideService(Database.Service, database),
                 Effect.provideService(EventV2.Service, events),
                 Effect.provide(locations.get(session.location)),
               )
@@ -1050,7 +1057,10 @@ const layer = Layer.effect(
             Effect.gen(function* () {
               yield* requireLocation(sessionID)
               const session = yield* result.get(sessionID)
-              yield* SessionRevert.commit(session).pipe(Effect.provideService(EventV2.Service, events))
+              yield* SessionRevert.commit(session).pipe(
+                Effect.provideService(EventV2.Service, events),
+                Effect.provideService(Database.Service, database),
+              )
             }),
           ),
         ),

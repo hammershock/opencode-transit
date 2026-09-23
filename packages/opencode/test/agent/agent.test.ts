@@ -594,59 +594,6 @@ it.instance(
   },
 )
 
-it.instance(
-  "skill directories are allowed for external_directory",
-  () =>
-    Effect.gen(function* () {
-      const test = yield* TestInstance
-      const skillDir = path.join(test.directory, ".opencode", "skill", "perm-skill")
-      yield* Effect.promise(() =>
-        Bun.write(
-          path.join(skillDir, "SKILL.md"),
-          `---
-name: perm-skill
-description: Permission skill.
----
-
-# Permission Skill
-`,
-        ),
-      )
-
-      const home = process.env.OPENCODE_TEST_HOME
-      process.env.OPENCODE_TEST_HOME = test.directory
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          process.env.OPENCODE_TEST_HOME = home
-        }),
-      )
-
-      const build = yield* load((svc) => svc.get("build"))
-      const target = path.join(skillDir, "reference", "notes.md")
-      expect(Permission.evaluate("external_directory", target, build!.permission).action).toBe("allow")
-    }),
-  { git: true },
-)
-
-it.instance(
-  "project reference directories are allowed for external_directory",
-  () =>
-    Effect.gen(function* () {
-      const test = yield* TestInstance
-      const build = yield* load((svc) => svc.get("build"))
-      const target = path.resolve(test.directory, "../docs/reference/notes.md")
-      expect(Permission.evaluate("external_directory", target, build!.permission).action).toBe("allow")
-    }),
-  {
-    git: true,
-    config: {
-      references: {
-        docs: "../docs",
-      },
-    },
-  },
-)
-
 it.instance("defaultAgent returns build when no default_agent config", () =>
   Effect.gen(function* () {
     const agent = yield* load((svc) => svc.defaultAgent())

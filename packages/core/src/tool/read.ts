@@ -17,7 +17,12 @@ import { InstructionContext } from "../instruction-context"
 export const name = "read"
 const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
 const LocationInput = Schema.Struct({
-  path: Schema.String,
+  path: Schema.String.annotate({
+    description: 'File or directory to read. Use "path", not "filePath".',
+  }).annotateKey({
+    messageMissingKey:
+      'Missing required "path". Call read with {"path":"file-or-directory"}; "filePath" is not supported.',
+  }),
   offset: ReadToolFileSystem.PageInput.fields.offset.annotate({
     description: "The 1-based directory entry or text line offset to start reading from",
   }),
@@ -41,7 +46,7 @@ const layer = Layer.effectDiscard(
       .register({
         [name]: Tool.make({
           description:
-            "Read a text file or supported image, page through a large UTF-8 text file by line offset, or list a directory page. Relative paths resolve from the current location; absolute paths inside it are accepted, while external absolute paths require external_directory approval.",
+            'Read a text file or supported image, page through a large UTF-8 text file by line offset, or list a directory page. Supply the file or directory in "path" (not "filePath"). Relative paths resolve from the current location; absolute paths inside it are accepted, while external absolute paths require external_directory approval.',
           input: Input,
           output: Output,
           toModelOutput: ({ input, output }) => {
@@ -96,13 +101,34 @@ const layer = Layer.effectDiscard(
               return content
             }).pipe(
               Effect.mapError((error) => {
+                if (error instanceof PermissionV2.BlockedError)
+                  return new ToolFailure({ message: `Read permission denied: ${input.path}` })
+                if (error instanceof PermissionV2.CorrectedError)
+                  return new ToolFailure({ message: `Read declined: ${input.path}. ${error.feedback}` })
+                if (error instanceof LocationMutation.PathError) {
+                  const reason = {
+                    relative_escape:
+                      "Relative paths must stay inside the current location; use an absolute path for external files",
+                    location_escape:
+                      "Path resolves outside the current location; use an absolute path for external files",
+                    non_directory_ancestor: "A parent path is not a directory",
+                  }[error.reason]
+                  return new ToolFailure({ message: `Unable to read ${input.path}: ${reason}` })
+                }
+                if (error._tag === "PlatformError" && error.reason._tag === "NotFound")
+                  return new ToolFailure({ message: `File or directory not found: ${input.path}` })
+                if (error._tag === "PlatformError" && error.reason._tag === "PermissionDenied")
+                  return new ToolFailure({ message: `Filesystem permission denied: ${input.path}` })
                 const message =
                   error instanceof ReadToolFileSystem.BinaryFileError ||
                   error instanceof ReadToolFileSystem.MediaIngestLimitError ||
+                  error instanceof ReadToolFileSystem.MalformedUtf8Error ||
+                  error instanceof ReadToolFileSystem.OffsetOutOfRangeError ||
+                  error instanceof ReadToolFileSystem.PathKindError ||
                   error instanceof Image.DecodeError ||
                   error instanceof Image.SizeError
                     ? error.message
-                    : `Unable to read ${input.path}`
+                    : `Unable to read ${input.path}: ${error.message}`
                 return new ToolFailure({ message })
               }),
             )

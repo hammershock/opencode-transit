@@ -23,6 +23,7 @@ import { MessageV2 } from "../../src/session/message-v2"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { provideTmpdirServer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { TestLLMServer } from "../lib/llm-server"
@@ -94,6 +95,7 @@ const it = testEffect(
     [LSP.node, lsp],
     [RuntimeFlags.node, RuntimeFlags.layer({ experimentalEventSystem: true })],
     [LocationServiceMap.node, locationServiceMapLayer],
+    [SessionExecution.node, SessionExecution.noopLayer],
   ]),
 )
 

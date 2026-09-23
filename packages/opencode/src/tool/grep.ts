@@ -10,7 +10,7 @@ import * as Tool from "./tool"
 export const Parameters = Schema.Struct({
   pattern: Schema.String.annotate({ description: "The regex pattern to search for in file contents" }),
   path: Schema.optional(Schema.String).annotate({
-    description: "The directory to search in. Defaults to the current working directory.",
+    description: "The file or directory to search in. Defaults to the current working directory.",
   }),
   include: Schema.optional(Schema.String).annotate({
     description: 'File pattern to include in the search (e.g. "*.js", "*.{ts,tsx}")',
@@ -56,12 +56,14 @@ export const GrepTool = Tool.define(
             bypass: false,
             kind: requestedInfo?.type === "Directory" ? "directory" : "file",
           })
+          if (!requestedInfo) throw new Error(`File or directory not found or inaccessible: ${requested}`)
 
           const search = FSUtil.resolve(requested)
           const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
           const cwd = info?.type === "Directory" ? search : path.dirname(search)
           const result = yield* ripgrep.grep({
             cwd,
+            file: info?.type === "Directory" ? undefined : path.basename(search),
             pattern: params.pattern,
             include: params.include,
             limit: 100,
@@ -70,10 +72,7 @@ export const GrepTool = Tool.define(
           if (result.length === 0) return empty
 
           const rows = result.map((item) => ({
-            path: path.resolve(
-              requestedInfo?.type === "Directory" ? requested : path.dirname(requested),
-              item.entry.path,
-            ),
+            path: requestedInfo.type === "Directory" ? path.resolve(requested, item.entry.path) : requested,
             line: item.line,
             text: item.text,
           }))

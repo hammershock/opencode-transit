@@ -7,6 +7,8 @@ import { makeLocationNode } from "../effect/app-node"
 import { SessionSchema } from "../session/schema"
 import { AbsolutePath } from "../schema"
 import { SkillRegistry } from "./registry"
+import { EventV2 } from "../event"
+import { SessionV1 } from "../v1/session"
 
 export interface Prepared {
   readonly path?: AbsolutePath
@@ -14,6 +16,7 @@ export interface Prepared {
 }
 
 export interface Interface {
+  readonly paths: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<AbsolutePath>>
   readonly prepare: (input: {
     readonly entry: SkillRegistry.Entry
     readonly sessionID: SessionSchema.ID
@@ -54,17 +57,30 @@ export const toModelContent = (input: {
           ]),
   ].join("\n")
 
-const layer = Layer.succeed(
+const layer = Layer.effect(
   Service,
-  Service.of({
-    prepare: Effect.fn("SkillPackageAccess.prepare")(function* (input) {
-      if (input.entry.source.kind === "built-in") return { temporary: false }
-      return {
-        path: AbsolutePath.make(path.dirname(input.entry.location)),
-        temporary: false,
-      }
-    }),
+  Effect.gen(function* () {
+    const prepared = new Map<SessionSchema.ID, Set<AbsolutePath>>()
+    const events = yield* EventV2.Service
+    const unsubscribe = yield* events.listen((event) =>
+      Effect.sync(() => {
+        if (event.type === SessionV1.Event.Deleted.type)
+          prepared.delete((event as EventV2.Payload<typeof SessionV1.Event.Deleted>).data.sessionID)
+      }),
+    )
+    yield* Effect.addFinalizer(() => unsubscribe)
+    return Service.of({
+      paths: (sessionID) => Effect.sync(() => [...(prepared.get(sessionID) ?? [])]),
+      prepare: Effect.fn("SkillPackageAccess.prepare")(function* (input) {
+        if (input.entry.source.kind === "built-in") return { temporary: false }
+        const directory = AbsolutePath.make(path.dirname(input.entry.location))
+        const current = prepared.get(input.sessionID) ?? new Set<AbsolutePath>()
+        current.add(directory)
+        prepared.set(input.sessionID, current)
+        return { path: directory, temporary: false }
+      }),
+    })
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [] })
+export const node = makeLocationNode({ service: Service, layer, deps: [EventV2.node] })

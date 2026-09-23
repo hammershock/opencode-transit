@@ -17,6 +17,7 @@ import type { Location } from "../location"
 import type { ApprovalMode } from "@opencode-ai/schema/approval-mode"
 import type { ModelContext } from "@opencode-ai/schema/model-context"
 import type { Skill } from "@opencode-ai/schema/skill"
+import type { SessionPolicy } from "@opencode-ai/schema/session-policy"
 
 type SessionMessageData = Omit<(typeof SessionMessage.Message)["Encoded"], "type" | "id">
 type V1MessageData = Omit<SessionV1.Info, "id" | "sessionID">
@@ -57,6 +58,9 @@ export const SessionTable = sqliteTable(
     tokens_cache_write: integer().notNull().default(0),
     revert: text({ mode: "json" }).$type<Revert.State>(),
     permission: text({ mode: "json" }).$type<PermissionV1.Ruleset>(),
+    permission_revision: integer().notNull().default(0),
+    permission_basis_revision: integer().notNull().default(0),
+    permission_boundary: text({ mode: "json" }).$type<SessionPolicy.Boundary>(),
     subagent_access: text({ mode: "json" }).$type<SessionV1.SubagentAccess>(),
     agent: text(),
     model: text({ mode: "json" }).$type<{

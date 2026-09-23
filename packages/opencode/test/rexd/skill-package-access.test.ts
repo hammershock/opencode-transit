@@ -63,6 +63,7 @@ describe("Rexd Skill package access", () => {
   let failing = false
   let released: string[] = []
   let snapshots = 0
+  let active = true
   let listener: EventV2.Subscriber | undefined
   const session = makeLocationNode({
     service: RexdLocationSession,
@@ -76,6 +77,7 @@ describe("Rexd Skill package access", () => {
         if (failing) throw new Error("private remote path")
         return {
           path: `/tmp/opencode-transit/skills/packages/${snapshot.digest}`,
+          active: () => active,
           renew: async () => undefined,
           release: async () => {
             released.push(sessionID)
@@ -133,9 +135,14 @@ describe("Rexd Skill package access", () => {
       closed = 0
       failing = false
       released = []
+      active = true
       const packages = yield* SkillPackageAccess.Service
       const first = yield* packages.prepare({ entry, sessionID: SessionSchema.ID.make("session-a") })
       const second = yield* packages.prepare({ entry, sessionID: SessionSchema.ID.make("session-a") })
+      expect(yield* packages.paths(SessionSchema.ID.make("session-a"))).toEqual([
+        AbsolutePath.make(`/tmp/opencode-transit/skills/packages/${snapshot.digest}`),
+      ])
+      expect(yield* packages.paths(SessionSchema.ID.make("session-b"))).toEqual([])
       const third = yield* packages.prepare({ entry, sessionID: SessionSchema.ID.make("session-b") })
 
       expect(first).toEqual({
@@ -145,6 +152,10 @@ describe("Rexd Skill package access", () => {
       expect(second).toEqual(first)
       expect(third).toEqual(first)
       expect(calls).toEqual(["session-a", "session-b"])
+      active = false
+      expect(yield* packages.paths(SessionSchema.ID.make("session-a"))).toEqual([])
+      expect(yield* packages.paths(SessionSchema.ID.make("session-b"))).toEqual([])
+      active = true
 
       yield* listener!({
         id: EventV2.ID.make("evt_skill_session_deleted"),

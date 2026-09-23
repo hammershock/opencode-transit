@@ -21,18 +21,13 @@ import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@opencode-ai/core/global"
 import path from "path"
 import { Plugin } from "@/plugin"
-import { Skill } from "../skill"
 import { Effect, Context, Layer, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
-import { AbsolutePath, type DeepMutable } from "@opencode-ai/core/schema"
+import { type DeepMutable } from "@opencode-ai/core/schema"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
-import { LocationServiceMap } from "@opencode-ai/core/location-services"
-import { Reference } from "@opencode-ai/core/reference"
-import { Location } from "@opencode-ai/core/location"
-import { PluginV2 } from "@opencode-ai/core/plugin"
 
 export const Info = Schema.Struct({
   id: Schema.optional(Schema.String),
@@ -98,27 +93,16 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const auth = yield* Auth.Service
     const plugin = yield* Plugin.Service
-    const skill = yield* Skill.Service
     const provider = yield* Provider.Service
-    const locations = yield* LocationServiceMap.Service
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Agent.state")(function* (ctx) {
         const cfg = yield* config.get()
         const globalConfig = yield* config.getGlobal()
         const globalAgents = yield* Effect.promise(() => ConfigAgent.load(Global.Path.config))
-        const skillDirs = yield* skill.dirs()
-        const referenceDirs = Object.keys(cfg.references ?? cfg.reference ?? {}).length
-          ? yield* Effect.gen(function* () {
-              yield* (yield* PluginV2.Service).wait(PluginV2.ID.make("core/config-reference"))
-              return (yield* (yield* Reference.Service).list()).map((reference) => reference.path)
-            }).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) }))))
-          : []
         const whitelistedDirs = [
           Truncate.GLOB,
           path.join(Global.Path.tmp, "*"),
-          ...skillDirs.map((dir) => path.join(dir, "*")),
-          ...referenceDirs.map((dir) => path.join(dir, "*")),
         ]
         const readonlyExternalDirectory = {
           "*": "ask",
@@ -494,7 +478,7 @@ const layer = Layer.effect(
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Config.node, Auth.node, Plugin.node, Skill.node, Provider.node, LocationServiceMap.node],
+  deps: [Config.node, Auth.node, Plugin.node, Provider.node],
 })
 
 export * as Agent from "./agent"

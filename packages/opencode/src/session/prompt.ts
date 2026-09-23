@@ -52,6 +52,8 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import { RuntimeContext } from "@opencode-ai/core/runtime-context"
 import { AgentV2 } from "@opencode-ai/core/agent"
+import { PermissionContext } from "@/agent/permission-context"
+import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { eq } from "drizzle-orm"
@@ -389,6 +391,7 @@ const layer = Layer.effect(
                 ...req,
                 sessionID,
                 ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
+                approvalMode: session.approvalMode,
               })
               .pipe(Effect.orDie),
         })
@@ -1158,7 +1161,9 @@ const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
-    const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
+    type RunLoop = (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts, never, Scope.Scope>
+    const runLoop: RunLoop = Effect.fn("SessionPrompt.run")(
+      // The caller scopes this effect so the Location lease closes with the loop.
       function* (sessionID: SessionID) {
         yield* locationAccess.require(sessionID).pipe(Effect.catch(Effect.die))
         const ctx = yield* InstanceState.context
@@ -1167,31 +1172,13 @@ const layer = Layer.effect(
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
         const loopLocation = yield* sessionLocation(sessionID)
         const locationLayer = locations.get(loopLocation)
-        const locationTools = yield* LocationToolRegistry.Service.pipe(Effect.provide(locationLayer))
-        const materializedLocationTools = yield* locationTools.materialize()
-        const locationToolMaterialization =
-          loopLocation.target.type === "rexd"
-            ? materializedLocationTools
-            : {
-                ...materializedLocationTools,
-                definitions: materializedLocationTools.definitions.filter((definition) =>
-                  ["read", "skill"].includes(definition.name),
-                ),
-              }
-        const locationRegistry = yield* ToolRegistry.Service.pipe(
-          Effect.provide(locationLayer),
-          Effect.provideService(FSUtil.Service, fsys),
-          Effect.provideService(ToolRegistry.Service, registry),
-          Effect.provideService(TargetRegistry.Service, targetRegistry),
-          Effect.provideService(LocationServiceMap.Service, locations),
-        )
-        const locationFilesystem = yield* FSUtil.Service.pipe(
-          Effect.provide(locationLayer),
-          Effect.provideService(FSUtil.Service, fsys),
-          Effect.provideService(ToolRegistry.Service, registry),
-          Effect.provideService(TargetRegistry.Service, targetRegistry),
-          Effect.provideService(LocationServiceMap.Service, locations),
-        )
+        // Tool materializations retain registration identities and permission services from this context.
+        // Keep the Location lease for the whole loop so the LayerMap TTL cannot dispose them mid-turn.
+        const locationContext = yield* Layer.build(locationLayer)
+        const locationTools = Context.get(locationContext, LocationToolRegistry.Service)
+        const locationPolicy = Context.get(locationContext, ExecutionPolicy.Service)
+        const locationRegistry = registry
+        const locationFilesystem = fsys
         yield* contextAt({ sessionID, agent: session.agent ?? "build", location: loopLocation })
 
         while (true) {
@@ -1285,6 +1272,18 @@ const layer = Layer.effect(
             throw error
           }
           const maxSteps = agent.steps ?? Infinity
+          const policy = yield* locationPolicy.resolve(sessionID, agent.id ?? agent.name).pipe(Effect.orDie)
+          const effectiveAgent = { ...agent, permission: PermissionContext.legacy(policy.rules) }
+          const materializedLocationTools = yield* locationTools.materialize(policy.rules, policy.ceilings)
+          const locationToolMaterialization =
+            loopLocation.target.type === "rexd"
+              ? materializedLocationTools
+              : {
+                  ...materializedLocationTools,
+                  definitions: materializedLocationTools.definitions.filter((definition) =>
+                    ["read", "skill"].includes(definition.name),
+                  ),
+                }
           const isLastStep = step >= maxSteps
           msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
             Effect.provideService(RuntimeFlags.Service, flags),
@@ -1324,6 +1323,7 @@ const layer = Layer.effect(
               assistantMessage: msg,
               sessionID,
               model,
+              approvalMode: session.approvalMode,
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
@@ -1333,7 +1333,7 @@ const layer = Layer.effect(
             const promptOps = yield* ops()
 
             const tools = yield* SessionTools.resolve({
-              agent,
+              agent: effectiveAgent,
               session,
               model,
               processor: handle,
@@ -1341,6 +1341,7 @@ const layer = Layer.effect(
               messages: msgs,
               promptOps,
               locationTools: locationToolMaterialization,
+              policy,
             }).pipe(
               Effect.provideService(Plugin.Service, plugin),
               Effect.provideService(Permission.Service, permission),
@@ -1368,9 +1369,9 @@ const layer = Layer.effect(
               MessageV2.toModelMessagesEffect(msgs, model),
               systemAssembly.assemble({
                 sessionID,
-                agent,
+                agent: effectiveAgent,
                 model,
-                permission: session.permission,
+                permission: [],
               }),
             ])
             const system = [...assembled.system]
@@ -1378,8 +1379,8 @@ const layer = Layer.effect(
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({
               user: lastUser,
-              agent,
-              permission: session.permission,
+              agent: effectiveAgent,
+              permission: [],
               sessionID,
               parentSessionID: session.parentID,
               system,
@@ -1453,7 +1454,7 @@ const layer = Layer.effect(
       return yield* state.ensureRunning(
         input.sessionID,
         lastAssistant(input.sessionID),
-        activity.withActivity(input.sessionID, "process_execution", runLoop(input.sessionID)),
+        activity.withActivity(input.sessionID, "process_execution", runLoop(input.sessionID).pipe(Effect.scoped)),
       )
     })
 

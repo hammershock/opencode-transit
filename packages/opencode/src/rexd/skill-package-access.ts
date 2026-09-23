@@ -34,11 +34,16 @@ export function rexdSkillPackageAccessNode(
         const materializer = dependencies.makeMaterializer
           ? dependencies.makeMaterializer(targetID, lease, appID)
           : new RexdSkillMaterializer.Materializer(targetID, lease, appID)
-        const prepared = new Map<string, Promise<RexdSkillMaterializer.Attachment>>()
+        const prepared = new Map<
+          string,
+          { promise: Promise<RexdSkillMaterializer.Attachment>; value?: RexdSkillMaterializer.Attachment }
+        >()
         const release = async (sessionID: string) => {
           const attachments = [...prepared.entries()].filter(([key]) => key.startsWith(`${sessionID}\0`))
           attachments.forEach(([key]) => prepared.delete(key))
-          await Promise.allSettled(attachments.map(([, attachment]) => attachment.then((value) => value.release())))
+          await Promise.allSettled(
+            attachments.map(([, attachment]) => attachment.promise.then((value) => value.release())),
+          )
         }
         const events = yield* EventV2.Service
         const unsubscribe = yield* events.listen((event) => {
@@ -49,6 +54,12 @@ export function rexdSkillPackageAccessNode(
         yield* Effect.addFinalizer(() => Effect.promise(() => materializer.close()))
 
         return SkillPackageAccess.Service.of({
+          paths: (sessionID) =>
+            Effect.sync(() =>
+              [...prepared.entries()]
+                .filter(([key, entry]) => key.startsWith(`${sessionID}\0`) && entry.value?.active())
+                .flatMap(([, entry]) => (entry.value ? [AbsolutePath.make(entry.value.path)] : [])),
+            ),
           prepare: Effect.fn("RexdSkillPackageAccess.prepare")(function* (input) {
             if (input.entry.source.kind === "built-in") return { temporary: false }
             const snapshot = yield* snapshots.create(input.entry).pipe(
@@ -64,15 +75,24 @@ export function rexdSkillPackageAccessNode(
             const existing = prepared.get(key)
             const attachment = yield* Effect.tryPromise({
               try: () => {
-                if (existing) return existing
-                const current = materializer
-                  .materialize(snapshot, SessionSchema.ID.make(input.sessionID), input.signal)
-                  .catch((error) => {
-                    prepared.delete(key)
-                    throw error
-                  })
+                if (existing && (!existing.value || existing.value.active())) return existing.promise
+                const current: {
+                  promise: Promise<RexdSkillMaterializer.Attachment>
+                  value?: RexdSkillMaterializer.Attachment
+                } = {
+                  promise: materializer
+                    .materialize(snapshot, SessionSchema.ID.make(input.sessionID), input.signal)
+                    .then((value) => {
+                      current.value = value
+                      return value
+                    })
+                    .catch((error) => {
+                      if (prepared.get(key) === current) prepared.delete(key)
+                      throw error
+                    }),
+                }
                 prepared.set(key, current)
-                return current
+                return current.promise
               },
               catch: () =>
                 new SkillPackageAccess.Failure({

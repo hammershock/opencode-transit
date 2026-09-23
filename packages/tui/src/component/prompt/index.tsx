@@ -1196,14 +1196,18 @@ export function Prompt(props: PromptProps) {
         return [{ start: extmark.start, end: extmark.end, text: part.text }]
       }),
     )
+    const submittedPrompt = { ...unwrap(store.prompt), mode: store.mode }
     const slashDispatch =
       store.mode !== "shell"
         ? await activeCommandHost()(inputText, "slash")
         : ({ status: "passthrough", input: inputText, diagnostics: [] } as const)
     if (slashDispatch.status === "invalid") return false
     if (slashDispatch.status === "handled") {
-      history.append({ ...store.prompt, mode: store.mode })
+      history.append(submittedPrompt)
       if (!input || input.isDestroyed) return true
+      // Commands such as /undo replace the editor with a restored prompt.
+      // Only consume the command text if the command left it untouched.
+      if (input.plainText !== submittedPrompt.input) return true
       input.extmarks.clear()
       setStore("prompt", { input: "", parts: [] })
       setStore("extmarkToPartIndex", new Map())
@@ -1408,6 +1412,17 @@ export function Prompt(props: PromptProps) {
         ],
       })
       if (props.sessionID) sync.message.optimistic.add(optimistic)
+      if (!skillMentions.length) {
+        try {
+          await sdk.client.v2.session.revert.commit({ sessionID }, { throwOnError: true })
+        } catch (error) {
+          sync.message.optimistic.remove(sessionID, optimistic.message.id)
+          toast.show({ title: "Failed to send prompt", message: errorMessage(error), variant: "error" })
+          input.focus()
+          if (finishMoveProgress) move.finishSubmit()
+          return false
+        }
+      }
       const request = skillMentions.length
         ? sdk.client.v2.session.get({ sessionID }, { throwOnError: true }).then(async (current) => {
             if (current.data.data.agent !== agent.name)
@@ -1434,7 +1449,6 @@ export function Prompt(props: PromptProps) {
             )
           })
         : (async () => {
-            await sdk.client.v2.session.revert.commit({ sessionID }, { throwOnError: true })
             return sdk.client.session.prompt(
               {
                 sessionID,
@@ -1908,7 +1922,7 @@ export function Prompt(props: PromptProps) {
                 <box flexShrink={0} flexDirection="row" gap={1}>
                   <box marginLeft={1}>
                     <Show when={kv.get("animations_enabled", true)} fallback={<text fg={theme.textMuted}>[⋯]</text>}>
-                      <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+                      <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={80} />
                     </Show>
                   </box>
                   <box flexDirection="row" gap={1} flexShrink={0}>

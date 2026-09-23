@@ -97,7 +97,12 @@ import {
 import { reportOverrideDiagnostic } from "../../command-toolkit/experimental-settings"
 import { COMMAND_RESTRICTIONS_KEY, createCommandHost, normalizeCommandRestrictions } from "../../command-toolkit/host"
 import { environmentCommands, type EnvironmentCommandContext } from "../../command-toolkit/environment"
-import { targetCommand, targetListCommand, type TargetCommandContext, type TargetListCommandContext } from "../../command-toolkit/target"
+import {
+  targetCommand,
+  targetListCommand,
+  type TargetCommandContext,
+  type TargetListCommandContext,
+} from "../../command-toolkit/target"
 import { sessionControlCommands, type SessionControlCommandContext } from "../../command-toolkit/session-controls"
 import { approvalModeCommand, type ApprovalModeCommandContext } from "../../command-toolkit/approval-mode"
 import { useTargetManager } from "../../component/target-manager"
@@ -124,6 +129,9 @@ import {
   mergeCanonicalSessionMessages,
   projectCanonicalSessionMessages,
   restoreCanonicalPrompt,
+  SESSION_MESSAGE_LIMIT,
+  SESSION_RENDER_MESSAGE_LIMIT,
+  sessionMessageWindow,
 } from "../../util/session-message"
 import { skillCommand, type SkillCommandContext } from "../../command-toolkit/skill"
 import { useSkillManager } from "../../component/skill-manager"
@@ -234,7 +242,6 @@ export function Session() {
   }
   const pluginRuntime = usePluginRuntime()
   const route = useRouteData("session")
-  const [locationAccessReady, setLocationAccessReady] = createSignal(route.accessMode === "read-only")
   const { navigate } = useRoute()
   const sync = useSync()
   const data = useData()
@@ -291,13 +298,15 @@ export function Session() {
   const canonicalParts = createMemo(
     () => new Map(canonicalProjection().map((item) => [item.message.id, item.parts] as const)),
   )
-  const messages = createMemo(() => {
+  const [renderLimit, setRenderLimit] = createSignal(SESSION_RENDER_MESSAGE_LIMIT)
+  const allMessages = createMemo(() => {
     const legacy = sync.data.message[route.sessionID] ?? []
     return mergeCanonicalSessionMessages(
       legacy,
       canonicalProjection().map((item) => item.message),
     )
   })
+  const messages = createMemo(() => sessionMessageWindow(allMessages(), route.messageID, renderLimit()))
   // Canonical projection creates fresh adapters per delta; stable IDs keep Solid from remounting the transcript.
   const messageIDs = createMemo(() => messages().map((message) => message.id))
   const messagesByID = createMemo(() => new Map(messages().map((message) => [message.id, message] as const)))
@@ -334,21 +343,31 @@ export function Session() {
         ),
     ),
   )
-  const revertInfo = createMemo(() => data.session.get(route.sessionID)?.revert ?? session()?.revert)
+  const revertInfo = createMemo(() => {
+    const current = data.session.get(route.sessionID)
+    return current ? current.revert : session()?.revert
+  })
+  let revertTask = Promise.resolve()
+  const [revertPending, setRevertPending] = createSignal(0)
+  const changeRevert = (run: () => Promise<void>) => {
+    const sessionID = route.sessionID
+    setRevertPending((count) => count + 1)
+    const next = revertTask
+      .then(() => (route.sessionID === sessionID ? run() : undefined))
+      .finally(() => setRevertPending((count) => count - 1))
+    revertTask = next.catch(() => undefined)
+    return next
+  }
   const messagesBeforeRevert = () => {
     const messageID = revertInfo()?.messageID
-    if (!messageID) return messages()
-    const index = messages().findIndex((message) => message.id === messageID)
-    if (index === -1) return messages()
-    const canonical = durableUsers().has(messageID)
-    // Legacy and canonical reverts are independent, so never move a staged boundary into the other store.
-    return messages()
-      .slice(0, index)
-      .filter((message) => message.role !== "user" || durableUsers().has(message.id) === canonical)
+    if (!messageID) return allMessages()
+    const index = allMessages().findIndex((message) => message.id === messageID)
+    if (index === -1) return allMessages()
+    return allMessages().slice(0, index)
   }
   const foregroundTasks = createMemo(() =>
     sync.data.capabilities.experimentalBackgroundSubagents
-      ? messages().flatMap((message) =>
+      ? allMessages().flatMap((message) =>
           messageParts(message.id).filter(
             (part): part is ToolPart =>
               part.type === "tool" &&
@@ -370,7 +389,7 @@ export function Session() {
   const visible = createMemo(() => !session()?.parentID && permissions().length === 0 && questions().length === 0)
   const readOnly = createMemo(() => route.accessMode === "read-only")
   const disabled = createMemo(
-    () => (!locationAccessReady() && !readOnly()) || permissions().length > 0 || questions().length > 0,
+    () => route.accessMode === undefined || permissions().length > 0 || questions().length > 0,
   )
 
   const pending = createMemo(() => {
@@ -382,7 +401,7 @@ export function Session() {
   })
 
   const lastAssistant = createMemo(() => {
-    return messages().findLast((x) => x.role === "assistant")
+    return allMessages().findLast((x) => x.role === "assistant")
   })
 
   const dimensions = useTerminalDimensions()
@@ -464,6 +483,15 @@ export function Session() {
               if (editorDirectory) editor.reconnect(editorDirectory)
               return true
             })()
+      // A resolved Location owns prompt capability. The context refresh below is best-effort and must not gate input.
+      if (writable) {
+        navigate({ ...route, accessMode: "read-write", resolution: undefined })
+      }
+      await sync.session.sync(sessionID)
+      if (route.sessionID === sessionID && scroll) {
+        if (route.messageID) scroll.scrollChildIntoView(route.messageID)
+        else scroll.scrollBy(100_000)
+      }
       if (writable && activation.sessionID !== sessionID) {
         activation.sessionID = sessionID
         try {
@@ -499,15 +527,6 @@ export function Session() {
             duration: 5000,
           })
         }
-      }
-      if (writable) {
-        navigate({ ...route, accessMode: "read-write", resolution: undefined })
-        setLocationAccessReady(true)
-      }
-      await sync.session.sync(sessionID)
-      if (route.sessionID === sessionID && scroll) {
-        if (route.messageID) scroll.scrollChildIntoView(route.messageID)
-        else scroll.scrollBy(100_000)
       }
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
@@ -816,6 +835,10 @@ export function Session() {
             open: () =>
               dialog.replace(() => (
                 <DialogPermissionModes
+                  review={async () => {
+                    const { DialogSessionPolicy } = await import("../../component/dialog-session-policy")
+                    dialog.replace(() => <DialogSessionPolicy sessionID={route.sessionID} />)
+                  }}
                   defaultMode={local.permission.defaultMode}
                   sessionMode={session()?.approvalMode ?? "normal"}
                   setDefault={(approvalMode) => local.permission.setDefault(approvalMode)}
@@ -984,6 +1007,7 @@ export function Session() {
         name: "timeline",
       },
       run: () => {
+        setRenderLimit(SESSION_MESSAGE_LIMIT)
         dialog.replace(() => (
           <DialogTimeline
             onMove={(messageID) => {
@@ -1007,6 +1031,7 @@ export function Session() {
         name: "fork",
       },
       run: () => {
+        setRenderLimit(SESSION_MESSAGE_LIMIT)
         dialog.replace(() => (
           <DialogForkFromTimeline
             onMove={(messageID) => {
@@ -1080,25 +1105,41 @@ export function Session() {
       slash: {
         name: "undo",
       },
-      run: async () => {
-        const message = messagesBeforeRevert().findLast((item) => item.role === "user")
-        if (!message) return
-        const canonical = durableUsers().get(message.id)
-        if (canonical) {
-          const current = data.session.get(route.sessionID)
-          if (!current) return
+      run: () =>
+        changeRevert(async () => {
+          const message = messagesBeforeRevert().findLast((item) => item.role === "user")
+          if (!message) return
+          const sessionID = route.sessionID
+          const canonical = durableUsers().get(message.id)
           try {
-            const catalog = await sdk.client.v2.skill.catalog(
-              {
-                location: {
-                  directory: current.location.directory,
-                  workspace: current.location.workspaceID,
-                  ...(current.location.target?.type === "rexd" ? { target: current.location.target.targetID } : {}),
-                },
-              },
-              { throwOnError: true },
-            )
-            const restored = restoreCanonicalPrompt(canonical, catalog.data.data.skills)
+            const current = data.session.get(sessionID)
+            const catalog =
+              canonical?.skills?.length && current
+                ? await sdk.client.v2.skill.catalog(
+                    {
+                      location: {
+                        directory: current.location.directory,
+                        workspace: current.location.workspaceID,
+                        ...(current.location.target?.type === "rexd"
+                          ? { target: current.location.target.targetID }
+                          : {}),
+                      },
+                    },
+                    { throwOnError: true },
+                  )
+                : undefined
+            const restored = canonical
+              ? restoreCanonicalPrompt(canonical, catalog?.data.data.skills ?? [])
+              : {
+                  prompt: messageParts(message.id).reduce(
+                    (agg, part) => {
+                      if (part.type === "text" && !part.synthetic) agg.input += part.text
+                      if (part.type === "file") agg.parts.push(part)
+                      return agg
+                    },
+                    { input: "", parts: [] as PromptInfo["parts"] },
+                  ),
+                }
             if ("missing" in restored) {
               toast.show({
                 message: `Cannot revert: $${restored.missing} is no longer available. Reload Skills and try again.`,
@@ -1106,44 +1147,23 @@ export function Session() {
               })
               return
             }
-            await sdk.client.v2.session.interrupt({ sessionID: route.sessionID }, { throwOnError: true })
-            await sdk.client.v2.session.revert.stage(
-              { sessionID: route.sessionID, messageID: canonical.id },
+            await Promise.all([
+              sdk.client.v2.session.interrupt({ sessionID }, { throwOnError: true }),
+              sdk.client.session.abort({ sessionID }, { throwOnError: true }),
+            ])
+            const staged = await sdk.client.v2.session.revert.stage(
+              { sessionID, messageID: message.id },
               { throwOnError: true },
             )
+            data.session.revert(sessionID, staged.data.data)
+            if (route.sessionID !== sessionID) return
             prompt?.set(restored.prompt)
             toBottom()
             dialog.clear()
           } catch (error) {
             toast.error(error)
           }
-          return
-        }
-        const status = sync.data.session_status?.[route.sessionID]
-        if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
-        void sdk.client.session
-          .revert({
-            sessionID: route.sessionID,
-            messageID: message.id,
-          })
-          .then(() => {
-            toBottom()
-          })
-        const parts = messageParts(message.id)
-        prompt?.set(
-          parts.reduce(
-            (agg, part) => {
-              if (part.type === "text") {
-                if (!part.synthetic) agg.input += part.text
-              }
-              if (part.type === "file") agg.parts.push(part)
-              return agg
-            },
-            { input: "", parts: [] as PromptInfo["parts"] },
-          ),
-        )
-        dialog.clear()
-      },
+        }),
     },
     {
       title: "Redo",
@@ -1154,44 +1174,34 @@ export function Session() {
       slash: {
         name: "redo",
       },
-      run: async () => {
-        dialog.clear()
-        const messageID = revertInfo()?.messageID
-        if (!messageID) return
-        const index = messages().findIndex((message) => message.id === messageID)
-        if (index === -1) return
-        const canonical = durableUsers().has(messageID)
-        const message = messages()
-          .slice(index + 1)
-          .find((message) => message.role === "user" && durableUsers().has(message.id) === canonical)
-        if (canonical) {
+      run: () =>
+        changeRevert(async () => {
+          dialog.clear()
+          const messageID = revertInfo()?.messageID
+          if (!messageID) return
+          const index = allMessages().findIndex((message) => message.id === messageID)
+          if (index === -1) return
+          const sessionID = route.sessionID
+          const message = allMessages()
+            .slice(index + 1)
+            .find((message) => message.role === "user")
           try {
             if (!message) {
-              await sdk.client.v2.session.revert.clear({ sessionID: route.sessionID }, { throwOnError: true })
-              prompt?.set({ input: "", parts: [] })
+              await sdk.client.v2.session.revert.clear({ sessionID }, { throwOnError: true })
+              data.session.revert(sessionID, undefined)
+              if (route.sessionID === sessionID) prompt?.set({ input: "", parts: [] })
               return
             }
-            await sdk.client.v2.session.revert.stage(
-              { sessionID: route.sessionID, messageID: message.id },
+            const staged = await sdk.client.v2.session.revert.stage(
+              { sessionID, messageID: message.id },
               { throwOnError: true },
             )
+            data.session.revert(sessionID, staged.data.data)
+            if (route.sessionID === sessionID) prompt?.set({ input: "", parts: [] })
           } catch (error) {
             toast.error(error)
           }
-          return
-        }
-        if (!message) {
-          await sdk.client.session.unrevert({
-            sessionID: route.sessionID,
-          })
-          prompt?.set({ input: "", parts: [] })
-          return
-        }
-        await sdk.client.session.revert({
-          sessionID: route.sessionID,
-          messageID: message.id,
-        })
-      },
+        }),
     },
     {
       title: sidebarVisible() ? "Hide sidebar" : "Show sidebar",
@@ -1451,7 +1461,7 @@ export function Session() {
         try {
           const sessionData = session()
           if (!sessionData) return
-          const sessionMessages = messages()
+          const sessionMessages = allMessages()
           const transcript = formatTranscript(
             sessionData,
             sessionMessages.map((msg) => ({ info: msg, parts: messageParts(msg.id) })),
@@ -1482,7 +1492,7 @@ export function Session() {
         try {
           const sessionData = session()
           if (!sessionData) return
-          const sessionMessages = messages()
+          const sessionMessages = allMessages()
 
           const defaultFilename = `session-${sessionData.id.slice(0, 8)}.md`
 
@@ -1743,7 +1753,13 @@ export function Session() {
                   scroll = r
                   // `onMouseScroll` is not a real scrollbox prop; track every scroll
                   // (wheel, key, and scrollbar drag) through the scrollbar's change event.
-                  r.verticalScrollBar.on("change", () => queueMicrotask(updateFollowOutput))
+                  r.verticalScrollBar.on("change", () =>
+                    queueMicrotask(() => {
+                      updateFollowOutput()
+                      if (r.scrollTop === 0 && r.scrollHeight > r.viewport.height) setRenderLimit(SESSION_MESSAGE_LIMIT)
+                      if (followOutput() && dialog.stack.length === 0) setRenderLimit(SESSION_RENDER_MESSAGE_LIMIT)
+                    }),
+                  )
                 }}
                 viewportOptions={{
                   paddingRight: showScrollbar() ? 1 : 0,
@@ -1933,7 +1949,7 @@ export function Session() {
                     <Prompt
                       visible={visible()}
                       ref={bind}
-                      disabled={disabled()}
+                      disabled={disabled() || revertPending() > 0}
                       readOnly={readOnly()}
                       commandHost={coreCommandHost()}
                       shellCompletionGeneration={shellCompletionGeneration()}

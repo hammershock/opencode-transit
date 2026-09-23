@@ -30,11 +30,12 @@ import { useTuiStartup } from "./runtime"
 import { createSimpleContext } from "./helper"
 import { useExit } from "./exit"
 import { useArgs } from "./args"
-import { batch, onMount } from "solid-js"
+import { batch, onCleanup, onMount } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
 import { usePermission } from "./permission"
 import { sessionLocationNotice, sessionLocationNoticeKey } from "../util/session-location-notice"
+import { SESSION_MESSAGE_LIMIT } from "../util/session-message"
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -43,6 +44,13 @@ const emptyConsoleState: ConsoleState = {
 
 export type RoutedPermissionRequest = PermissionRequest & { api?: "v2" }
 export type RoutedQuestionRequest = QuestionRequest & { api?: "v2" }
+type SessionMessageWithParts = { info: Message; parts: Part[] }
+type HydrationTracker = {
+  messages: Set<string>
+  parts: Set<string>
+  permissions: Set<string>
+  questions: Set<string>
+}
 
 function legacyPermission(request: PermissionV2Request): RoutedPermissionRequest {
   return {
@@ -175,10 +183,11 @@ export const {
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
-    const hydratingSessions = new Map<
-      string,
-      { messages: Set<string>; parts: Set<string>; permissions: Set<string>; questions: Set<string> }
-    >()
+    const resolvingSessions = new Map<string, Promise<Session | undefined>>()
+    const autoPermissionReplies = new Map<string, Promise<boolean>>()
+    const reconcilingPermissions = new Map<string, Promise<void>>()
+    const reconcilingSessions = new Map<string, Promise<void>>()
+    const hydratingSessions = new Map<string, HydrationTracker>()
     const optimisticMessages = new Set<string>()
     const insertPermission = (request: RoutedPermissionRequest) => {
       const requests = store.permission[request.sessionID]
@@ -204,6 +213,62 @@ export const {
       hydratingSessions.get(sessionID)?.questions.add(requestID)
     }
 
+    function mergeSessionMessages(
+      sessionID: string,
+      messages: SessionMessageWithParts[],
+      tracker: HydrationTracker,
+      retainExisting = false,
+    ) {
+      setStore(
+        produce((draft) => {
+          const currentMessages = draft.message[sessionID] ?? []
+          const infos = messages.flatMap((message) => {
+            if (!tracker.messages.has(message.info.id)) return [message.info]
+            const current = currentMessages.find((item) => item.id === message.info.id)
+            return current ? [current] : []
+          })
+          infos.push(
+            ...currentMessages.filter(
+              (message) =>
+                (retainExisting || tracker.messages.has(message.id)) && !infos.some((item) => item.id === message.id),
+            ),
+          )
+          infos.sort(compareMessage)
+          const removed = infos.slice(0, -SESSION_MESSAGE_LIMIT)
+          const visible = infos.slice(-SESSION_MESSAGE_LIMIT)
+          const visibleIDs = new Set(visible.map((message) => message.id))
+          for (const message of messages) {
+            if (!visibleIDs.has(message.info.id)) {
+              delete draft.part[message.info.id]
+              continue
+            }
+            const currentParts = draft.part[message.info.id] ?? []
+            const parts = message.parts.flatMap((part) => {
+              const current = currentParts.find((item) => item.id === part.id)
+              if (tracker.parts.has(part.id)) return current ? [current] : []
+              if (
+                current &&
+                (part.type === "text" || part.type === "reasoning") &&
+                (current.type === "text" || current.type === "reasoning") &&
+                part.text.length === 0 &&
+                current.text.length > 0
+              )
+                return [current]
+              return [part]
+            })
+            parts.push(
+              ...currentParts.filter(
+                (part) => tracker.parts.has(part.id) && !parts.some((item) => item.id === part.id),
+              ),
+            )
+            draft.part[message.info.id] = parts
+          }
+          for (const message of removed) delete draft.part[message.id]
+          draft.message[sessionID] = visible
+        }),
+      )
+    }
+
     function sessionListQuery(): { scope?: "project"; path?: string } {
       if (!kv.get("session_directory_filter_enabled", true)) return { scope: "project" }
       if (!project.data.instance.path.worktree || !project.data.instance.path.directory) return { scope: "project" }
@@ -220,6 +285,116 @@ export const {
         .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
     }
 
+    function resolveSession(sessionID: string) {
+      const cached = store.session.find((item) => item.id === sessionID)
+      if (cached?.approvalMode) return Promise.resolve(cached)
+      const resolving = resolvingSessions.get(sessionID)
+      if (resolving) return resolving
+      const task = sdk.client.session
+        .get({ sessionID }, { throwOnError: true })
+        .then((result) => {
+          const session = result.data
+          if (!session) return
+          const match = search(store.session, sessionID, (item) => item.id)
+          if (match.found) setStore("session", match.index, reconcile(session))
+          if (!match.found) {
+            setStore(
+              "session",
+              produce((draft) => draft.splice(match.index, 0, session)),
+            )
+          }
+          return session
+        })
+        .catch(() => undefined)
+        .finally(() => resolvingSessions.delete(sessionID))
+      resolvingSessions.set(sessionID, task)
+      return task
+    }
+
+    function autoReplyPermission(key: string, reply: (signal: AbortSignal) => Promise<unknown>) {
+      const existing = autoPermissionReplies.get(key)
+      if (existing) return existing
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 5_000)
+      const task = reply(controller.signal)
+        .then(
+          () => true,
+          () => false,
+        )
+        .finally(() => clearTimeout(timeout))
+      autoPermissionReplies.set(key, task)
+      void task.then((ok) => {
+        if (!ok) autoPermissionReplies.delete(key)
+      })
+      return task
+    }
+
+    function permissionRoute(session: Session) {
+      if (session.target?.type === "rexd") return `target:${session.target.targetID}`
+      return `local:${session.directory}:${session.workspaceID ?? ""}`
+    }
+
+    async function reconcileLegacyPermissions(sessionID: string) {
+      const session = await resolveSession(sessionID)
+      if (!session) return
+      const key = permissionRoute(session)
+      const existing = reconcilingPermissions.get(key)
+      if (existing) return existing
+      const task = (async () => {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 5_000)
+        const result = await (
+          session.target?.type === "rexd"
+            ? sdk.client.permission.list(
+                {},
+                {
+                  throwOnError: true,
+                  signal: controller.signal,
+                  headers: { "x-opencode-target": session.target.targetID },
+                },
+              )
+            : sdk.client.permission.list(
+                { directory: session.directory, workspace: session.workspaceID },
+                { throwOnError: true, signal: controller.signal },
+              )
+        ).finally(() => clearTimeout(timeout))
+        await Promise.all(
+          (result.data ?? []).map(async (request) => {
+            const owner = await resolveSession(request.sessionID)
+            if (!owner || permission.effective(owner.approvalMode ?? "normal") !== "auto") {
+              insertPermission(request)
+              return
+            }
+            const replied = await autoReplyPermission(`${request.sessionID}:legacy:${request.id}`, (signal) =>
+              owner.target?.type === "rexd"
+                ? sdk.client.permission.reply(
+                    { requestID: request.id, reply: "once" },
+                    {
+                      throwOnError: true,
+                      signal,
+                      headers: { "x-opencode-target": owner.target.targetID },
+                    },
+                  )
+                : sdk.client.permission.reply(
+                    {
+                      requestID: request.id,
+                      reply: "once",
+                      directory: owner.directory,
+                      workspace: owner.workspaceID,
+                    },
+                    { throwOnError: true, signal },
+                  ),
+            )
+            if (!replied) insertPermission(request)
+          }),
+        )
+      })()
+        .catch(() => undefined)
+        .finally(() => reconcilingPermissions.delete(key))
+      reconcilingPermissions.set(key, task)
+      return task
+    }
+
     async function syncSession(sessionID: string) {
       if (fullSyncedSessions.has(sessionID)) return
       const syncing = syncingSessions.get(sessionID)
@@ -234,7 +409,7 @@ export const {
       const task = (async () => {
         const [session, messages, todo, diff, permissions, questions] = await Promise.all([
           sdk.client.session.get({ sessionID }, { throwOnError: true }),
-          sdk.client.session.messages({ sessionID, limit: 100 }),
+          sdk.client.session.messages({ sessionID, limit: SESSION_MESSAGE_LIMIT }),
           sdk.client.session.todo({ sessionID }),
           sdk.client.session.diff({ sessionID }),
           sdk.client.v2.session.permission.list({ sessionID }, { throwOnError: true }),
@@ -245,14 +420,13 @@ export const {
             ? (
                 await Promise.all(
                   permissions.data.data.map(async (request) => {
-                    try {
-                      await sdk.client.v2.session.permission.reply(
+                    const replied = await autoReplyPermission(`${sessionID}:v2:${request.id}`, (signal) =>
+                      sdk.client.v2.session.permission.reply(
                         { sessionID, requestID: request.id, reply: "once" },
-                        { throwOnError: true },
-                      )
-                    } catch {
-                      return request
-                    }
+                        { throwOnError: true, signal },
+                      ),
+                    )
+                    if (!replied) return request
                   }),
                 )
               ).filter((request) => request !== undefined)
@@ -263,49 +437,6 @@ export const {
             if (match.found) draft.session[match.index] = session.data!
             if (!match.found) draft.session.splice(match.index, 0, session.data!)
             draft.todo[sessionID] = todo.data ?? []
-            const currentMessages = draft.message[sessionID] ?? []
-            const infos = (messages.data ?? []).flatMap((message) => {
-              if (!tracker.messages.has(message.info.id)) return [message.info]
-              const current = currentMessages.find((item) => item.id === message.info.id)
-              return current ? [current] : []
-            })
-            infos.push(
-              ...currentMessages.filter(
-                (message) => tracker.messages.has(message.id) && !infos.some((item) => item.id === message.id),
-              ),
-            )
-            infos.sort(compareMessage)
-            const removed = infos.slice(0, -100)
-            const visible = infos.slice(-100)
-            const visibleIDs = new Set(visible.map((message) => message.id))
-            for (const message of messages.data ?? []) {
-              if (!visibleIDs.has(message.info.id)) {
-                delete draft.part[message.info.id]
-                continue
-              }
-              const currentParts = draft.part[message.info.id] ?? []
-              const parts = message.parts.flatMap((part) => {
-                const current = currentParts.find((item) => item.id === part.id)
-                if (tracker.parts.has(part.id)) return current ? [current] : []
-                if (
-                  current &&
-                  (part.type === "text" || part.type === "reasoning") &&
-                  (current.type === "text" || current.type === "reasoning") &&
-                  part.text.length === 0 &&
-                  current.text.length > 0
-                )
-                  return [current]
-                return [part]
-              })
-              parts.push(
-                ...currentParts.filter(
-                  (part) => tracker.parts.has(part.id) && !parts.some((item) => item.id === part.id),
-                ),
-              )
-              draft.part[message.info.id] = parts
-            }
-            for (const message of removed) delete draft.part[message.id]
-            draft.message[sessionID] = visible
             draft.session_diff[sessionID] = diff.data ?? []
             draft.permission[sessionID] = pendingPermissions
               .map(legacyPermission)
@@ -327,6 +458,8 @@ export const {
               .toSorted((a, b) => a.id.localeCompare(b.id))
           }),
         )
+        mergeSessionMessages(sessionID, messages.data ?? [], tracker)
+        await reconcileLegacyPermissions(sessionID)
         fullSyncedSessions.add(sessionID)
       })().finally(() => {
         syncingSessions.delete(sessionID)
@@ -334,6 +467,64 @@ export const {
       })
       syncingSessions.set(sessionID, task)
       return task
+    }
+
+    function reconcileSessionMessages(sessionID: string) {
+      const syncing = syncingSessions.get(sessionID)
+      if (syncing) return syncing
+      const existing = reconcilingSessions.get(sessionID)
+      if (existing) return existing
+      const tracker: HydrationTracker = {
+        messages: new Set(),
+        parts: new Set(),
+        permissions: new Set(),
+        questions: new Set(),
+      }
+      hydratingSessions.set(sessionID, tracker)
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 5_000)
+      const task = sdk.client.session
+        .messages({ sessionID, limit: 10 }, { throwOnError: true, signal: controller.signal })
+        .then((messages) => mergeSessionMessages(sessionID, messages.data ?? [], tracker, true))
+        .finally(() => {
+          clearTimeout(timeout)
+          reconcilingSessions.delete(sessionID)
+          if (hydratingSessions.get(sessionID) === tracker) hydratingSessions.delete(sessionID)
+        })
+      reconcilingSessions.set(sessionID, task)
+      return task
+    }
+
+    let reconcilingWorkingSessions: Promise<void> | undefined
+    function reconcileWorkingSessions() {
+      if (reconcilingWorkingSessions) return reconcilingWorkingSessions
+      const sessions = [...fullSyncedSessions].filter(
+        (sessionID) =>
+          result.session.status(sessionID) === "working" ||
+          (store.message[sessionID] ?? []).some((message) =>
+            (store.part[message.id] ?? []).some((part) => part.type === "tool" && part.state.status === "running"),
+          ),
+      )
+      if (sessions.length === 0) return Promise.resolve()
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 5_000)
+      reconcilingWorkingSessions = sdk.client.session
+        .status({ workspace: project.workspace.current() }, { throwOnError: true, signal: controller.signal })
+        .then(async (response) => {
+          const reconciled = await Promise.allSettled(sessions.map(reconcileSessionMessages))
+          batch(() => {
+            reconciled.forEach((outcome, index) => {
+              if (outcome.status === "rejected") return
+              setStore("session_status", sessions[index], response.data?.[sessions[index]] ?? { type: "idle" })
+            })
+          })
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          clearTimeout(timeout)
+          reconcilingWorkingSessions = undefined
+        })
+      return reconcilingWorkingSessions
     }
 
     let projectionRefreshRequested = false
@@ -352,9 +543,7 @@ export const {
           // not drop out of the store and flash local fallbacks during the
           // re-sync gap. Deletion remains event-driven via `session.deleted`.
           const listed = new Set(sessions.map((session) => session.id))
-          const retained = store.session.filter(
-            (session) => hydrated.includes(session.id) && !listed.has(session.id),
-          )
+          const retained = store.session.filter((session) => hydrated.includes(session.id) && !listed.has(session.id))
           setStore("session", reconcile([...sessions, ...retained]))
           fullSyncedSessions.clear()
           await Promise.allSettled(hydrated.map(syncSession))
@@ -366,8 +555,11 @@ export const {
       return projectionRefreshFlight
     }
 
-    event.subscribe((event, { directory, workspace }) => {
+    event.subscribe((event, { workspace }) => {
       switch (event.type) {
+        case "server.connected":
+          if (fullSyncedSessions.size > 0) void refreshProjectedSessions().catch(() => undefined)
+          break
         case "sync.projection.updated":
           void refreshProjectedSessions().catch(() => undefined)
           break
@@ -393,42 +585,54 @@ export const {
         case "permission.asked": {
           const request = event.properties
           touchPermission(request.sessionID, request.id)
-          const session = store.session.find((item) => item.id === request.sessionID)
-          const approvalMode = session?.approvalMode ?? "normal"
-          if (permission.effective(approvalMode) === "auto") {
-            const response =
-              session?.target?.type === "rexd"
+          void resolveSession(request.sessionID).then((session) => {
+            if (!session || permission.effective(session.approvalMode ?? "normal") !== "auto") {
+              insertPermission(request)
+              return
+            }
+            void autoReplyPermission(`${request.sessionID}:legacy:${request.id}`, (signal) =>
+              session.target?.type === "rexd"
                 ? sdk.client.permission.reply(
                     { requestID: request.id, reply: "once" },
-                    { throwOnError: true, headers: { "x-opencode-target": session.target.targetID } },
+                    {
+                      throwOnError: true,
+                      signal,
+                      headers: { "x-opencode-target": session.target.targetID },
+                    },
                   )
                 : sdk.client.permission.reply(
                     {
                       requestID: request.id,
                       reply: "once",
-                      directory: session?.directory ?? directory,
-                      workspace: session?.workspaceID ?? workspace,
+                      directory: session.directory,
+                      workspace: session.workspaceID,
                     },
-                    { throwOnError: true },
-                  )
-            void response.catch(() => insertPermission(request))
-            break
-          }
-          insertPermission(request)
+                    { throwOnError: true, signal },
+                  ),
+            ).then((replied) => {
+              if (!replied) insertPermission(request)
+            })
+          })
           break
         }
 
         case "permission.v2.asked": {
           const request = legacyPermission(event.properties)
           touchPermission(request.sessionID, request.id)
-          const approvalMode = store.session.find((item) => item.id === request.sessionID)?.approvalMode ?? "normal"
-          if (permission.effective(approvalMode) === "auto") {
-            void sdk.client.v2.session.permission
-              .reply({ sessionID: request.sessionID, requestID: request.id, reply: "once" }, { throwOnError: true })
-              .catch(() => insertPermission(request))
-            break
-          }
-          insertPermission(request)
+          void resolveSession(request.sessionID).then((session) => {
+            if (!session || permission.effective(session.approvalMode ?? "normal") !== "auto") {
+              insertPermission(request)
+              return
+            }
+            void autoReplyPermission(`${request.sessionID}:v2:${request.id}`, (signal) =>
+              sdk.client.v2.session.permission.reply(
+                { sessionID: request.sessionID, requestID: request.id, reply: "once" },
+                { throwOnError: true, signal },
+              ),
+            ).then((replied) => {
+              if (!replied) insertPermission(request)
+            })
+          })
           break
         }
 
@@ -529,6 +733,9 @@ export const {
           break
 
         case "session.deleted": {
+          for (const key of autoPermissionReplies.keys()) {
+            if (key.startsWith(`${event.properties.info.id}:`)) autoPermissionReplies.delete(key)
+          }
           const result = search(store.session, event.properties.info.id, (s) => s.id)
           if (result.found) {
             setStore(
@@ -634,7 +841,7 @@ export const {
             }),
           )
           const updated = store.message[event.properties.info.sessionID]
-          if (updated.length > 100) {
+          if (updated.length > SESSION_MESSAGE_LIMIT) {
             const oldest = updated[0]
             batch(() => {
               setStore(
@@ -658,6 +865,7 @@ export const {
           touchMessage(event.properties.sessionID, event.properties.messageID)
           optimisticMessages.delete(event.properties.messageID)
           const messages = store.message[event.properties.sessionID]
+          if (!messages) break
           const index = messages.findIndex((message) => message.id === event.properties.messageID)
           if (index !== -1) {
             setStore(
@@ -722,6 +930,7 @@ export const {
         case "message.part.removed": {
           touchPart(event.properties.sessionID, event.properties.partID)
           const parts = store.part[event.properties.messageID]
+          if (!parts) break
           const result = search(parts, event.properties.partID, (part) => part.id)
           if (result.found) {
             setStore(
@@ -860,6 +1069,16 @@ export const {
       void bootstrap()
     })
 
+    const permissionReconcileTimer = setInterval(() => {
+      for (const sessionID of fullSyncedSessions) {
+        if (result.session.status(sessionID) !== "working") continue
+        void reconcileLegacyPermissions(sessionID)
+      }
+    }, 2_000)
+    onCleanup(() => clearInterval(permissionReconcileTimer))
+    const sessionReconcileTimer = setInterval(() => void reconcileWorkingSessions(), 2_000)
+    onCleanup(() => clearInterval(sessionReconcileTimer))
+
     const result = {
       data: store,
       set: setStore,
@@ -897,6 +1116,9 @@ export const {
         },
         async sync(sessionID: string) {
           return syncSession(sessionID)
+        },
+        async reconcilePermissions(sessionID: string) {
+          return reconcileLegacyPermissions(sessionID)
         },
       },
       message: {

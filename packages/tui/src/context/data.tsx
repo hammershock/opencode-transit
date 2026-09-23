@@ -20,9 +20,14 @@ import type {
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
+import { useSync } from "./sync"
 import { useEvent } from "./event"
-import { createSignal, onCleanup, onMount } from "solid-js"
-import { commitCanonicalRevert } from "../util/session-message"
+import { batch, createSignal, onCleanup, onMount } from "solid-js"
+import {
+  mergeCanonicalSessionMessages,
+  projectCanonicalSessionMessages,
+  SESSION_MESSAGE_LIMIT,
+} from "../util/session-message"
 import { locationKey, locationQuery } from "../util/location-query"
 
 type LocationData = {
@@ -64,6 +69,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     })
 
     const sdk = useSDK()
+    const sync = useSync()
     const events = useEvent()
     const [defaultLocation, setDefaultLocation] = createSignal<LocationRef>({
       directory: sdk.directory ?? process.cwd(),
@@ -75,7 +81,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           "session",
           "message",
           produce((draft) => {
-            fn((draft[sessionID] ??= []))
+            const messages = (draft[sessionID] ??= [])
+            fn(messages)
+            if (messages.length > SESSION_MESSAGE_LIMIT) messages.splice(SESSION_MESSAGE_LIMIT)
           }),
         )
       },
@@ -158,24 +166,43 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "session.next.prompt.admitted":
           break
         case "session.next.revert.staged":
-          setStore("session", "info", event.data.sessionID, (session) =>
-            session ? { ...session, revert: event.data.revert } : session,
-          )
+          result.session.revert(event.data.sessionID, event.data.revert)
           break
         case "session.next.revert.cleared":
-          setStore("session", "info", event.data.sessionID, (session) =>
-            session ? { ...session, revert: undefined } : session,
-          )
+          result.session.revert(event.data.sessionID, undefined)
           break
-        case "session.next.revert.committed":
-          setStore("session", "info", event.data.sessionID, (session) =>
-            session ? { ...session, revert: undefined } : session,
+        case "session.next.revert.committed": {
+          const sessionID = event.data.sessionID
+          const session = store.session.info[sessionID]
+          const timeline = mergeCanonicalSessionMessages(
+            sync.data.message[sessionID] ?? [],
+            projectCanonicalSessionMessages({
+              sessionID,
+              directory: session?.location.directory ?? "",
+              agent: session?.agent ?? "build",
+              model: session?.model,
+              messages: store.session.message[sessionID] ?? [],
+            }).map((item) => item.message),
           )
-          message.update(event.data.sessionID, (draft) => {
-            const remaining = commitCanonicalRevert(draft, event.data.messageID)
-            draft.splice(0, draft.length, ...remaining)
+          const index = timeline.findIndex((item) => item.id === event.data.messageID)
+          const partID = session?.revert?.messageID === event.data.messageID ? session.revert.partID : undefined
+          const removed = new Set(index < 0 ? [] : timeline.slice(index + (partID ? 1 : 0)).map((item) => item.id))
+          batch(() => {
+            message.update(sessionID, (draft) => {
+              const remaining = draft.filter((item) => !removed.has(item.id))
+              draft.splice(0, draft.length, ...remaining)
+            })
+            sync.set("message", sessionID, (messages) => messages?.filter((item) => !removed.has(item.id)) ?? [])
+            if (partID)
+              sync.set("part", event.data.messageID, (parts) => parts?.filter((part) => part.id < partID) ?? [])
+            result.session.revert(sessionID, undefined)
           })
+          if (index < 0)
+            void Promise.all([result.session.message.refresh(sessionID), sync.session.sync(sessionID)]).catch(
+              () => undefined,
+            )
           break
+        }
         case "session.next.location.rebound":
           setStore("session", "info", event.data.sessionID, (session) =>
             session
@@ -477,6 +504,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     onMount(() => {
       const unsub = events.subscribe((event, metadata) => {
+        if (event.type === "session.revert.updated") {
+          result.session.revert(event.properties.sessionID, event.properties.revert)
+          return
+        }
         handleEvent({
           ...event,
           data: event.properties,
@@ -488,6 +519,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     const result = {
       session: {
+        revert(sessionID: string, revert: SessionV2Info["revert"]) {
+          setStore("session", "info", sessionID, (session) => (session ? { ...session, revert } : session))
+          sync.set("session", (session) => session.id === sessionID, "revert", revert)
+        },
         get(sessionID: string) {
           return store.session.info[sessionID]
         },
@@ -500,8 +535,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.message[sessionID]
           },
           async refresh(sessionID: string) {
-            const result = await sdk.client.v2.session.messages({ sessionID }, { throwOnError: true })
-            setStore("session", "message", sessionID, result.data.data)
+            const result = await sdk.client.v2.session.messages(
+              { sessionID, limit: SESSION_MESSAGE_LIMIT, order: "desc" },
+              { throwOnError: true },
+            )
+            setStore("session", "message", sessionID, result.data.data.slice(0, SESSION_MESSAGE_LIMIT))
           },
         },
         permission: {

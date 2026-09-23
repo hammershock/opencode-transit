@@ -6,7 +6,14 @@ import { Project } from "@opencode-ai/schema/project"
 import { Session } from "@opencode-ai/schema/session"
 import { Context, Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { PermissionNotFoundError, SessionNotFoundError } from "../errors"
+import {
+  ConflictError,
+  InvalidRequestError,
+  PermissionNotFoundError,
+  ServiceUnavailableError,
+  SessionNotFoundError,
+} from "../errors"
+import { SessionPolicy } from "@opencode-ai/schema/session-policy"
 import { LocationQuery, locationQueryOpenApi } from "./location"
 
 export const makePermissionGroup = <
@@ -74,7 +81,7 @@ export const makePermissionGroup = <
         success: Schema.Struct({
           data: Schema.Struct({ id: Permission.ID, effect: Permission.Effect }),
         }),
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, ServiceUnavailableError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -123,7 +130,7 @@ export const makePermissionGroup = <
           message: Schema.String.pipe(Schema.optional),
         }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, PermissionNotFoundError],
+        error: [SessionNotFoundError, PermissionNotFoundError, ServiceUnavailableError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -131,6 +138,37 @@ export const makePermissionGroup = <
             identifier: "v2.session.permission.reply",
             summary: "Reply to pending permission request",
             description: "Respond to a pending permission request owned by a session.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.policy.inspect", "/api/session/:sessionID/policy", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: SessionPolicy.View }),
+        error: [SessionNotFoundError, ConflictError, InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.policy.inspect",
+            summary: "Inspect Session permission policy",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.policy.review", "/api/session/:sessionID/policy/review", {
+        params: { sessionID: Session.ID },
+        payload: SessionPolicy.Request,
+        success: Schema.Struct({ data: SessionPolicy.Review }),
+        error: [SessionNotFoundError, ConflictError, InvalidRequestError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.policy.review",
+            summary: "Commit an explicit user policy review",
+            description:
+              "Retain or drop historical allows for the exact policy and Location revision. Not an Agent tool.",
           }),
         ),
     )

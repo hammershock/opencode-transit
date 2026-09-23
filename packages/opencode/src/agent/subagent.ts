@@ -1,6 +1,8 @@
 export * as Subagent from "./subagent"
 
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { PermissionContext } from "./permission-context"
+import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
 import { Hash } from "@opencode-ai/core/util/hash"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
 import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
@@ -139,6 +141,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const agents = yield* Agent.Service
+    const policies = yield* PermissionContext.Service
     const config = yield* Config.Service
     const sessions = yield* Session.Service
     const flock = yield* EffectFlock.Service
@@ -152,9 +155,13 @@ const layer = Layer.effect(
       const parent = yield* agents.get(input.parentAgentID)
       if (!parent) return yield* Effect.die(new Error(`Parent Agent not found: ${input.parentAgentID}`))
       const session = input.sessionID ? yield* sessions.get(input.sessionID).pipe(Effect.orDie) : undefined
+      const policy = input.sessionID ? yield* policies.resolve(input.sessionID, parent.id ?? parent.name) : undefined
+      const parentRules = policy ? PermissionContext.legacy(policy.agentRules) : parent.permission
+      const sessionRules = policy ? PermissionContext.legacy(policy.session.rules) : (session?.permission ?? [])
       const global = yield* config.getGlobal()
-      const parentDisabled =
-        Permission.evaluate("task", "*", parent.permission, session?.permission ?? []).action === "deny"
+      const parentDisabled = policy
+        ? ExecutionPolicy.whollyDisabled(policy, "task")
+        : Permission.evaluate("task", "*", parentRules, sessionRules).action === "deny"
 
       const parentID = parent.id ?? parent.name
       const candidates = (yield* agents.list()).filter((item) => item.mode !== "primary")
@@ -167,8 +174,8 @@ const layer = Layer.effect(
           const id = item.id ?? item.name
           const sessionValue = session?.subagentAccess?.[parentID]?.[id]
           const globalValue = global.subagent_access?.[parentID]?.[id]
-          const sessionPermission = taskPermission(id, item.name, session?.permission ?? [])
-          const globalPermission = taskPermission(id, item.name, parent.permission)
+          const sessionPermission = taskPermission(id, item.name, sessionRules)
+          const globalPermission = taskPermission(id, item.name, parentRules)
           const access = resolveEffectiveAccess({
             parentDisabled,
             session: sessionValue,
@@ -186,7 +193,7 @@ const layer = Layer.effect(
           const permission = Permission.merge(
             item.permission,
             deriveSubagentSessionPermission({
-              parentSessionPermission: session?.permission ?? [],
+              parentSessionPermission: sessionRules,
               subagent: item,
             }),
           )
@@ -695,5 +702,5 @@ function truncateEscapedBytes(value: string, limit: number) {
 export const node = LayerNode.make({
   service: Service,
   layer,
-  deps: [Agent.node, Config.node, Session.node, EffectFlock.node],
+  deps: [Agent.node, Config.node, Session.node, EffectFlock.node, PermissionContext.node],
 })

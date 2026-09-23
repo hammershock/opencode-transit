@@ -3759,6 +3759,156 @@ export type PermissionsReplyInput = {
 
 export type PermissionsReplyOutput = void
 
+export type PermissionsInspectInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type PermissionsInspectOutput = {
+  readonly data: {
+    readonly status: "current" | "pending" | "reviewed"
+    readonly revision: number
+    readonly legacyDigest: string
+    readonly location: {
+      readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+      readonly directory: string
+      readonly workspaceID?: string
+      readonly lastKnownTargetName?: string
+    }
+    readonly locationRevision: number
+    readonly baseline: ReadonlyArray<{
+      readonly action: string
+      readonly resource: string
+      readonly effect: "allow" | "deny" | "ask"
+    }>
+    readonly rules: ReadonlyArray<{
+      readonly action: string
+      readonly resource: string
+      readonly effect: "allow" | "deny" | "ask"
+    }>
+    readonly review?: {
+      readonly version: 1
+      readonly sessionID: string
+      readonly requestID: string
+      readonly deviceID: string
+      readonly previousRevision: number
+      readonly revision: number
+      readonly basisRevision?: number
+      readonly legacyDigest: string
+      readonly locationRevision: number
+      readonly directory: string
+      readonly portableTargetLabel?: string
+      readonly baseline: ReadonlyArray<{
+        readonly action: string
+        readonly resource: string
+        readonly effect: "allow" | "deny" | "ask"
+      }>
+      readonly accepted: ReadonlyArray<boolean>
+    }
+  }
+}["data"]
+
+export type PermissionsReviewInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly requestID: {
+    readonly requestID: string
+    readonly expectedRevision: number
+    readonly legacyDigest: string
+    readonly locationRevision: number
+    readonly location: {
+      readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+      readonly directory: string
+      readonly workspaceID?: string
+      readonly lastKnownTargetName?: string
+    }
+    readonly accepted: ReadonlyArray<boolean>
+  }["requestID"]
+  readonly expectedRevision: {
+    readonly requestID: string
+    readonly expectedRevision: number
+    readonly legacyDigest: string
+    readonly locationRevision: number
+    readonly location: {
+      readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+      readonly directory: string
+      readonly workspaceID?: string
+      readonly lastKnownTargetName?: string
+    }
+    readonly accepted: ReadonlyArray<boolean>
+  }["expectedRevision"]
+  readonly legacyDigest: {
+    readonly requestID: string
+    readonly expectedRevision: number
+    readonly legacyDigest: string
+    readonly locationRevision: number
+    readonly location: {
+      readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+      readonly directory: string
+      readonly workspaceID?: string
+      readonly lastKnownTargetName?: string
+    }
+    readonly accepted: ReadonlyArray<boolean>
+  }["legacyDigest"]
+  readonly locationRevision: {
+    readonly requestID: string
+    readonly expectedRevision: number
+    readonly legacyDigest: string
+    readonly locationRevision: number
+    readonly location: {
+      readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+      readonly directory: string
+      readonly workspaceID?: string
+      readonly lastKnownTargetName?: string
+    }
+    readonly accepted: ReadonlyArray<boolean>
+  }["locationRevision"]
+  readonly location: {
+    readonly requestID: string
+    readonly expectedRevision: number
+    readonly legacyDigest: string
+    readonly locationRevision: number
+    readonly location: {
+      readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+      readonly directory: string
+      readonly workspaceID?: string
+      readonly lastKnownTargetName?: string
+    }
+    readonly accepted: ReadonlyArray<boolean>
+  }["location"]
+  readonly accepted: {
+    readonly requestID: string
+    readonly expectedRevision: number
+    readonly legacyDigest: string
+    readonly locationRevision: number
+    readonly location: {
+      readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+      readonly directory: string
+      readonly workspaceID?: string
+      readonly lastKnownTargetName?: string
+    }
+    readonly accepted: ReadonlyArray<boolean>
+  }["accepted"]
+}
+
+export type PermissionsReviewOutput = {
+  readonly data: {
+    readonly version: 1
+    readonly sessionID: string
+    readonly requestID: string
+    readonly deviceID: string
+    readonly previousRevision: number
+    readonly revision: number
+    readonly basisRevision?: number
+    readonly legacyDigest: string
+    readonly locationRevision: number
+    readonly directory: string
+    readonly portableTargetLabel?: string
+    readonly baseline: ReadonlyArray<{
+      readonly action: string
+      readonly resource: string
+      readonly effect: "allow" | "deny" | "ask"
+    }>
+    readonly accepted: ReadonlyArray<boolean>
+  }
+}["data"]
+
 export type FilesDirectoryStatusInput = {
   readonly location?: {
     readonly location?:

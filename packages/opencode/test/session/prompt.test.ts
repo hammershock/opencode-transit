@@ -212,13 +212,20 @@ const promptRoot = LayerNode.group([
   RuntimeFlags.node,
 ])
 
-function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
+type PromptFixtureOptions = {
+  mcpInstructions?: MCP.ServerInstructions[]
+  processor?: "blocking"
+  locationMap?: Layer.Layer<LocationServiceMap.Service>
+}
+
+function makePrompt(input?: PromptFixtureOptions) {
   const replacements = [
     [SessionSummary.node, summary],
     [LSP.node, lsp],
     [MCP.node, makeMcp(input?.mcpInstructions)],
     [RuntimeFlags.node, runtimeFlags],
-    [LocationServiceMap.node, locationServiceMapLayer],
+    [LocationServiceMap.node, input?.locationMap ?? locationServiceMapLayer],
+    [SessionExecution.node, SessionExecution.noopLayer],
   ] as const
   if (input?.processor === "blocking") {
     return LayerNode.compile(promptRoot, [...replacements, [SessionProcessor.node, blockingProcessor]])
@@ -226,14 +233,15 @@ function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; proces
   return LayerNode.compile(promptRoot, replacements)
 }
 
-function makeHttp(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
+function makeHttp(input?: PromptFixtureOptions) {
   const root = LayerNode.group([promptRoot, testLLMServerNode])
   const replacements = [
     [SessionSummary.node, summary],
     [LSP.node, lsp],
     [MCP.node, makeMcp(input?.mcpInstructions)],
     [RuntimeFlags.node, runtimeFlags],
-    [LocationServiceMap.node, locationServiceMapLayer],
+    [LocationServiceMap.node, input?.locationMap ?? locationServiceMapLayer],
+    [SessionExecution.node, SessionExecution.noopLayer],
   ] as const
   if (input?.processor === "blocking") {
     return LayerNode.compile(root, [...replacements, [SessionProcessor.node, blockingProcessor]])
@@ -241,13 +249,42 @@ function makeHttp(input?: { mcpInstructions?: MCP.ServerInstructions[]; processo
   return LayerNode.compile(root, replacements)
 }
 
-function makeHttpNoLLMServer(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
+function makeHttpNoLLMServer(input?: PromptFixtureOptions) {
   return makePrompt(input)
 }
 
 const it = testEffect(makeHttp())
 const noLLMServer = testEffect(makeHttpNoLLMServer())
 const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
+const locationLeaseState = { active: 0, releases: 0 }
+const trackedLocationServiceMap = Layer.effect(
+  LocationServiceMap.Service,
+  Effect.gen(function* () {
+    const locations = yield* LocationServiceMap.Service
+    return {
+      ...locations,
+      get: (ref: Location.Ref) =>
+        Layer.merge(
+          locations.get(ref),
+          Layer.effectDiscard(
+            Effect.acquireRelease(
+              Effect.sync(() => {
+                locationLeaseState.active++
+              }),
+              () =>
+                Effect.sync(() => {
+                  locationLeaseState.active--
+                  locationLeaseState.releases++
+                }),
+            ),
+          ),
+        ),
+    }
+  }),
+).pipe(Layer.provide(locationServiceMapLayer))
+const withTrackedLocationLease = testEffect(
+  makeHttpNoLLMServer({ processor: "blocking", locationMap: trackedLocationServiceMap }),
+)
 const withMcpInstructions = testEffect(
   makeHttp({
     mcpInstructions: [
@@ -1474,6 +1511,32 @@ noLLMServer.instance(
     }),
   { config: cfg },
   30_000,
+)
+
+withTrackedLocationLease.instance(
+  "legacy loop retains its Location lease until cancellation",
+  () =>
+    Effect.gen(function* () {
+      locationLeaseState.active = 0
+      locationLeaseState.releases = 0
+      const started = defer<void>()
+      processorCreateStarted.push(started.resolve)
+      const { prompt, chat } = yield* boot()
+      yield* user(chat.id, "hold the Location runtime")
+
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* Effect.promise(() => started.promise)
+
+      expect(locationLeaseState.active).toBe(1)
+      expect(locationLeaseState.releases).toBe(0)
+
+      yield* prompt.cancel(chat.id)
+      expect(Exit.isSuccess(yield* Fiber.await(fiber))).toBe(true)
+      expect(locationLeaseState.active).toBe(0)
+      expect(locationLeaseState.releases).toBe(1)
+    }),
+  { config: cfg },
+  3_000,
 )
 
 it.instance(

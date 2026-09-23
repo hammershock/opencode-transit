@@ -86,6 +86,7 @@ const layer = Layer.effect(
           locations.get(
             Location.Ref.make({
               directory: AbsolutePath.make(context.directory),
+              ...(context.target === undefined ? {} : { target: context.target }),
               ...(workspaceID === undefined ? {} : { workspaceID }),
             }),
           ),

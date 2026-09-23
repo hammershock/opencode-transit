@@ -501,7 +501,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
       // Setup opencode session
       const repoData = await fetchRepo()
       session = await runLocalEffect(
-        sessionSvc.create({
+        sessionShare.create({
           permission: [
             {
               permission: "question",

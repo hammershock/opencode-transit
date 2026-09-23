@@ -210,6 +210,7 @@ test.each([
   { route: "QuickStart", args: {} },
   { route: "Session", args: { continue: true } },
 ] as const)("Ctrl+P opens the command palette from the production $route route", async ({ args }) => {
+  let api: TuiPluginApi | undefined
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
@@ -269,7 +270,8 @@ test.each([
         events: events.source,
         args,
         pluginHost: {
-          async start() {
+          async start(input) {
+            api = input.api
             started()
           },
           async dispose() {},
@@ -284,16 +286,119 @@ test.each([
     await setup.waitForVisualIdle()
 
     expect(setup.captureCharFrame()).toContain("Commands")
+    expect(
+      api!.keymap
+        .getCommandEntries({ visibility: "reachable", namespace: "palette" })
+        .some((entry) => entry.command.name === "fork.location.recent"),
+    ).toBe(!("continue" in args))
     const editor = await waitForEditor(setup)
     "Subagent economics".split("").forEach((key) => setup.mockInput.pressKey(key))
     await waitForFrame(setup, "Configure device-local pricing")
     expect(editor.plainText).toBe("Subagent economics")
     setup.mockInput.pressEnter()
-    await waitForFrame(setup, "○ disabled")
+    await waitForFrame(setup, "○ saved off")
     expect(setup.captureCharFrame()).toContain("Device setting · give")
     setup.mockInput.pressKey(" ")
-    await waitForFrame(setup, "● enabled")
+    await waitForFrame(setup, "● saved on")
     expect(patches).toEqual([{ experimental: { subagent_economics: true } }])
+    process.emit("SIGHUP")
+    await task
+  } finally {
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    mock.restore()
+  }
+})
+
+test("a resolved Session keeps prompt input responsive while context activation is pending", async () => {
+  const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
+  const core = await import("@opentui/core")
+  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  const events = createEventSource()
+  const session = {
+    id: "dummy",
+    title: "Pending context activation",
+    slug: "dummy",
+    projectID: "project",
+    directory,
+    version: "0.0.0-test",
+    time: { created: 0, updated: 0 },
+  }
+  let activationStarted!: () => void
+  const activating = new Promise<void>((resolve) => {
+    activationStarted = resolve
+  })
+  const calls = createFetch(async (url) => {
+    if (url.pathname === "/api/target")
+      return json({ path: "/tmp/opencode/targets.jsonc", revision: "test", targets: [], diagnostics: [], valid: true })
+    if (url.pathname === "/config/providers")
+      return json({
+        providers: [{ id: "test", name: "Test", source: "custom", env: [], options: {}, models: {} }],
+        default: {},
+      })
+    if (url.pathname === "/api/session/dummy")
+      return json({
+        data: {
+          id: "dummy",
+          projectID: "project",
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 0, updated: 0 },
+          title: "Pending context activation",
+          location: { directory },
+          agent: "build",
+        },
+      })
+    if (url.pathname === "/api/session/dummy/message") return json({ data: [], cursor: {} })
+    if (url.pathname === "/session/dummy") return json(session)
+    if (url.pathname === "/session/dummy/message") return json([])
+    if (url.pathname === "/session/dummy/todo") return json([])
+    if (url.pathname === "/session/dummy/diff") return json([])
+    if (url.pathname === "/api/session/dummy/target-resolution")
+      return json({ status: "resolved", location: { directory } })
+    if (url.pathname === "/api/session/dummy/activate") {
+      activationStarted()
+      return new Promise<Response>(() => {})
+    }
+    if (url.pathname === "/api/session/dummy/model-context") return json({})
+    if (url.pathname === "/session") return json([session])
+    return undefined
+  })
+  let started!: () => void
+  let disposeSlots = () => {}
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
+  })
+
+  try {
+    const { run } = await import("../src/app")
+    const task = Effect.runPromise(
+      run({
+        url: "http://test",
+        directory,
+        config: createTuiResolvedConfig({ plugin_enabled: {} }),
+        fetch: calls.fetch,
+        events: events.source,
+        args: { continue: true },
+        pluginHost: {
+          async start(input) {
+            disposeSlots = input.runtime.setupSlots(input.api).dispose
+            started()
+          },
+          async dispose() {
+            disposeSlots()
+          },
+        },
+      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+    )
+
+    await ready
+    await activating
+    const editor = await waitForEditor(setup)
+    await setup.mockInput.typeText("still responsive")
+    await waitForEditorText(setup, "still responsive")
+    setup.mockInput.pressKey("p", { ctrl: true })
+    await waitForFrame(setup, "Commands")
+
     process.emit("SIGHUP")
     await task
   } finally {
@@ -1039,256 +1144,476 @@ test("QuickStart accepts and renders keyboard input without starving the keymap"
   }
 }, 10_000)
 
-test("session.undo restores a canonical Skill prompt and session.redo clears its V2 revert", async () => {
-  const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
-  const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
-  const events = createEventSource()
-  const legacySession = {
-    id: "dummy",
-    title: "Skill undo",
-    slug: "dummy",
-    projectID: "project",
-    directory,
-    version: "0.0.0-test",
-    time: { created: 0, updated: 10 },
-  }
-  const canonicalSession = {
-    id: "dummy",
-    projectID: "project",
-    cost: 0,
-    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-    time: { created: 0, updated: 10 },
-    title: "Skill undo",
-    location: { directory },
-    agent: "build",
-    model: { providerID: "test", id: "model" },
-  }
-  const model = {
-    id: "model",
-    providerID: "test",
-    api: { id: "model", url: "http://test", npm: "test" },
-    name: "Test Model",
-    capabilities: {
-      temperature: true,
-      reasoning: false,
-      attachment: true,
-      toolcall: true,
-      input: { text: true, audio: false, image: true, video: false, pdf: false },
-      output: { text: true, audio: false, image: false, video: false, pdf: false },
-      interleaved: false,
-    },
-    cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
-    limit: { context: 100_000, output: 10_000 },
-    status: "active",
-    options: {},
-    headers: {},
-    release_date: "2026-01-01",
-  }
-  const message = {
-    id: "msg_skill",
-    type: "user",
-    text: "$review inspect this",
-    time: { created: 10 },
-    skills: [
-      {
-        source: { start: 0, end: 7, text: "$review" },
-        snapshot: {
-          id: "ski_snapshot",
-          name: "review",
-          digest: "a".repeat(64),
-          source: { kind: "opencode-global", label: "OpenCode" },
-          content: "private instructions",
-          status: "loaded",
-        },
-      },
-    ],
-  }
-  const previous = {
-    ...message,
-    id: "msg_previous_skill",
-    text: "$review inspect earlier",
-    time: { created: 5 },
-  }
-  const paths: string[] = []
-  const requests: string[] = []
-  const calls = createFetch((url, request) => {
-    paths.push(url.pathname)
-    requests.push(`${request.method} ${url.pathname}`)
-    if (url.pathname === "/agent")
-      return json([
-        {
-          name: "build",
-          mode: "primary",
-          hidden: false,
-          permission: [],
-          options: {},
-          model: { providerID: "test", modelID: "model" },
-        },
-      ])
-    if (url.pathname === "/config/providers")
-      return json({
-        providers: [{ id: "test", name: "Test", source: "custom", env: [], options: {}, models: { model } }],
-        default: { test: "model" },
-      })
-    if (url.pathname === "/api/target")
-      return json({ path: "/tmp/opencode/targets.jsonc", revision: "test", targets: [], diagnostics: [], valid: true })
-    if (url.pathname === "/session/dummy") return json(legacySession)
-    if (url.pathname === "/session/dummy/message" && request.method === "GET") return json([])
-    if (url.pathname === "/session/dummy/message" && request.method === "POST") return json({})
-    if (url.pathname === "/api/session/dummy") return json({ data: canonicalSession })
-    if (url.pathname === "/api/session/dummy/message") return json({ data: [message, previous], cursor: {} })
-    if (url.pathname === "/api/session/dummy/target-resolution")
-      return json({ status: "resolved", location: { directory } })
-    if (url.pathname === "/api/session/dummy/activate") return json({ data: { status: "unchanged", diagnostics: [] } })
-    if (url.pathname === "/api/skill/catalog")
-      return json({
-        location: { directory, project: { id: "project", directory } },
-        data: {
-          revision: "catalog",
-          digest: "catalog",
-          skills: [
-            {
-              id: "skl_review",
-              name: "review",
-              description: "Review changes",
-              sourceLabel: "OpenCode · deadbeef",
-              digest: "a".repeat(64),
-            },
-          ],
+test.each([
+  { width: 60, remote: false },
+  { width: 100, remote: false },
+  { width: 140, remote: false },
+  { width: 100, remote: true },
+])(
+  "QuickStart recent locations select safely at $width columns (remote=$remote)",
+  async ({ width, remote }) => {
+    const setup = await createTestRenderer({ width, height: 30, useThread: false })
+    const core = await import("@opentui/core")
+    mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+    const events = createEventSource()
+    const validated: URL[] = []
+    let fail = true
+    let release: (() => void) | undefined
+    let delay = false
+    let removed = false
+    const prepared: string[] = []
+    const calls = createFetch(async (url) => {
+      if (url.pathname === "/api/target")
+        return json({
+          path: "targets.jsonc",
+          revision: "test",
+          targets: remote && !removed ? [{ id: "target-1", name: "renamed", workspaceRoots: ["/work"] }] : [],
           diagnostics: [],
+          valid: true,
+        })
+      if (url.pathname === "/api/target/target-1/prepare") {
+        prepared.push("target-1")
+        return json({ status: "ready", stages: [] })
+      }
+      if (url.pathname === "/experimental/session") {
+        expect(url.searchParams.has("directory")).toBe(false)
+        return json(
+          Array.from({ length: 25 }, (_, i) => ({
+            id: `recent-${i}`,
+            slug: `recent-${i}`,
+            projectID: `project-${i}`,
+            title: "Recent work",
+            directory: `/work/project-${i}`,
+            ...(remote ? { target: { type: "rexd", targetID: "target-1" }, lastKnownTargetName: "old-name" } : {}),
+            version: "test",
+            time: { created: 0, updated: 100 - i },
+          })),
+        )
+      }
+      if (url.pathname === "/api/fs/list") {
+        validated.push(url)
+        if (delay)
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+        if (fail) return json({ message: "Directory unavailable" }, { status: 400 })
+        return json({ data: [] })
+      }
+      if (url.pathname === "/config/providers")
+        return json({
+          providers: [{ id: "test", name: "Test", source: "custom", env: [], options: {}, models: {} }],
+          default: {},
+        })
+    })
+    let api: TuiPluginApi | undefined
+    let disposeSlots = () => {}
+    try {
+      const { run } = await import("../src/app")
+      const task = Effect.runPromise(
+        run({
+          url: "http://test",
+          directory,
+          config: createTuiResolvedConfig({ plugin_enabled: {} }),
+          fetch: calls.fetch,
+          events: events.source,
+          args: {},
+          pluginHost: {
+            async start(input) {
+              api = input.api
+              disposeSlots = input.runtime.setupSlots(input.api).dispose
+            },
+            async dispose() {
+              disposeSlots()
+            },
+          },
+        }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+      )
+      const editor = await waitForEditor(setup, 5_000)
+      await waitForFrame(setup, "/work/project-0")
+      api!.keymap.dispatchCommand("prompt.clear")
+      "draft remains".split("").forEach((key) => setup.mockInput.pressKey(key))
+      await waitForFrame(setup, "draft remains")
+      api!.keymap.dispatchCommand("fork.location.recent")
+      await waitForFrame(setup, "Search target or directory")
+      await setup.waitForVisualIdle()
+      setup.mockInput.pressEnter()
+      await waitForFrame(setup, "Cannot select recent location")
+      expect(editor.plainText).toBe("draft remains")
+      expect(setup.captureCharFrame()).toContain("Search target or directory")
+      fail = false
+      delay = true
+      setup.mockInput.pressEnter()
+      while (!release) await Bun.sleep(10)
+      setup.mockInput.pressEscape()
+      await waitForFrameWithout(setup, "Search target or directory")
+      release()
+      await Bun.sleep(40)
+      await waitForEditor(setup)
+      expect(editor.plainText).toBe("draft remains")
+      expect(setup.captureCharFrame()).not.toContain("● selected")
+      delay = false
+      const lines = setup.captureCharFrame().split("\n")
+      const y = lines.findIndex((line) => line.includes("/work/project-0"))
+      await setup.mockMouse.click(lines[y].indexOf("/work/project-0") + 2, y)
+      await waitForFrame(setup, "● selected")
+      expect(validated).toHaveLength(3)
+      expect(validated.map((url) => url.searchParams.get("location[directory]"))).toEqual(
+        Array(3).fill("/work/project-0"),
+      )
+      expect(validated.map((url) => url.searchParams.get("location[target]"))).toEqual(
+        Array(3).fill(remote ? "target-1" : null),
+      )
+      expect(prepared).toHaveLength(remote ? 3 : 0)
+      expect(editor.plainText).toBe("draft remains")
+      if (remote) {
+        removed = true
+        api!.keymap.dispatchCommand("fork.location.recent")
+        await waitForFrame(setup, "Search target or directory")
+        await setup.waitForVisualIdle()
+        setup.mockInput.pressEnter()
+        await waitForFrame(setup, "Target is no longer configured")
+        expect(validated).toHaveLength(3)
+        expect(editor.plainText).toBe("draft remains")
+      }
+      if (!remote) {
+        api!.keymap.dispatchCommand("prompt.clear")
+        "/recent".split("").forEach((key) => setup.mockInput.pressKey(key))
+        await waitForFrame(setup, "Choose a recently used target")
+        await setup.waitForVisualIdle()
+        setup.mockInput.pressEnter()
+        await waitForFrame(setup, "Search target or directory")
+        expect(validated).toHaveLength(3)
+      }
+      process.emit("SIGHUP")
+      await task
+    } finally {
+      release?.()
+      if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+      mock.restore()
+    }
+  },
+  15_000,
+)
+
+test.each(["canonical", "mixed", "legacy", "reopened", "slash", "failed-submit"])(
+  "session.undo/redo round-trips %s turns through one boundary",
+  async (kind) => {
+    const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
+    const core = await import("@opentui/core")
+    mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+    const events = createEventSource()
+    const legacySession = {
+      id: "dummy",
+      title: "Skill undo",
+      slug: "dummy",
+      projectID: "project",
+      directory,
+      version: "0.0.0-test",
+      time: { created: 0, updated: 10 },
+    }
+    const canonicalSession = {
+      id: "dummy",
+      projectID: "project",
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: 0, updated: 10 },
+      title: "Skill undo",
+      location: { directory },
+      agent: "build",
+      model: { providerID: "test", id: "model" },
+      ...(kind === "reopened" ? { revert: { messageID: "msg_skill" } } : {}),
+    }
+    const model = {
+      id: "model",
+      providerID: "test",
+      api: { id: "model", url: "http://test", npm: "test" },
+      name: "Test Model",
+      capabilities: {
+        temperature: true,
+        reasoning: false,
+        attachment: true,
+        toolcall: true,
+        input: { text: true, audio: false, image: true, video: false, pdf: false },
+        output: { text: true, audio: false, image: false, video: false, pdf: false },
+        interleaved: false,
+      },
+      cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+      limit: { context: 100_000, output: 10_000 },
+      status: "active",
+      options: {},
+      headers: {},
+      release_date: "2026-01-01",
+    }
+    const message = {
+      id: "msg_skill",
+      type: "user",
+      text: "$review inspect this",
+      time: { created: 10 },
+      skills: [
+        {
+          source: { start: 0, end: 7, text: "$review" },
+          snapshot: {
+            id: "ski_snapshot",
+            name: "review",
+            digest: "a".repeat(64),
+            source: { kind: "opencode-global", label: "OpenCode" },
+            content: "private instructions",
+            status: "loaded",
+          },
+        },
+      ],
+    }
+    const previous = {
+      ...message,
+      id: "msg_previous_skill",
+      text: "$review inspect earlier",
+      time: { created: 5 },
+    }
+    const paths: string[] = []
+    const requests: string[] = []
+    let commitFails = kind === "failed-submit"
+    const calls = createFetch(async (url, request) => {
+      paths.push(url.pathname)
+      requests.push(`${request.method} ${url.pathname}`)
+      if (url.pathname === "/agent")
+        return json([
+          {
+            name: "build",
+            mode: "primary",
+            hidden: false,
+            permission: [],
+            options: {},
+            model: { providerID: "test", modelID: "model" },
+          },
+        ])
+      if (url.pathname === "/config/providers")
+        return json({
+          providers: [{ id: "test", name: "Test", source: "custom", env: [], options: {}, models: { model } }],
+          default: { test: "model" },
+        })
+      if (url.pathname === "/api/target")
+        return json({
+          path: "/tmp/opencode/targets.jsonc",
+          revision: "test",
+          targets: [],
+          diagnostics: [],
+          valid: true,
+        })
+      if (url.pathname === "/session/dummy") return json(legacySession)
+      if (url.pathname === "/session/dummy/message" && request.method === "GET")
+        return json(
+          (kind === "canonical" ? [] : kind === "mixed" ? [previous] : [previous, message]).map((item) => ({
+            info: {
+              id: item.id,
+              role: "user",
+              sessionID: "dummy",
+              agent: "build",
+              model: { providerID: "test", modelID: "model" },
+              time: item.time,
+            },
+            parts: [{ id: `${item.id}_text`, sessionID: "dummy", messageID: item.id, type: "text", text: item.text }],
+          })),
+        )
+      if (url.pathname === "/session/dummy/message" && request.method === "POST") return json({})
+      if (url.pathname === "/api/session/dummy") return json({ data: canonicalSession })
+      if (url.pathname === "/api/session/dummy/message")
+        return json({
+          data: kind === "canonical" ? [message, previous] : kind === "mixed" ? [message] : [],
+          cursor: {},
+        })
+      if (url.pathname === "/api/session/dummy/target-resolution")
+        return json({ status: "resolved", location: { directory } })
+      if (url.pathname === "/api/session/dummy/activate")
+        return json({ data: { status: "unchanged", diagnostics: [] } })
+      if (url.pathname === "/api/skill/catalog")
+        return json({
+          location: { directory, project: { id: "project", directory } },
+          data: {
+            revision: "catalog",
+            digest: "catalog",
+            skills: [
+              {
+                id: "skl_review",
+                name: "review",
+                description: "Review changes",
+                sourceLabel: "OpenCode · deadbeef",
+                digest: "a".repeat(64),
+              },
+            ],
+            diagnostics: [],
+          },
+        })
+      if (url.pathname === "/api/session/dummy/interrupt") return new Response(null, { status: 204 })
+      if (url.pathname === "/session/dummy/abort") return json(true)
+      if (url.pathname === "/api/session/dummy/revert/stage") return json({ data: await request.json() })
+      if (url.pathname === "/api/session/dummy/revert/clear") {
+        events.emit({
+          directory,
+          project: "project",
+          payload: {
+            id: "evt_clear",
+            type: "session.next.revert.cleared",
+            properties: { sessionID: "dummy", timestamp: 45 },
+          },
+        })
+        return new Response(null, { status: 204 })
+      }
+      if (url.pathname === "/api/session/dummy/revert/commit")
+        return commitFails
+          ? json({ message: "injected commit failure" }, { status: 500 })
+          : new Response(null, { status: 204 })
+      if (url.pathname === "/session") return json([legacySession])
+    })
+    let api: TuiPluginApi | undefined
+    let disposeSlots = () => {}
+    let started!: () => void
+    const ready = new Promise<void>((resolve) => {
+      started = resolve
+    })
+
+    try {
+      const { run } = await import("../src/app")
+      const task = Effect.runPromise(
+        run({
+          url: "http://test",
+          directory,
+          config: createTuiResolvedConfig({ plugin_enabled: {} }),
+          fetch: calls.fetch,
+          events: events.source,
+          args: { continue: true },
+          pluginHost: {
+            async start(input) {
+              api = input.api
+              disposeSlots = input.runtime.setupSlots(input.api).dispose
+              started()
+            },
+            async dispose() {
+              disposeSlots()
+            },
+          },
+        }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+      )
+
+      await ready
+      await waitForFrame(setup, previous.text, 5_000)
+      const initialEditor = await waitForEditor(setup)
+      if (kind === "reopened") {
+        await waitForFrame(setup, "1 message reverted")
+        events.emit({
+          directory,
+          project: "project",
+          payload: { id: "evt_legacy_clear", type: "session.revert.updated", properties: { sessionID: "dummy" } },
+        })
+        await waitForFrameWithout(setup, "message reverted")
+      }
+      if (kind === "slash") {
+        initialEditor.focus()
+        initialEditor.insertText("/undo")
+        await waitForFrame(setup, "/undo")
+        setup.mockInput.pressEnter()
+      } else {
+        api?.keymap.dispatchCommand("session.undo")
+      }
+      const editor = await waitForEditorText(setup, message.text).catch((error) => {
+        throw new Error(`${error instanceof Error ? error.message : String(error)}\nRequests: ${paths.join(", ")}`)
+      })
+
+      expect(editor.plainText).toBe(message.text)
+      expect(paths).toContain("/api/session/dummy/interrupt")
+      expect(paths).toContain("/api/session/dummy/revert/stage")
+      expect(paths).not.toContain("/session/dummy/revert")
+
+      events.emit({
+        directory,
+        project: "project",
+        payload: {
+          id: "evt_revert",
+          type: "session.next.revert.staged",
+          properties: { timestamp: 20, sessionID: "dummy", revert: { messageID: message.id } },
         },
       })
-    if (url.pathname === "/api/session/dummy/interrupt") return new Response(null, { status: 204 })
-    if (url.pathname === "/api/session/dummy/revert/stage") return json({ data: { messageID: message.id } })
-    if (url.pathname === "/api/session/dummy/revert/clear") return new Response(null, { status: 204 })
-    if (url.pathname === "/api/session/dummy/revert/commit") return new Response(null, { status: 204 })
-    if (url.pathname === "/session") return json([legacySession])
-  })
-  let api: TuiPluginApi | undefined
-  let disposeSlots = () => {}
-  let started!: () => void
-  const ready = new Promise<void>((resolve) => {
-    started = resolve
-  })
+      await waitForFrame(setup, "1 message reverted")
+      api?.keymap.dispatchCommand("session.undo")
+      const earlier = await waitForEditorText(setup, previous.text)
 
-  try {
-    const { run } = await import("../src/app")
-    const task = Effect.runPromise(
-      run({
-        url: "http://test",
+      expect(earlier.plainText).toBe(previous.text)
+      expect(paths.filter((path) => path === "/api/session/dummy/interrupt")).toHaveLength(2)
+      expect(paths.filter((path) => path === "/api/session/dummy/revert/stage")).toHaveLength(2)
+
+      events.emit({
         directory,
-        config: createTuiResolvedConfig({ plugin_enabled: {} }),
-        fetch: calls.fetch,
-        events: events.source,
-        args: { continue: true },
-        pluginHost: {
-          async start(input) {
-            api = input.api
-            disposeSlots = input.runtime.setupSlots(input.api).dispose
-            started()
-          },
-          async dispose() {
-            disposeSlots()
-          },
+        project: "project",
+        payload: {
+          id: "evt_previous_revert",
+          type: "session.next.revert.staged",
+          properties: { timestamp: 30, sessionID: "dummy", revert: { messageID: previous.id } },
         },
-      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
-    )
+      })
+      await waitForFrame(setup, "2 message reverted")
+      api?.keymap.dispatchCommand("session.redo")
+      await waitForRequestCount(paths, "/api/session/dummy/revert/stage", 3)
 
-    await ready
-    await waitForFrame(setup, previous.text, 5_000)
-    await waitForEditor(setup)
-    api?.keymap.dispatchCommand("session.undo")
-    const editor = await waitForEditorText(setup, message.text).catch((error) => {
-      throw new Error(`${error instanceof Error ? error.message : String(error)}\nRequests: ${paths.join(", ")}`)
-    })
+      events.emit({
+        directory,
+        project: "project",
+        payload: {
+          id: "evt_latest_revert",
+          type: "session.next.revert.staged",
+          properties: { timestamp: 40, sessionID: "dummy", revert: { messageID: message.id } },
+        },
+      })
+      await waitForFrame(setup, "1 message reverted")
+      api?.keymap.dispatchCommand("session.redo")
+      await waitForFrameWithout(setup, "message reverted")
+      const cleared = await waitForEditorText(setup, "")
 
-    expect(editor.plainText).toBe(message.text)
-    expect(paths).toContain("/api/session/dummy/interrupt")
-    expect(paths).toContain("/api/session/dummy/revert/stage")
-    expect(paths).not.toContain("/session/dummy/revert")
+      expect(cleared.plainText).toBe("")
+      expect(paths).toContain("/api/session/dummy/revert/clear")
+      expect(paths).not.toContain("/session/dummy/unrevert")
 
-    events.emit({
-      directory,
-      project: "project",
-      payload: {
-        id: "evt_revert",
-        type: "session.next.revert.staged",
-        properties: { timestamp: 20, sessionID: "dummy", revert: { messageID: message.id } },
-      },
-    })
-    await waitForFrame(setup, "1 message reverted")
-    api?.keymap.dispatchCommand("session.undo")
-    const earlier = await waitForEditorText(setup, previous.text)
+      api?.keymap.dispatchCommand("session.undo")
+      await waitForRequestCount(paths, "/api/session/dummy/revert/stage", 4)
+      events.emit({
+        directory,
+        project: "project",
+        payload: {
+          id: "evt_submit_revert",
+          type: "session.next.revert.staged",
+          properties: { timestamp: 50, sessionID: "dummy", revert: { messageID: message.id } },
+        },
+      })
+      await waitForFrame(setup, "1 message reverted")
+      api?.keymap.dispatchCommand("prompt.clear")
+      const replacement = await waitForEditorText(setup, "")
+      replacement.focus()
+      replacement.insertText("continue")
+      await waitForFrame(setup, "continue")
+      setup.mockInput.pressEnter()
+      if (kind === "failed-submit") {
+        await waitForFrame(setup, "Failed to send prompt")
+        expect((await waitForEditorText(setup, "continue")).plainText).toBe("continue")
+        expect(requests).not.toContain("POST /session/dummy/message")
+        commitFails = false
+        setup.mockInput.pressEnter()
+      }
+      await waitForRequestCount(paths, "/api/session/dummy/revert/commit", 1).catch((error) => {
+        throw new Error(`${error instanceof Error ? error.message : String(error)}\nRequests: ${requests.join(", ")}`)
+      })
+      await waitForRequestCount(paths, "/session/dummy/message", 2)
 
-    expect(earlier.plainText).toBe(previous.text)
-    expect(paths.filter((path) => path === "/api/session/dummy/interrupt")).toHaveLength(2)
-    expect(paths.filter((path) => path === "/api/session/dummy/revert/stage")).toHaveLength(2)
+      expect(requests.indexOf("POST /api/session/dummy/revert/commit")).toBeLessThan(
+        requests.indexOf("POST /session/dummy/message"),
+      )
 
-    events.emit({
-      directory,
-      project: "project",
-      payload: {
-        id: "evt_previous_revert",
-        type: "session.next.revert.staged",
-        properties: { timestamp: 30, sessionID: "dummy", revert: { messageID: previous.id } },
-      },
-    })
-    await waitForFrame(setup, "2 message reverted")
-    api?.keymap.dispatchCommand("session.redo")
-    await waitForRequestCount(paths, "/api/session/dummy/revert/stage", 3)
-
-    events.emit({
-      directory,
-      project: "project",
-      payload: {
-        id: "evt_latest_revert",
-        type: "session.next.revert.staged",
-        properties: { timestamp: 40, sessionID: "dummy", revert: { messageID: message.id } },
-      },
-    })
-    await waitForFrame(setup, "1 message reverted")
-    api?.keymap.dispatchCommand("session.redo")
-    const cleared = await waitForEditorText(setup, "")
-
-    expect(cleared.plainText).toBe("")
-    expect(paths).toContain("/api/session/dummy/revert/clear")
-    expect(paths).not.toContain("/session/dummy/unrevert")
-
-    api?.keymap.dispatchCommand("session.undo")
-    await waitForRequestCount(paths, "/api/session/dummy/revert/stage", 4)
-    events.emit({
-      directory,
-      project: "project",
-      payload: {
-        id: "evt_submit_revert",
-        type: "session.next.revert.staged",
-        properties: { timestamp: 50, sessionID: "dummy", revert: { messageID: message.id } },
-      },
-    })
-    await waitForFrame(setup, "1 message reverted")
-    api?.keymap.dispatchCommand("prompt.clear")
-    const replacement = await waitForEditorText(setup, "")
-    replacement.focus()
-    replacement.insertText("continue")
-    await waitForFrame(setup, "continue")
-    setup.mockInput.pressEnter()
-    await waitForRequestCount(paths, "/api/session/dummy/revert/commit", 1).catch((error) => {
-      throw new Error(`${error instanceof Error ? error.message : String(error)}\nRequests: ${requests.join(", ")}`)
-    })
-    await waitForRequestCount(paths, "/session/dummy/message", 2)
-
-    expect(requests.indexOf("POST /api/session/dummy/revert/commit")).toBeLessThan(
-      requests.indexOf("POST /session/dummy/message"),
-    )
-
-    process.emit("SIGHUP")
-    await task
-  } finally {
-    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
-    mock.restore()
-  }
-}, 10_000)
+      process.emit("SIGHUP")
+      await task
+    } finally {
+      if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+      mock.restore()
+    }
+  },
+  10_000,
+)
 
 test("a failed Skill admission keeps the selected draft and retries its exact message once", async () => {
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
@@ -1847,6 +2172,108 @@ test("an open Sessions dialog refreshes when another device projects a Session",
     await waitForSessionRequests(calls.session, secondRequests + 1)
     await waitForFrame(setup, "Created on mywindows")
 
+    process.emit("SIGHUP")
+    await task
+  } finally {
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    mock.restore()
+  }
+})
+
+test("event subscriber failure preserves production command palette rendering and search", async () => {
+  let api: TuiPluginApi | undefined
+  const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
+  const core = await import("@opentui/core")
+  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  const events = createEventSource()
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/dummy/activate") return json({ data: { status: "unchanged", diagnostics: [] } })
+    if (url.pathname === "/api/target")
+      return json({ path: "/tmp/opencode/targets.jsonc", revision: "test", targets: [], diagnostics: [], valid: true })
+    if (url.pathname === "/config/providers")
+      return json({
+        providers: [{ id: "test", name: "Test", source: "custom", env: [], options: {}, models: {} }],
+        default: {},
+      })
+    if (url.pathname === "/global/config") return json({ experimental: { subagent_economics: false } })
+    if (url.pathname === "/session/dummy")
+      return json({
+        id: "dummy",
+        title: "PromptRef integration",
+        slug: "dummy",
+        projectID: "project",
+        directory,
+        version: "0.0.0-test",
+        time: { created: 0, updated: 0 },
+      })
+    if (url.pathname === "/api/session/dummy/target-resolution")
+      return json({ status: "resolved", location: { directory } })
+    if (url.pathname === "/session")
+      return json([
+        {
+          id: "dummy",
+          title: "PromptRef integration",
+          slug: "dummy",
+          projectID: "project",
+          directory,
+          version: "0.0.0-test",
+          time: { created: 0, updated: 0 },
+        },
+      ])
+  })
+  let started!: () => void
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
+  })
+
+  try {
+    const { run } = await import("../src/app")
+    const task = Effect.runPromise(
+      run({
+        url: "http://test",
+        directory,
+        config: createTuiResolvedConfig({ plugin_enabled: {} }),
+        fetch: calls.fetch,
+        events: events.source,
+        args: { continue: true },
+        pluginHost: {
+          async start(input) {
+            api = input.api
+            started()
+          },
+          async dispose() {},
+        },
+      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+    )
+
+    await ready
+    await setup.waitForVisualIdle()
+    {
+      const off = api!.event.on("session.status", () => {
+        throw new Error("fixture event subscriber failed")
+      })
+      try {
+        events.emit({
+          directory,
+          payload: {
+            id: "event-fault",
+            type: "session.status",
+            properties: { sessionID: "dummy", status: { type: "busy" } },
+          },
+        })
+      } catch {}
+      off()
+      await setup.waitForVisualIdle()
+    }
+    setup.mockInput.pressKey("home")
+    setup.mockInput.pressKey("p", { ctrl: true })
+    await setup.waitForVisualIdle()
+
+    expect(setup.captureCharFrame()).toContain("Commands")
+    const editor = await waitForEditor(setup)
+    "Subagent economics".split("").forEach((key) => setup.mockInput.pressKey(key))
+    await waitForFrame(setup, "Configure device-local pricing")
+    expect(editor.plainText).toBe("Subagent economics")
     process.emit("SIGHUP")
     await task
   } finally {

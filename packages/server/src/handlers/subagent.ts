@@ -1,4 +1,5 @@
 import { Location } from "@opencode-ai/core/location"
+import type { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { SubagentMutationError } from "@opencode-ai/protocol/errors"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -9,9 +10,19 @@ import { SubagentManager } from "../subagent"
 export const SubagentHandler = HttpApiBuilder.group(Api, "server.subagent", (handlers) =>
   Effect.gen(function* () {
     const manager = yield* SubagentManager.Service
-    const directory = Effect.map(Location.Service, (location) => location.directory)
-    const mutation = <A>(effect: (directory: string) => Effect.Effect<A, SubagentManager.MutationFailure>) =>
-      Effect.flatMap(directory, effect).pipe(
+    const location = Effect.map(Location.Service, (location) => ({
+      directory: location.directory,
+      target: location.target,
+      workspaceID: location.workspaceID,
+    }))
+    const mutation = <A>(
+      effect: (input: {
+        directory: string
+        target?: Location.Target
+        workspaceID?: WorkspaceV2.ID
+      }) => Effect.Effect<A, SubagentManager.MutationFailure>,
+    ) =>
+      Effect.flatMap(location, effect).pipe(
         Effect.mapError(
           (error) =>
             new SubagentMutationError({
@@ -25,9 +36,11 @@ export const SubagentHandler = HttpApiBuilder.group(Api, "server.subagent", (han
     return handlers
       .handle("subagent.catalog", (ctx) =>
         response(
-          Effect.flatMap(directory, (directory) =>
+          Effect.flatMap(location, (location) =>
             manager.catalog({
-              directory,
+              directory: location.directory,
+              target: location.target,
+              workspaceID: location.workspaceID,
               sessionID: ctx.query.sessionID,
               parentAgentID: ctx.query.parentAgentID,
               includeInactive: ctx.query.includeInactive !== "false",
@@ -36,20 +49,36 @@ export const SubagentHandler = HttpApiBuilder.group(Api, "server.subagent", (han
         ),
       )
       .handle("subagent.definition.create", (ctx) =>
-        response(mutation((directory) => manager.create({ directory, ...ctx.payload }))),
+        response(mutation((location) => manager.create({ ...location, ...ctx.payload }))),
       )
       .handle("subagent.definition.update", (ctx) =>
         response(
-          mutation((directory) => manager.update({ directory, ...ctx.payload, subagentID: ctx.params.subagentID })),
+          mutation((location) =>
+            manager.update({
+              directory: location.directory,
+              target: location.target,
+              workspaceID: location.workspaceID,
+              ...ctx.payload,
+              subagentID: ctx.params.subagentID,
+            }),
+          ),
         ),
       )
       .handle("subagent.definition.remove", (ctx) =>
         response(
-          mutation((directory) => manager.remove({ directory, ...ctx.payload, subagentID: ctx.params.subagentID })),
+          mutation((location) =>
+            manager.remove({
+              directory: location.directory,
+              target: location.target,
+              workspaceID: location.workspaceID,
+              ...ctx.payload,
+              subagentID: ctx.params.subagentID,
+            }),
+          ),
         ),
       )
       .handle("subagent.access.update", (ctx) =>
-        response(mutation((directory) => manager.setAccess({ directory, ...ctx.payload }))),
+        response(mutation((location) => manager.setAccess({ ...location, ...ctx.payload }))),
       )
   }),
 )

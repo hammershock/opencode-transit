@@ -113,6 +113,7 @@ import { shellHandlers } from "./handlers/shell"
 import { syncHandlers } from "./handlers/sync"
 import { tuiHandlers } from "./handlers/tui"
 import { handlers } from "@opencode-ai/server/handlers"
+import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
 import { buildLocationServiceMap, localProvider, LocationServiceMap } from "@opencode-ai/core/location-services"
 import { rexdLocationProvider } from "@/rexd/location"
 import { rexdTargetRegistryNode } from "@/rexd/target-registry"
@@ -260,6 +261,7 @@ export const app = LayerNode.group([
   Question.node,
   Permission.node,
   PermissionSaved.node,
+  SessionPolicyAccess.node,
   Todo.node,
   Session.node,
   SessionProjector.node,
@@ -348,6 +350,7 @@ export function createRoutes(
       AppNodeBuilderV1.build(app, [
         [TargetRegistry.node, rexdTargetRegistryNode],
         [LocationServiceMap.node, locationServiceMapV2],
+        [SessionExecution.node, SessionExecutionLocal.node],
       ]),
     ),
     // Must stay last: layers provided later in this pipe build beneath earlier ones,

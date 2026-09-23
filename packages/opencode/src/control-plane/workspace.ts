@@ -270,7 +270,7 @@ const layer = Layer.effect(
 
         if (target.type === "local") {
           const store = yield* InstanceStore.Service
-          return yield* store.provide({ directory: target.directory }, input.local())
+          return yield* store.provide({ directory: target.directory, workspaceID: input.workspaceID }, input.local())
         }
 
         const response = yield* http.execute(input.remote({ workspace, target })).pipe(

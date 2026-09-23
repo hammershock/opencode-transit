@@ -269,6 +269,7 @@ import type {
   SessionMessageResponses,
   SessionMessagesErrors,
   SessionMessagesResponses,
+  SessionPolicyRequest,
   SessionPromptAsyncErrors,
   SessionPromptAsyncResponses,
   SessionPromptErrors,
@@ -478,6 +479,10 @@ import type {
   V2SessionPermissionListResponses,
   V2SessionPermissionReplyErrors,
   V2SessionPermissionReplyResponses,
+  V2SessionPolicyInspectErrors,
+  V2SessionPolicyInspectResponses,
+  V2SessionPolicyReviewErrors,
+  V2SessionPolicyReviewResponses,
   V2SessionPromptErrors,
   V2SessionPromptResponses,
   V2SessionQuestionListErrors,
@@ -5613,6 +5618,68 @@ export class Permission2 extends HeyApiClient {
   }
 }
 
+export class Policy extends HeyApiClient {
+  /**
+   * Inspect Session permission policy
+   */
+  public inspect<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<
+      V2SessionPolicyInspectResponses,
+      V2SessionPolicyInspectErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/policy",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Commit an explicit user policy review
+   *
+   * Retain or drop historical allows for the exact policy and Location revision. Not an Agent tool.
+   */
+  public review<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      sessionPolicyRequest: SessionPolicyRequest
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { key: "sessionPolicyRequest", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionPolicyReviewResponses,
+      V2SessionPolicyReviewErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/policy/review",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Question2 extends HeyApiClient {
   /**
    * List session question requests
@@ -6210,6 +6277,11 @@ export class Session3 extends HeyApiClient {
   private _permission?: Permission2
   get permission(): Permission2 {
     return (this._permission ??= new Permission2({ client: this.client }))
+  }
+
+  private _policy?: Policy
+  get policy(): Policy {
+    return (this._policy ??= new Policy({ client: this.client }))
   }
 
   private _question?: Question2

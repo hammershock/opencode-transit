@@ -8,6 +8,7 @@ import { Location } from "@opencode-ai/core/location"
 import { Project } from "@opencode-ai/core/project"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionSync } from "@opencode-ai/core/sync/session"
+import { SessionPolicy } from "@opencode-ai/schema/session-policy"
 import { Context, Effect, Layer, Option } from "effect"
 
 export class Service extends Context.Service<Service, EventV2.Interface>()("@opencode/EventV2Bridge") {}
@@ -49,6 +50,8 @@ const layer = Layer.effect(
 
     const unsubscribe = yield* events.listen((event) =>
       Effect.gen(function* () {
+        // The policy event is syncable evidence, not a public UI event contract.
+        if (event.type === SessionPolicy.Reviewed.type) return
         const ctx = yield* InstanceRef
         const workspaceID = (yield* WorkspaceRef) ?? event.location?.workspaceID
         GlobalBus.emit("event", {

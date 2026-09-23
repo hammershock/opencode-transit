@@ -3,6 +3,7 @@ import { FileSystem, Integration, Permission, Project, Reference, Session, Works
 import { EventManifest } from "../src/event-manifest"
 import { IdeEvent } from "../src/ide-event"
 import { SessionEvent } from "../src/session-event"
+import { SessionPolicy } from "../src/session-policy"
 import { SessionTodo } from "../src/session-todo"
 import { SessionV1 } from "../src/session-v1"
 import { WorkspaceEvent } from "../src/workspace-event"
@@ -25,7 +26,9 @@ describe("public event manifest", () => {
       SessionV1.Event.Error,
     ])
     expect(EventManifest.Latest.size).toBe(97)
-    expect(EventManifest.Durable.size).toBe(40)
+    expect(EventManifest.Durable.size).toBe(41)
+    expect(EventManifest.Durable.get("session.policy.reviewed.1")).toBe(SessionPolicy.Reviewed)
+    expect(EventManifest.Latest.has(SessionPolicy.Reviewed.type)).toBe(false)
   })
 
   test("uses canonical definitions for current public events", () => {
