@@ -3028,7 +3028,6 @@ function Task(props: ToolProps) {
           navigate({
             type: "session",
             sessionID: sessionID()!,
-            messageID: invocation()?.childMessageID,
             taskDescription: stringValue(props.input.description),
           })
         }
