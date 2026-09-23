@@ -395,8 +395,9 @@ export const {
       return task
     }
 
-    async function syncSession(sessionID: string) {
-      if (fullSyncedSessions.has(sessionID)) return
+    async function syncSession(sessionID: string, reconcile = false) {
+      if (fullSyncedSessions.has(sessionID))
+        return reconcile ? reconcileSessionMessages(sessionID, SESSION_MESSAGE_LIMIT) : undefined
       const syncing = syncingSessions.get(sessionID)
       if (syncing) return syncing
       const tracker = {
@@ -409,7 +410,7 @@ export const {
       const task = (async () => {
         const [session, messages, todo, diff, permissions, questions] = await Promise.all([
           sdk.client.session.get({ sessionID }, { throwOnError: true }),
-          sdk.client.session.messages({ sessionID, limit: SESSION_MESSAGE_LIMIT }),
+          sdk.client.session.messages({ sessionID, limit: SESSION_MESSAGE_LIMIT }, { throwOnError: true }),
           sdk.client.session.todo({ sessionID }),
           sdk.client.session.diff({ sessionID }),
           sdk.client.v2.session.permission.list({ sessionID }, { throwOnError: true }),
@@ -469,7 +470,7 @@ export const {
       return task
     }
 
-    function reconcileSessionMessages(sessionID: string) {
+    function reconcileSessionMessages(sessionID: string, limit = 10) {
       const syncing = syncingSessions.get(sessionID)
       if (syncing) return syncing
       const existing = reconcilingSessions.get(sessionID)
@@ -484,7 +485,7 @@ export const {
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), 5_000)
       const task = sdk.client.session
-        .messages({ sessionID, limit: 10 }, { throwOnError: true, signal: controller.signal })
+        .messages({ sessionID, limit }, { throwOnError: true, signal: controller.signal })
         .then((messages) => mergeSessionMessages(sessionID, messages.data ?? [], tracker, true))
         .finally(() => {
           clearTimeout(timeout)
@@ -511,7 +512,7 @@ export const {
       reconcilingWorkingSessions = sdk.client.session
         .status({ workspace: project.workspace.current() }, { throwOnError: true, signal: controller.signal })
         .then(async (response) => {
-          const reconciled = await Promise.allSettled(sessions.map(reconcileSessionMessages))
+          const reconciled = await Promise.allSettled(sessions.map((sessionID) => reconcileSessionMessages(sessionID)))
           batch(() => {
             reconciled.forEach((outcome, index) => {
               if (outcome.status === "rejected") return
@@ -546,7 +547,7 @@ export const {
           const retained = store.session.filter((session) => hydrated.includes(session.id) && !listed.has(session.id))
           setStore("session", reconcile([...sessions, ...retained]))
           fullSyncedSessions.clear()
-          await Promise.allSettled(hydrated.map(syncSession))
+          await Promise.allSettled(hydrated.map((sessionID) => syncSession(sessionID)))
         }
       })().finally(() => {
         projectionRefreshFlight = undefined
@@ -1114,8 +1115,8 @@ export const {
           if (last.role === "user") return "working"
           return last.time.completed ? "idle" : "working"
         },
-        async sync(sessionID: string) {
-          return syncSession(sessionID)
+        async sync(sessionID: string, options?: { reconcile?: boolean }) {
+          return syncSession(sessionID, options?.reconcile)
         },
         async reconcilePermissions(sessionID: string) {
           return reconcileLegacyPermissions(sessionID)
