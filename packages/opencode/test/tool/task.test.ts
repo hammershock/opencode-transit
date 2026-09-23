@@ -24,7 +24,7 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 
-import { TaskTool, type TaskPromptOps } from "../../src/tool/task"
+import { TaskTool, type TaskPromptOps, TaskPlacementError } from "../../src/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -37,7 +37,10 @@ import {
   buildLocationServiceMap,
   localProvider,
   locationServiceMapLayer,
+  type LocationProvider,
 } from "@opencode-ai/core/location-services"
+import { AgentV2 } from "@opencode-ai/core/agent"
+import { PluginV2 } from "@opencode-ai/core/plugin"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/schema/schema"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
@@ -45,10 +48,13 @@ import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { eq } from "drizzle-orm"
 import { Global } from "@opencode-ai/core/global"
+import { TargetRegistry } from "@opencode-ai/core/target-registry"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import fs from "fs/promises"
 import path from "path"
 
 afterEach(async () => {
+  destinationAgent = undefined
   await disposeAllInstances()
 })
 
@@ -73,6 +79,10 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}, replacements: LayerNode.R
       SessionStatus.node,
       Truncate.node,
       ToolRegistry.node,
+      TargetRegistry.node,
+      SessionLocationAccess.node,
+      LocationServiceMap.node,
+      FSUtil.node,
       Database.node,
       RuntimeFlags.node,
       Ripgrep.node,
@@ -91,6 +101,52 @@ const remoteTarget = Location.RexdTarget.make({
   targetID: Location.TargetID.make("00000000-0000-4000-8000-000000000122"),
 })
 const remoteLocation = Location.Ref.make({ target: remoteTarget, directory: AbsolutePath.make("/home/agent/project") })
+const remoteDefinition: TargetRegistry.Definition = {
+  id: remoteTarget.targetID,
+  status: "unverified",
+  name: "a100-2gpu",
+  transport: "ssh",
+  connection: { type: "manual", host: "host", user: "user", port: 22 },
+  defaultDirectory: "/home/agent",
+  workspaceRoots: ["/home/agent"],
+}
+const remoteRegistry = TargetRegistry.Service.of({
+  load: async () => ({
+    path: "/tmp/targets.jsonc",
+    revision: "rev",
+    targets: [remoteDefinition],
+    diagnostics: [],
+    valid: true,
+  }),
+  prepare: async () => ({
+    status: "ready" as const,
+    stages: ["ssh", "prepare", "directory"],
+    checkedAt: 0,
+    trustedUntil: Infinity,
+  }),
+  create: async () => {
+    throw new Error("unused")
+  },
+  update: async () => {
+    throw new Error("unused")
+  },
+  remove: async () => {
+    throw new Error("unused")
+  },
+  restoreMissing: async () => {
+    throw new Error("unused")
+  },
+  testConnection: async () => ({ status: "ready" as const, stages: ["ssh"], checkedAt: 0, trustedUntil: Infinity }),
+  refreshConnection: async () => ({ status: "ready" as const, stages: ["ssh"], checkedAt: 0, trustedUntil: Infinity }),
+  validate: async () => {},
+  inspect: async () => ({ home: "/home/agent" }),
+  complete: async () => ({ value: "", cursor: 0, candidates: [] }),
+  previewLegacyImport: async () => ({ source: "", sourceRevision: "", candidates: [], diagnostics: [] }),
+  importLegacy: async () => ({
+    imported: [],
+    snapshot: { path: "", revision: "", targets: [], diagnostics: [], valid: true },
+  }),
+} satisfies TargetRegistry.Interface)
 const remote = testEffect(
   layer({}, [
     [
@@ -159,8 +215,65 @@ const remote = testEffect(
         }),
       ),
     ],
+    [TargetRegistry.node, Layer.succeed(TargetRegistry.Service, remoteRegistry)],
   ]),
 )
+
+let destinationAgent: AgentV2.Info | undefined
+function controlledAgentV2(): AgentV2.Interface {
+  return {
+    get: () => Effect.succeed(destinationAgent),
+    default: () => Effect.succeed(destinationAgent),
+    resolve: () => Effect.succeed(destinationAgent),
+    select: () => Effect.succeed({ id: destinationAgent?.id ?? AgentV2.defaultID, info: destinationAgent }),
+    all: () => Effect.succeed(destinationAgent ? [destinationAgent] : []),
+    permissionLayers: () => Effect.succeed({ defaults: [], configured: destinationAgent?.permissions ?? [] }),
+    capturePermissionDefaults: () => Effect.void,
+    transform: () => Effect.succeed({ dispose: Effect.void }),
+    reload: () => Effect.void,
+  }
+}
+const controlledPluginV2 = PluginV2.Service.of({
+  add: () => Effect.void,
+  remove: () => Effect.void,
+  wait: () => Effect.void,
+})
+const rexdDestinationProvider: LocationProvider = {
+  target: "rexd",
+  build: (ref, replacements) =>
+    localProvider.build(
+      Location.Ref.make({ ...ref, directory: AbsolutePath.make(process.cwd()) }),
+      replacements.concat([
+        [AgentV2.node, Layer.succeed(AgentV2.Service, AgentV2.Service.of(controlledAgentV2()))],
+        [PluginV2.node, Layer.succeed(PluginV2.Service, controlledPluginV2)],
+      ]),
+    ),
+}
+const rexdDestination = testEffect(
+  layer({}, [[LocationServiceMap.node, buildLocationServiceMap([], [localProvider, rexdDestinationProvider])]]),
+)
+const rexdAccess = testEffect(
+  layer({}, [
+    [TargetRegistry.node, Layer.succeed(TargetRegistry.Service, remoteRegistry)],
+    [LocationServiceMap.node, buildLocationServiceMap([], [localProvider, rexdDestinationProvider])],
+  ]),
+)
+
+function generalDestinationAgent(overrides: Partial<AgentV2.Info> = {}): AgentV2.Info {
+  return AgentV2.Info.make({
+    id: AgentV2.ID.make("general"),
+    model: ModelV2.Ref.make({
+      id: ModelV2.ID.make("remote-general-model"),
+      providerID: ProviderV2.ID.make("remote-provider"),
+    }),
+    request: { headers: {}, body: {} },
+    system: "remote-general-system",
+    mode: "subagent",
+    hidden: false,
+    permissions: [{ action: "todowrite", resource: "*", effect: "deny" }],
+    ...overrides,
+  })
+}
 
 function defer<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -725,7 +838,7 @@ describe("tool.task", () => {
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const { chat, assistant } = yield* seed()
-      const child = yield* sessions.create({ parentID: chat.id, title: "Existing child" })
+      const child = yield* sessions.create({ parentID: chat.id, title: "Existing child", agent: "general" })
       const tool = yield* TaskTool
       const def = yield* tool.init()
       let seen: SessionPrompt.PromptInput | undefined
@@ -764,7 +877,7 @@ describe("tool.task", () => {
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const { chat, assistant } = yield* seed()
-      const child = yield* sessions.create({ parentID: chat.id, title: "Stable child title" })
+      const child = yield* sessions.create({ parentID: chat.id, title: "Stable child title", agent: "general" })
       const tool = yield* TaskTool
       const def = yield* tool.init()
       const parents: SessionV1.WithParts["parts"][] = []
@@ -1046,12 +1159,14 @@ describe("tool.task", () => {
     }),
   )
 
-  it.instance("rejects an explicit missing task_id without creating a child", () =>
+  it.instance("rejects a task_id that does not exist without creating a child", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
       const def = yield* tool.init()
+      const promptOps = stubOps({ text: "created" })
+
       const exit = yield* def
         .execute(
           {
@@ -1065,7 +1180,7 @@ describe("tool.task", () => {
             messageID: assistant.id,
             agent: "build",
             abort: new AbortController().signal,
-            extra: { promptOps: stubOps() },
+            extra: { promptOps },
             messages: [],
             metadata: () => Effect.void,
             ask: () => Effect.void,
@@ -1074,11 +1189,8 @@ describe("tool.task", () => {
         .pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isSuccess(exit)) throw new Error("expected task failure")
-      expect(Cause.squash(exit.cause)).toHaveProperty(
-        "message",
-        "Cannot resume Task: task_id ses_missing was not found",
-      )
+      if (Exit.isSuccess(exit)) throw new Error("expected unknown task_id failure")
+      expect(Cause.squash(exit.cause)).toHaveProperty("code", "task_not_found")
       expect(yield* sessions.children(chat.id)).toHaveLength(0)
     }),
   )
@@ -1816,6 +1928,841 @@ describe("tool.task", () => {
 
       expect((yield* jobs.get(child.id))?.status).toBe("cancelled")
       expect((yield* jobs.get(grandchild.id))?.status).toBe("cancelled")
+    }),
+  )
+})
+
+describe("tool.task.destination", () => {
+  const destID = Location.TargetID.make("00000000-0000-4000-8000-000000000123")
+  const destTarget = Location.RexdTarget.make({ type: "rexd", targetID: destID })
+  const destDirectory = "/home/agent/dest"
+  const rexdDef: TargetRegistry.Definition = {
+    id: destID,
+    status: "unverified",
+    name: "a100-2gpu",
+    transport: "ssh",
+    connection: { type: "manual", host: "host", user: "user", port: 22 },
+    defaultDirectory: "/home/agent/default",
+    workspaceRoots: ["/home/agent"],
+  }
+
+  function controlledRegistry(input: {
+    targets?: TargetRegistry.Definition[]
+    prepare?: (targetID: Location.TargetID, directory?: string) => Promise<TargetRegistry.ProbeResult>
+    load?: () => Promise<TargetRegistry.Snapshot>
+  }) {
+    const calls: { targetID: string; directory?: string }[] = []
+    const ready: TargetRegistry.ProbeResult = { status: "ready", stages: ["ssh", "prepare", "directory"] }
+    const health = (result: TargetRegistry.ProbeResult): TargetRegistry.HealthResult => ({
+      ...result,
+      checkedAt: Date.now(),
+      trustedUntil: Date.now() + 60_000,
+    })
+    const registry = {
+      load:
+        input.load ??
+        (async () => ({
+          path: "/tmp/targets.jsonc",
+          revision: "rev",
+          targets: input.targets ?? [rexdDef],
+          diagnostics: [],
+          valid: true,
+        })),
+      prepare: async (targetID: Location.TargetID, directory?: string) => {
+        calls.push({ targetID, directory })
+        const probe = input.prepare ? await input.prepare(targetID, directory) : ready
+        return health(probe)
+      },
+      create: async () => {
+        throw new Error("unused")
+      },
+      update: async () => {
+        throw new Error("unused")
+      },
+      remove: async () => {
+        throw new Error("unused")
+      },
+      restoreMissing: async () => {
+        throw new Error("unused")
+      },
+      testConnection: async () => health(ready),
+      refreshConnection: async () => health(ready),
+      validate: async () => {},
+      inspect: async () => ({ home: "/home/agent" }),
+      complete: async () => ({ value: "", cursor: 0, candidates: [] }),
+      previewLegacyImport: async () => ({ source: "", sourceRevision: "", candidates: [], diagnostics: [] }),
+      importLegacy: async () => ({
+        imported: [],
+        snapshot: { path: "", revision: "", targets: [], diagnostics: [], valid: true },
+      }),
+    } satisfies TargetRegistry.Interface
+    return { registry, calls }
+  }
+
+  const withRegistry = <A, E, R>(
+    registry: TargetRegistry.Interface,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> => effect.pipe(Effect.provideService(TargetRegistry.Service, registry))
+
+  // Registry resolved at layer construction (the production path) so the
+  // registry-resolved Task tool below sees the target without a runtime override.
+  const destRegistry = controlledRegistry({}).registry
+  const namedLayer = testEffect(
+    layer({}, [
+      [LocationServiceMap.node, buildLocationServiceMap([], [localProvider, rexdDestinationProvider])],
+      [TargetRegistry.node, Layer.succeed(TargetRegistry.Service, destRegistry)],
+    ]),
+  )
+
+  rexdDestination.instance("places a child on a different target at an explicit directory", () =>
+    Effect.gen(function* () {
+      destinationAgent = generalDestinationAgent()
+      const sessions = yield* Session.Service
+      const { registry, calls } = controlledRegistry({})
+      const { chat, assistant } = yield* seed()
+      let seen: SessionPrompt.PromptInput | undefined
+      const promptOps = stubOps({ text: "placed", onPrompt: (input) => (seen = input) })
+
+      const result = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          return yield* def.execute(
+            {
+              description: "inspect remote",
+              prompt: "inspect",
+              subagent_type: "general",
+              target: destID,
+              directory: destDirectory,
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+        }),
+      )
+
+      const child = yield* sessions.get(result.metadata.sessionId)
+      expect(child.target).toEqual(destTarget)
+      expect(child.directory).toBe(destDirectory)
+      expect(child.workspaceID).toBeUndefined()
+      expect(result.metadata.target).toBe(destID)
+      expect(result.metadata.targetName).toBe("a100-2gpu")
+      expect(result.metadata.directory).toBe(destDirectory)
+      expect(result.output).toContain(`<target id="${destID}" name="a100-2gpu" directory="${destDirectory}"`)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]?.targetID).toBe(destID)
+      expect(calls[0]?.directory).toBe(destDirectory)
+      expect(seen?.sessionID).toBe(child.id)
+    }),
+  )
+
+  namedLayer.instance("reaches child creation through the registry-resolved Task tool", () =>
+    Effect.gen(function* () {
+      destinationAgent = generalDestinationAgent()
+      const sessions = yield* Session.Service
+      const registry = yield* ToolRegistry.Service
+      const { chat, assistant } = yield* seed()
+      const promptOps = stubOps({ text: "placed" })
+
+      // Exercise the same execution path as production: the Task tool resolved
+      // from the registry (built before InstanceStore is wired into the runtime),
+      // not a fresh `yield* TaskTool` whose init runs inside the instance context.
+      const { task } = yield* registry.named()
+      const result = yield* task.execute(
+        { description: "inspect remote", prompt: "inspect", subagent_type: "general", target: destID, directory: destDirectory },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      const child = yield* sessions.get(result.metadata.sessionId)
+      expect(child.target).toEqual(destTarget)
+      expect(child.directory).toBe(destDirectory)
+    }),
+  )
+
+  rexdDestination.instance("different target with omitted directory uses the target defaultDirectory", () =>
+    Effect.gen(function* () {
+      destinationAgent = generalDestinationAgent()
+      const sessions = yield* Session.Service
+      const { registry } = controlledRegistry({})
+      const { chat, assistant } = yield* seed()
+      const promptOps = stubOps({ text: "default" })
+
+      const result = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          return yield* def.execute(
+            { description: "inspect remote", prompt: "inspect", subagent_type: "general", target: "a100-2gpu" },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+        }),
+      )
+
+      const child = yield* sessions.get(result.metadata.sessionId)
+      expect(child.target).toEqual(destTarget)
+      expect(child.directory).toBe("/home/agent/default")
+    }),
+  )
+
+  it.instance("fails before creating a child when the destination directory is unavailable", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { registry, calls } = controlledRegistry({
+        prepare: async () => ({ status: "invalid", stage: "directory", message: "Remote directory does not exist" }),
+      })
+      const { chat, assistant } = yield* seed()
+      const promptOps = stubOps({ text: "should not run" })
+
+      const exit = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          return yield* def
+            .execute(
+              {
+                description: "inspect remote",
+                prompt: "inspect",
+                subagent_type: "general",
+                target: destID,
+                directory: destDirectory,
+              },
+              {
+                sessionID: chat.id,
+                messageID: assistant.id,
+                agent: "build",
+                abort: new AbortController().signal,
+                extra: { promptOps },
+                messages: [],
+                metadata: () => Effect.void,
+                ask: () => Effect.void,
+              },
+            )
+            .pipe(Effect.exit)
+        }),
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected unavailable destination failure")
+      expect(Cause.squash(exit.cause)).toBeInstanceOf(TaskPlacementError)
+      expect((Cause.squash(exit.cause) as TaskPlacementError).code).toBe("target_unavailable")
+      expect(calls).toHaveLength(1)
+      expect(yield* sessions.children(chat.id)).toHaveLength(0)
+    }),
+  )
+
+  it.instance("rejects cross-target placement before probing when the parent has a path-specific deny", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { registry, calls } = controlledRegistry({})
+      const { chat, assistant } = yield* seed()
+      yield* sessions.setPermission({
+        sessionID: chat.id,
+        permission: [{ permission: "read", pattern: "/secret/**", action: "deny" }],
+      })
+      const promptOps = stubOps({ text: "should not run" })
+
+      const exit = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          return yield* def
+            .execute(
+              {
+                description: "inspect remote",
+                prompt: "inspect",
+                subagent_type: "general",
+                target: destID,
+                directory: destDirectory,
+              },
+              {
+                sessionID: chat.id,
+                messageID: assistant.id,
+                agent: "build",
+                abort: new AbortController().signal,
+                extra: { promptOps },
+                messages: [],
+                metadata: () => Effect.void,
+                ask: () => Effect.void,
+              },
+            )
+            .pipe(Effect.exit)
+        }),
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected parent_path_deny_unsupported failure")
+      expect((Cause.squash(exit.cause) as TaskPlacementError).code).toBe("parent_path_deny_unsupported")
+      expect(calls).toHaveLength(0)
+      expect(yield* sessions.children(chat.id)).toHaveLength(0)
+    }),
+  )
+
+  it.instance("rejects a task_id that belongs to another parent", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { registry } = controlledRegistry({})
+      const { chat, assistant } = yield* seed()
+      const other = yield* sessions.create({ title: "other parent" })
+      const foreign = yield* sessions.create({ parentID: other.id, agent: "general", title: "foreign child" })
+      const promptOps = stubOps({ text: "should not run" })
+
+      const exit = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          return yield* def
+            .execute(
+              { description: "resume", prompt: "resume", subagent_type: "general", task_id: foreign.id },
+              {
+                sessionID: chat.id,
+                messageID: assistant.id,
+                agent: "build",
+                abort: new AbortController().signal,
+                extra: { promptOps },
+                messages: [],
+                metadata: () => Effect.void,
+                ask: () => Effect.void,
+              },
+            )
+            .pipe(Effect.exit)
+        }),
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected task_foreign failure")
+      expect((Cause.squash(exit.cause) as TaskPlacementError).code).toBe("task_foreign")
+      expect(yield* sessions.children(chat.id)).toHaveLength(0)
+    }),
+  )
+
+  it.instance("rejects a resume whose explicit target mismatches the stored child", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { registry } = controlledRegistry({})
+      const { chat, assistant } = yield* seed()
+      const child = yield* sessions.create({ parentID: chat.id, agent: "general", title: "remote child" })
+      const promptOps = stubOps({ text: "should not run" })
+
+      const exit = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          return yield* def
+            .execute(
+              { description: "resume", prompt: "resume", subagent_type: "general", task_id: child.id, target: destID },
+              {
+                sessionID: chat.id,
+                messageID: assistant.id,
+                agent: "build",
+                abort: new AbortController().signal,
+                extra: { promptOps },
+                messages: [],
+                metadata: () => Effect.void,
+                ask: () => Effect.void,
+              },
+            )
+            .pipe(Effect.exit)
+        }),
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected task_location_mismatch failure")
+      expect((Cause.squash(exit.cause) as TaskPlacementError).code).toBe("task_location_mismatch")
+      expect(yield* sessions.children(chat.id)).toHaveLength(1)
+    }),
+  )
+
+  it.instance(
+    "rejects cross-target placement from a config-defined path deny without probing",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const { registry, calls } = controlledRegistry({})
+        const { chat, assistant } = yield* seed()
+        const promptOps = stubOps({ text: "should not run" })
+
+        const exit = yield* withRegistry(
+          registry,
+          Effect.gen(function* () {
+            const tool = yield* TaskTool
+            const def = yield* tool.init()
+            return yield* def
+              .execute(
+                {
+                  description: "inspect",
+                  prompt: "inspect",
+                  subagent_type: "general",
+                  target: destID,
+                  directory: destDirectory,
+                },
+                {
+                  sessionID: chat.id,
+                  messageID: assistant.id,
+                  agent: "build",
+                  abort: new AbortController().signal,
+                  extra: { promptOps },
+                  messages: [],
+                  metadata: () => Effect.void,
+                  ask: () => Effect.void,
+                },
+              )
+              .pipe(Effect.exit)
+          }),
+        )
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isSuccess(exit)) throw new Error("expected parent_path_deny_unsupported failure")
+        expect((Cause.squash(exit.cause) as TaskPlacementError).code).toBe("parent_path_deny_unsupported")
+        expect(calls).toHaveLength(0)
+        expect(yield* sessions.children(chat.id)).toHaveLength(0)
+      }),
+    { config: { permission: { read: { "/secret/**": "deny" } } } },
+  )
+
+  rexdDestination.instance("cross-target child drops parent path grants but keeps tool-wide deny", () =>
+    Effect.gen(function* () {
+      destinationAgent = generalDestinationAgent()
+      const sessions = yield* Session.Service
+      const { registry } = controlledRegistry({})
+      const { chat, assistant } = yield* seed()
+      yield* sessions.setPermission({
+        sessionID: chat.id,
+        permission: [
+          { permission: "external_directory", pattern: "/parent/path/**", action: "ask" },
+          { permission: "bash", pattern: "*", action: "deny" },
+        ],
+      })
+      const promptOps = stubOps({ text: "placed" })
+
+      const result = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          return yield* def.execute(
+            {
+              description: "inspect",
+              prompt: "inspect",
+              subagent_type: "general",
+              target: destID,
+              directory: destDirectory,
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+        }),
+      )
+
+      const child = yield* sessions.get(result.metadata.sessionId)
+      const permissions = child.permission ?? []
+      const boundaries = (child.permissionBoundary ?? []).flat()
+      expect(
+        permissions.some((rule) => rule.permission === "external_directory" && rule.pattern === "/parent/path/**"),
+      ).toBe(false)
+      expect(
+        boundaries.some((rule) => rule.action === "external_directory" && rule.resource === "/parent/path/**"),
+      ).toBe(false)
+      expect(
+        permissions.some((rule) => rule.permission === "bash" && rule.pattern === "*" && rule.action === "deny"),
+      ).toBe(true)
+      expect(boundaries.some((rule) => rule.action === "bash" && rule.resource === "*" && rule.effect === "deny")).toBe(
+        true,
+      )
+    }),
+  )
+
+  it.instance("rejects a resume whose stored remote target is missing from the registry", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const { chat, assistant } = yield* seed()
+      const child = yield* sessions.create({ parentID: chat.id, agent: "general", title: "remote child" })
+      yield* db
+        .update(SessionTable)
+        .set({ directory: destDirectory, target: destTarget })
+        .where(eq(SessionTable.id, child.id))
+        .run()
+        .pipe(Effect.orDie)
+      const { registry } = controlledRegistry({ targets: [] })
+      const promptOps = stubOps({ text: "should not run" })
+
+      const exit = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          return yield* def
+            .execute(
+              { description: "resume", prompt: "resume", subagent_type: "general", task_id: child.id },
+              {
+                sessionID: chat.id,
+                messageID: assistant.id,
+                agent: "build",
+                abort: new AbortController().signal,
+                extra: { promptOps },
+                messages: [],
+                metadata: () => Effect.void,
+                ask: () => Effect.void,
+              },
+            )
+            .pipe(Effect.exit)
+        }),
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected target_removed failure")
+      expect((Cause.squash(exit.cause) as TaskPlacementError).code).toBe("target_removed")
+    }),
+  )
+
+  it.instance("rejects a resume after a new non-path deny is introduced on the parent", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { registry } = controlledRegistry({})
+      const { chat, assistant } = yield* seed()
+      yield* sessions.setPermission({
+        sessionID: chat.id,
+        permission: [{ permission: "bash", pattern: "*", action: "deny" }],
+      })
+      const promptOps = stubOps({ text: "placed" })
+
+      const childID = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          const result = yield* def.execute(
+            { description: "inspect", prompt: "inspect", subagent_type: "general" },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+          return result.metadata.sessionId
+        }),
+      )
+
+      yield* sessions.setPermission({
+        sessionID: chat.id,
+        permission: [
+          { permission: "bash", pattern: "*", action: "deny" },
+          { permission: "webfetch", pattern: "*", action: "deny" },
+        ],
+      })
+
+      const exit = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          return yield* def
+            .execute(
+              { description: "resume", prompt: "resume", subagent_type: "general", task_id: childID },
+              {
+                sessionID: chat.id,
+                messageID: assistant.id,
+                agent: "build",
+                abort: new AbortController().signal,
+                extra: { promptOps },
+                messages: [],
+                metadata: () => Effect.void,
+                ask: () => Effect.void,
+              },
+            )
+            .pipe(Effect.exit)
+        }),
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected task_access_changed failure")
+      expect((Cause.squash(exit.cause) as TaskPlacementError).code).toBe("task_access_changed")
+      expect(yield* sessions.children(chat.id)).toHaveLength(1)
+    }),
+  )
+
+  rexdDestination.instance("escapes target name and directory in the rendered output", () =>
+    Effect.gen(function* () {
+      destinationAgent = generalDestinationAgent()
+      const sessions = yield* Session.Service
+      const sneaky = 'a100 <gpu> & "quote"'
+      const sneakyDir = "/home/agent/pa&th <1>"
+      const sneakyDef: TargetRegistry.Definition = {
+        id: destID,
+        status: "unverified",
+        name: sneaky,
+        transport: "ssh",
+        connection: { type: "manual", host: "host", user: "user", port: 22 },
+        defaultDirectory: "/home/agent/default",
+        workspaceRoots: ["/home/agent"],
+      }
+      const { registry } = controlledRegistry({ targets: [sneakyDef] })
+      const { chat, assistant } = yield* seed()
+      const promptOps = stubOps({ text: "placed" })
+
+      const result = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          return yield* def.execute(
+            {
+              description: "inspect",
+              prompt: "inspect",
+              subagent_type: "general",
+              target: destID,
+              directory: sneakyDir,
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+        }),
+      )
+
+      expect(result.metadata.targetName).toBe(sneaky)
+      expect(result.output).not.toContain("<gpu>")
+      expect(result.output).toContain("&lt;gpu&gt;")
+      expect(result.output).toContain('name="a100 &lt;gpu&gt; &amp; &quot;quote&quot;"')
+      expect(result.output).toContain('directory="/home/agent/pa&amp;th &lt;1&gt;"')
+      expect(result.output).not.toContain('name="a100 <gpu>')
+    }),
+  )
+
+  rexdDestination.instance("rejects a destination missing the selected agent definition", () =>
+    Effect.gen(function* () {
+      destinationAgent = undefined
+      const sessions = yield* Session.Service
+      const { registry } = controlledRegistry({})
+      const { chat, assistant } = yield* seed()
+      const promptOps = stubOps({ text: "should not run" })
+
+      const exit = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          return yield* def
+            .execute(
+              {
+                description: "inspect",
+                prompt: "inspect",
+                subagent_type: "general",
+                target: destID,
+                directory: destDirectory,
+              },
+              {
+                sessionID: chat.id,
+                messageID: assistant.id,
+                agent: "build",
+                abort: new AbortController().signal,
+                extra: { promptOps },
+                messages: [],
+                metadata: () => Effect.void,
+                ask: () => Effect.void,
+              },
+            )
+            .pipe(Effect.exit)
+        }),
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected destination_agent_missing failure")
+      expect((Cause.squash(exit.cause) as TaskPlacementError).code).toBe("destination_agent_missing")
+      expect(yield* sessions.children(chat.id)).toHaveLength(0)
+    }),
+  )
+
+  rexdDestination.instance("fails closed when the target registry changes during preflight", () =>
+    Effect.gen(function* () {
+      destinationAgent = generalDestinationAgent()
+      const sessions = yield* Session.Service
+      let revision = "rev1"
+      const { registry, calls } = controlledRegistry({
+        load: async () => ({ path: "/tmp/targets.jsonc", revision, targets: [rexdDef], diagnostics: [], valid: true }),
+        prepare: async () => {
+          revision = "rev2"
+          return { status: "ready", stages: ["ssh", "prepare", "directory"] }
+        },
+      })
+      const { chat, assistant } = yield* seed()
+      const promptOps = stubOps({ text: "should not run" })
+
+      const exit = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          return yield* def
+            .execute(
+              {
+                description: "inspect",
+                prompt: "inspect",
+                subagent_type: "general",
+                target: destID,
+                directory: destDirectory,
+              },
+              {
+                sessionID: chat.id,
+                messageID: assistant.id,
+                agent: "build",
+                abort: new AbortController().signal,
+                extra: { promptOps },
+                messages: [],
+                metadata: () => Effect.void,
+                ask: () => Effect.void,
+              },
+            )
+            .pipe(Effect.exit)
+        }),
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected target_registry_changed failure")
+      expect((Cause.squash(exit.cause) as TaskPlacementError).code).toBe("target_registry_changed")
+      expect(calls).toHaveLength(1)
+      expect(yield* sessions.children(chat.id)).toHaveLength(0)
+    }),
+  )
+
+  rexdDestination.instance("consumes the destination Agent definition (model and system) for the child", () =>
+    Effect.gen(function* () {
+      destinationAgent = generalDestinationAgent({ system: "distinct-remote-system" })
+      const sessions = yield* Session.Service
+      const { registry } = controlledRegistry({})
+      const { chat, assistant } = yield* seed()
+      let seen: SessionPrompt.PromptInput | undefined
+      const promptOps = stubOps({ text: "placed", onPrompt: (input) => (seen = input) })
+
+      const result = yield* withRegistry(
+        registry,
+        Effect.gen(function* () {
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          return yield* def.execute(
+            {
+              description: "inspect",
+              prompt: "inspect",
+              subagent_type: "general",
+              target: destID,
+              directory: destDirectory,
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+        }),
+      )
+
+      expect(seen?.model).toEqual({
+        modelID: ModelV2.ID.make("remote-general-model"),
+        providerID: ProviderV2.ID.make("remote-provider"),
+      })
+      const child = yield* sessions.get(result.metadata.sessionId)
+      expect(child.agent).toBe("general")
+      expect(child.metadata?.targetAgent).toBe(true)
+      expect(child.metadata?.agentSystem).toBeUndefined()
+    }),
+  )
+})
+
+describe("tool.task.destination-location", () => {
+  rexdAccess.instance("resolves the child to its destination location, not the parent", () =>
+    Effect.gen(function* () {
+      destinationAgent = generalDestinationAgent()
+      const sessions = yield* Session.Service
+      const locationAccess = yield* SessionLocationAccess.Service
+      const { chat, assistant } = yield* seed()
+      const promptOps = stubOps({ text: "placed" })
+
+      const result = yield* Effect.gen(function* () {
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        return yield* def.execute(
+          {
+            description: "inspect",
+            prompt: "inspect",
+            subagent_type: "general",
+            target: remoteTarget.targetID,
+            directory: "/home/agent/project",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+      })
+
+      const childLocation = yield* locationAccess.require(result.metadata.sessionId).pipe(Effect.orDie)
+      expect(childLocation.target).toEqual(remoteTarget)
+      expect(childLocation.directory).toBe(AbsolutePath.make("/home/agent/project"))
+      const parentLocation = yield* locationAccess.require(chat.id).pipe(Effect.orDie)
+      expect(parentLocation.target).toEqual({ type: "local" })
     }),
   )
 })

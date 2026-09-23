@@ -638,6 +638,167 @@ it.instance("legacy loop consumes the canonical Location context and project ins
   }),
 )
 
+it.instance(
+  "resolvePromptParts reads a child's @file reference at the child location",
+  () =>
+    Effect.gen(function* () {
+      const { dir } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const childDir = path.join(dir, "child-dest")
+      yield* writeText(path.join(dir, "marker.txt"), "PARENT-MARKER")
+      yield* writeText(path.join(childDir, "marker.txt"), "CHILD-MARKER")
+
+      const chat = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({
+        parentID: chat.id,
+        agent: "general",
+        title: "child",
+        destination: { target: { type: "local" }, directory: childDir },
+      })
+
+      const parts = yield* prompt.resolvePromptParts("@marker.txt", child.id)
+      const file = parts.find((part) => part.type === "file")
+      expect(file).toBeDefined()
+      if (!file || file.type !== "file") throw new Error("expected a file part")
+      const content = Buffer.from(file.url.slice(file.url.indexOf(",") + 1), "base64").toString("utf8")
+      expect(content).toBe("CHILD-MARKER")
+    }),
+  60000,
+)
+
+it.instance(
+  "resolvePromptParts fails explicitly for a missing child @file reference",
+  () =>
+    Effect.gen(function* () {
+      const { dir } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const childDir = path.join(dir, "child-dest-empty")
+      yield* writeText(path.join(dir, "marker.txt"), "PARENT-MARKER")
+      yield* writeText(path.join(childDir, ".keep"), "")
+
+      const chat = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({
+        parentID: chat.id,
+        agent: "general",
+        title: "child",
+        destination: { target: { type: "local" }, directory: childDir },
+      })
+
+      const exit = yield* prompt.resolvePromptParts("@marker.txt", child.id).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected a failure")
+      const cause = Cause.squash(exit.cause)
+      expect(cause).toBeInstanceOf(Error)
+      if (cause instanceof Error) expect(cause.message).toContain("does not exist at the child location")
+    }),
+  60000,
+)
+
+it.instance(
+  "resolvePromptParts fails explicitly for an oversized child @file reference",
+  () =>
+    Effect.gen(function* () {
+      const { dir } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const childDir = path.join(dir, "child-big")
+      yield* writeText(path.join(childDir, "big.txt"), "x".repeat(60 * 1024))
+
+      const chat = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({
+        parentID: chat.id,
+        agent: "general",
+        title: "child",
+        destination: { target: { type: "local" }, directory: childDir },
+      })
+
+      const exit = yield* prompt.resolvePromptParts("@big.txt", child.id).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected a failure")
+      const cause = Cause.squash(exit.cause)
+      if (cause instanceof Error) expect(cause.message).toContain("maximum attachment size")
+    }),
+  60000,
+)
+
+it.instance(
+  "resolvePromptParts rejects a child @directory reference",
+  () =>
+    Effect.gen(function* () {
+      const { dir } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const childDir = path.join(dir, "child-dir")
+      yield* writeText(path.join(childDir, "sub", "file.txt"), "content")
+
+      const chat = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({
+        parentID: chat.id,
+        agent: "general",
+        title: "child",
+        destination: { target: { type: "local" }, directory: childDir },
+      })
+
+      const exit = yield* prompt.resolvePromptParts("@sub", child.id).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected a failure")
+      const cause = Cause.squash(exit.cause)
+      if (cause instanceof Error) expect(cause.message).toContain("Directory reference")
+    }),
+  60000,
+)
+
+it.instance(
+  "runLoop resolves the destination Agent definition for a target child",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const childDir = path.join(dir, "remote-child")
+      yield* writeText(
+        path.join(childDir, "opencode.json"),
+        JSON.stringify({ agents: { general: { mode: "subagent", system: "REMOTE-ONLY SYSTEM PROMPT" } } }),
+      )
+
+      const chat = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({
+        parentID: chat.id,
+        agent: "general",
+        title: "child",
+        metadata: { targetAgent: true },
+        destination: { target: { type: "local" }, directory: childDir },
+      })
+
+      const user = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: child.id,
+        agent: "general",
+        model: ref,
+        time: { created: Date.now() },
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: user.id,
+        sessionID: child.id,
+        type: "text",
+        text: "hello",
+      })
+
+      yield* llm.text("world")
+      yield* prompt.loop({ sessionID: child.id })
+
+      const hits = yield* llm.hits
+      expect(hits).toHaveLength(1)
+      const body = JSON.stringify(hits[0]?.body)
+      expect(body).toContain("REMOTE-ONLY SYSTEM PROMPT")
+    }),
+  60000,
+)
+
 withSessionActivation.instance("legacy loop receives Skill guidance changed by Session activation", () =>
   Effect.gen(function* () {
     const { dir, llm } = yield* useServerConfig((url) => ({

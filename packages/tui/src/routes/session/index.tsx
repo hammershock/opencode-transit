@@ -3019,6 +3019,15 @@ function Task(props: ToolProps) {
 
     if (!invocation()) content.push("↳ History · invocation unknown")
 
+    const targetName = stringValue(props.metadata.targetName)
+    const targetID = stringValue(props.metadata.target)
+    const targetDirectory = stringValue(props.metadata.directory)
+    const placement = [targetName ?? targetID, targetDirectory]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.replace(/[\u0000-\u001f\u007f]/g, ""))
+      .join(" · ")
+    if (placement) content.push(`↳ ${placement}`)
+
     const retrying = retry()
     if (isRunning() && retrying) {
       content.push(`↳ ${formatSubagentRetry(retrying.attempt, Locale.truncate(retrying.message, 80))}`)

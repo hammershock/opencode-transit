@@ -2,6 +2,8 @@ Launch a new agent to handle complex, multistep tasks autonomously.
 
 When using the Task tool, you must specify a subagent_type parameter to select which agent type to use. The available agents and their capabilities are listed in the <available-subagents> system block.
 
+Optionally pass target ("local" or a registered target ID, or a unique exact display name) and an absolute directory to place the child session on a specific execution target. Omit both to keep the parent's target and directory. When switching targets without a directory, the target's default directory is used.
+
 When NOT to use the Task tool:
 - If you want to read a specific file path, use the Read or Glob tool instead of the Task tool, to find the match more quickly
 - If you are searching for a specific class definition like "class Foo", use the Grep tool instead, to find the match more quickly

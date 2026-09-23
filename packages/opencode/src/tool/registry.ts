@@ -2,6 +2,8 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
 import { PermissionContext } from "@/agent/permission-context"
 import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
+import { LocationServiceMap } from "@opencode-ai/core/location-services"
+import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { TargetRegistry } from "@opencode-ai/core/target-registry"
@@ -449,6 +451,8 @@ export const node = LayerNode.make({
   deps: [
     SessionPolicyAccess.node,
     PermissionContext.node,
+    LocationServiceMap.node,
+    SessionLocationAccess.node,
     Config.node,
     Plugin.node,
     Question.node,
