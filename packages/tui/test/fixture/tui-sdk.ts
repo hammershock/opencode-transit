@@ -102,6 +102,7 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/api/reference")
       return json({ location: { directory, project: { id: "proj_test", directory } }, data: [] })
     if (url.pathname === "/provider") return json({ all: [], default: {}, connected: [] })
+    if (url.pathname === "/permission") return json([])
     if (/^\/api\/session\/[^/]+\/(permission|question)$/.test(url.pathname)) return json({ data: [] })
     if (url.pathname === "/session") return json([])
     if (url.pathname === "/vcs") return json({ branch: "main" })

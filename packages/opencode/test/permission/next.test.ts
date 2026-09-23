@@ -612,6 +612,44 @@ it.instance(
 )
 
 it.instance(
+  "ask - auto approval resolves ask without creating a pending request",
+  () =>
+    Effect.gen(function* () {
+      yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+        approvalMode: "auto",
+      })
+      expect(yield* list()).toEqual([])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - auto approval preserves explicit deny",
+  () =>
+    Effect.gen(function* () {
+      const error = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_test"),
+          permission: "bash",
+          patterns: ["rm -rf /"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "*", action: "deny" }],
+          approvalMode: "auto",
+        }),
+      )
+      expect(error).toBeInstanceOf(PermissionV1.DeniedError)
+    }),
+  { git: true },
+)
+
+it.instance(
   "ask - adds request to pending list",
   () =>
     Effect.gen(function* () {

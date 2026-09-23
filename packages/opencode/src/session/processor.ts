@@ -25,6 +25,7 @@ import { isRecord } from "@/util/record"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import { Usage, type LLMEvent } from "@opencode-ai/llm"
+import type { ApprovalMode } from "@opencode-ai/schema/approval-mode"
 
 const DOOM_LOOP_THRESHOLD = 3
 export type Result = "compact" | "stop" | "continue"
@@ -51,6 +52,7 @@ type Input = {
   assistantMessage: SessionV1.Assistant
   sessionID: SessionID
   model: Provider.Model
+  approvalMode?: ApprovalMode.Mode
 }
 
 export interface Interface {
@@ -376,6 +378,7 @@ const layer = Layer.effect(
               metadata: { tool: value.name, input },
               always: [value.name],
               ruleset: agent.permission,
+              approvalMode: ctx.approvalMode,
             })
             return
           }

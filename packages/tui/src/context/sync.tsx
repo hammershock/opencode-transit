@@ -30,7 +30,7 @@ import { useTuiStartup } from "./runtime"
 import { createSimpleContext } from "./helper"
 import { useExit } from "./exit"
 import { useArgs } from "./args"
-import { batch, onMount } from "solid-js"
+import { batch, onCleanup, onMount } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
 import { usePermission } from "./permission"
@@ -177,6 +177,7 @@ export const {
     const syncingSessions = new Map<string, Promise<void>>()
     const resolvingSessions = new Map<string, Promise<Session | undefined>>()
     const autoPermissionReplies = new Map<string, Promise<boolean>>()
+    const reconcilingPermissions = new Map<string, Promise<void>>()
     const hydratingSessions = new Map<
       string,
       { messages: Set<string>; parts: Set<string>; permissions: Set<string>; questions: Set<string> }
@@ -248,17 +249,87 @@ export const {
       return task
     }
 
-    function autoReplyPermission(key: string, reply: () => Promise<unknown>) {
+    function autoReplyPermission(key: string, reply: (signal: AbortSignal) => Promise<unknown>) {
       const existing = autoPermissionReplies.get(key)
       if (existing) return existing
-      const task = reply().then(
-        () => true,
-        () => false,
-      )
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 5_000)
+      const task = reply(controller.signal)
+        .then(
+          () => true,
+          () => false,
+        )
+        .finally(() => clearTimeout(timeout))
       autoPermissionReplies.set(key, task)
       void task.then((ok) => {
         if (!ok) autoPermissionReplies.delete(key)
       })
+      return task
+    }
+
+    function permissionRoute(session: Session) {
+      if (session.target?.type === "rexd") return `target:${session.target.targetID}`
+      return `local:${session.directory}:${session.workspaceID ?? ""}`
+    }
+
+    async function reconcileLegacyPermissions(sessionID: string) {
+      const session = await resolveSession(sessionID)
+      if (!session) return
+      const key = permissionRoute(session)
+      const existing = reconcilingPermissions.get(key)
+      if (existing) return existing
+      const task = (async () => {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 5_000)
+        const result = await (
+          session.target?.type === "rexd"
+            ? sdk.client.permission.list(
+                {},
+                {
+                  throwOnError: true,
+                  signal: controller.signal,
+                  headers: { "x-opencode-target": session.target.targetID },
+                },
+              )
+            : sdk.client.permission.list(
+                { directory: session.directory, workspace: session.workspaceID },
+                { throwOnError: true, signal: controller.signal },
+              )
+        ).finally(() => clearTimeout(timeout))
+        await Promise.all(
+          (result.data ?? []).map(async (request) => {
+            const owner = await resolveSession(request.sessionID)
+            if (!owner || permission.effective(owner.approvalMode ?? "normal") !== "auto") {
+              insertPermission(request)
+              return
+            }
+            const replied = await autoReplyPermission(`${request.sessionID}:legacy:${request.id}`, (signal) =>
+              owner.target?.type === "rexd"
+                ? sdk.client.permission.reply(
+                    { requestID: request.id, reply: "once" },
+                    {
+                      throwOnError: true,
+                      signal,
+                      headers: { "x-opencode-target": owner.target.targetID },
+                    },
+                  )
+                : sdk.client.permission.reply(
+                    {
+                      requestID: request.id,
+                      reply: "once",
+                      directory: owner.directory,
+                      workspace: owner.workspaceID,
+                    },
+                    { throwOnError: true, signal },
+                  ),
+            )
+            if (!replied) insertPermission(request)
+          }),
+        )
+      })()
+        .catch(() => undefined)
+        .finally(() => reconcilingPermissions.delete(key))
+      reconcilingPermissions.set(key, task)
       return task
     }
 
@@ -287,10 +358,10 @@ export const {
             ? (
                 await Promise.all(
                   permissions.data.data.map(async (request) => {
-                    const replied = await autoReplyPermission(`${sessionID}:v2:${request.id}`, () =>
+                    const replied = await autoReplyPermission(`${sessionID}:v2:${request.id}`, (signal) =>
                       sdk.client.v2.session.permission.reply(
                         { sessionID, requestID: request.id, reply: "once" },
-                        { throwOnError: true },
+                        { throwOnError: true, signal },
                       ),
                     )
                     if (!replied) return request
@@ -368,6 +439,7 @@ export const {
               .toSorted((a, b) => a.id.localeCompare(b.id))
           }),
         )
+        await reconcileLegacyPermissions(sessionID)
         fullSyncedSessions.add(sessionID)
       })().finally(() => {
         syncingSessions.delete(sessionID)
@@ -437,11 +509,15 @@ export const {
               insertPermission(request)
               return
             }
-            void autoReplyPermission(`${request.sessionID}:legacy:${request.id}`, () =>
+            void autoReplyPermission(`${request.sessionID}:legacy:${request.id}`, (signal) =>
               session.target?.type === "rexd"
                 ? sdk.client.permission.reply(
                     { requestID: request.id, reply: "once" },
-                    { throwOnError: true, headers: { "x-opencode-target": session.target.targetID } },
+                    {
+                      throwOnError: true,
+                      signal,
+                      headers: { "x-opencode-target": session.target.targetID },
+                    },
                   )
                 : sdk.client.permission.reply(
                     {
@@ -450,7 +526,7 @@ export const {
                       directory: session.directory,
                       workspace: session.workspaceID,
                     },
-                    { throwOnError: true },
+                    { throwOnError: true, signal },
                   ),
             ).then((replied) => {
               if (!replied) insertPermission(request)
@@ -467,10 +543,10 @@ export const {
               insertPermission(request)
               return
             }
-            void autoReplyPermission(`${request.sessionID}:v2:${request.id}`, () =>
+            void autoReplyPermission(`${request.sessionID}:v2:${request.id}`, (signal) =>
               sdk.client.v2.session.permission.reply(
                 { sessionID: request.sessionID, requestID: request.id, reply: "once" },
-                { throwOnError: true },
+                { throwOnError: true, signal },
               ),
             ).then((replied) => {
               if (!replied) insertPermission(request)
@@ -912,6 +988,14 @@ export const {
       void bootstrap()
     })
 
+    const permissionReconcileTimer = setInterval(() => {
+      for (const sessionID of fullSyncedSessions) {
+        if (result.session.status(sessionID) !== "working") continue
+        void reconcileLegacyPermissions(sessionID)
+      }
+    }, 2_000)
+    onCleanup(() => clearInterval(permissionReconcileTimer))
+
     const result = {
       data: store,
       set: setStore,
@@ -949,6 +1033,9 @@ export const {
         },
         async sync(sessionID: string) {
           return syncSession(sessionID)
+        },
+        async reconcilePermissions(sessionID: string) {
+          return reconcileLegacyPermissions(sessionID)
         },
       },
       message: {
