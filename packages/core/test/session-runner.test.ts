@@ -721,7 +721,7 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-build", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Build agent instructions", expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Build agent instructions", expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")])
     }),
   )
 
@@ -747,7 +747,7 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-reviewer", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")])
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
   )
@@ -776,7 +776,7 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-selected", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")])
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
   )
@@ -803,8 +803,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), "Build skills"],
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), "Reviewer skills"],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), "Build skills", expect.stringContaining("<available-targets>")],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), "Reviewer skills", expect.stringContaining("<available-targets>")],
       ])
       expect((yield* session.messages({ sessionID })).filter((message) => message.type === "system")).toHaveLength(0)
     }),
@@ -834,7 +834,7 @@ describe("SessionRunnerLLM", () => {
       response = []
       yield* session.resume(sessionID)
       expect(requests.map((request) => request.model)).toEqual([model])
-      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([[expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")]])
+      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([[expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")]])
     }),
   )
 
@@ -889,9 +889,9 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")],
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")],
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")],
       ])
     }),
   )
@@ -926,8 +926,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")],
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:")],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")],
+        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")],
       ])
       yield* replaySessionProjection(sessionID)
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Third" }), resume: false })
@@ -1229,6 +1229,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
         expect.stringContaining("Execution harness:"),
         expect.stringContaining("Current date:"),
+        expect.stringContaining("<available-targets>"),
       ])
       expect(systemTexts(requests.at(-1)!)).not.toContain("Changed context")
     }),
