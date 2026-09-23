@@ -58,3 +58,141 @@ test.each([1, 2])(
     }
   },
 )
+
+test("a malformed SSE event does not terminate the global subscription", async () => {
+  const received: string[] = []
+  let requests = 0
+  const fetcher = (async (input: RequestInfo | URL) => {
+    if (new URL(input instanceof Request ? input.url : String(input)).pathname !== "/global/event")
+      return new Response("{}", { headers: { "content-type": "application/json" } })
+    requests++
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              requests === 1
+                ? 'data: {"invalid":true}\n\n'
+                : 'data: {"directory":"/tmp/opencode","payload":{"id":"connected","type":"server.connected","properties":{}}}\n\n',
+            ),
+          )
+          controller.close()
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    )
+  }) as typeof fetch
+  const warnings = spyOn(console, "warn").mockImplementation(() => {})
+  const dispose = createRoot((dispose) => {
+    createComponent(RemoteStatusProvider, {
+      get children() {
+        return createComponent(SDKProvider, {
+          url: "http://test",
+          fetch: fetcher,
+          get children() {
+            useSDK().event.on("event", (event) => received.push(event.payload.type))
+            return null
+          },
+        })
+      },
+    })
+    return dispose
+  })
+
+  try {
+    const deadline = Date.now() + 2_500
+    while (!received.includes("server.connected") && Date.now() < deadline) await Bun.sleep(10)
+    expect(requests).toBeGreaterThanOrEqual(2)
+    expect(received).toContain("server.connected")
+    expect(warnings).toHaveBeenCalledTimes(1)
+  } finally {
+    dispose()
+    warnings.mockRestore()
+  }
+})
+
+test("an SSE stream without heartbeats is reconnected", async () => {
+  const received: string[] = []
+  let requests = 0
+  let cancelled = false
+  const fetcher = (async (input: RequestInfo | URL) => {
+    if (new URL(input instanceof Request ? input.url : String(input)).pathname !== "/global/event")
+      return new Response("{}", { headers: { "content-type": "application/json" } })
+    requests++
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          if (requests === 1) return
+          controller.enqueue(
+            new TextEncoder().encode(
+              'data: {"directory":"/tmp/opencode","payload":{"id":"recovered","type":"server.connected","properties":{}}}\n\n',
+            ),
+          )
+          controller.close()
+        },
+        cancel() {
+          cancelled = true
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    )
+  }) as typeof fetch
+  const dispose = createRoot((dispose) => {
+    createComponent(RemoteStatusProvider, {
+      get children() {
+        return createComponent(SDKProvider, {
+          url: "http://test",
+          fetch: fetcher,
+          sseInactivityMs: 30,
+          get children() {
+            useSDK().event.on("event", (event) => received.push(event.payload.type))
+            return null
+          },
+        })
+      },
+    })
+    return dispose
+  })
+
+  try {
+    const deadline = Date.now() + 2_500
+    while (!received.includes("server.connected") && Date.now() < deadline) await Bun.sleep(10)
+    expect(cancelled).toBe(true)
+    expect(requests).toBeGreaterThanOrEqual(2)
+    expect(received).toContain("server.connected")
+  } finally {
+    dispose()
+  }
+})
+
+test("disposing the SDK stops a stalled SSE retry", async () => {
+  let requests = 0
+  let cancelled = false
+  const fetcher = (async (_input: RequestInfo | URL, _init?: RequestInit) => {
+    requests++
+    return new Response(
+      new ReadableStream({
+        cancel() {
+          cancelled = true
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    )
+  }) as typeof fetch
+  const dispose = createRoot((dispose) => {
+    createComponent(RemoteStatusProvider, {
+      get children() {
+        return createComponent(SDKProvider, { url: "http://test", fetch: fetcher, sseInactivityMs: 20, children: null })
+      },
+    })
+    return dispose
+  })
+
+  const deadline = Date.now() + 500
+  while (requests === 0 && Date.now() < deadline) await Bun.sleep(10)
+  expect(requests).toBe(1)
+  dispose()
+  await Bun.sleep(1_100)
+  expect(cancelled).toBe(true)
+  expect(requests).toBe(1)
+})

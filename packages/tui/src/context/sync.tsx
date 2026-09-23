@@ -557,6 +557,9 @@ export const {
 
     event.subscribe((event, { workspace }) => {
       switch (event.type) {
+        case "server.connected":
+          if (fullSyncedSessions.size > 0) void refreshProjectedSessions().catch(() => undefined)
+          break
         case "sync.projection.updated":
           void refreshProjectedSessions().catch(() => undefined)
           break
