@@ -23,7 +23,11 @@ import { useSDK } from "./sdk"
 import { useSync } from "./sync"
 import { useEvent } from "./event"
 import { batch, createSignal, onCleanup, onMount } from "solid-js"
-import { mergeCanonicalSessionMessages, projectCanonicalSessionMessages } from "../util/session-message"
+import {
+  mergeCanonicalSessionMessages,
+  projectCanonicalSessionMessages,
+  SESSION_MESSAGE_LIMIT,
+} from "../util/session-message"
 import { locationKey, locationQuery } from "../util/location-query"
 
 type LocationData = {
@@ -77,7 +81,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           "session",
           "message",
           produce((draft) => {
-            fn((draft[sessionID] ??= []))
+            const messages = (draft[sessionID] ??= [])
+            fn(messages)
+            if (messages.length > SESSION_MESSAGE_LIMIT) messages.splice(SESSION_MESSAGE_LIMIT)
           }),
         )
       },
@@ -529,8 +535,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.message[sessionID]
           },
           async refresh(sessionID: string) {
-            const result = await sdk.client.v2.session.messages({ sessionID }, { throwOnError: true })
-            setStore("session", "message", sessionID, result.data.data)
+            const result = await sdk.client.v2.session.messages(
+              { sessionID, limit: SESSION_MESSAGE_LIMIT, order: "desc" },
+              { throwOnError: true },
+            )
+            setStore("session", "message", sessionID, result.data.data.slice(0, SESSION_MESSAGE_LIMIT))
           },
         },
         permission: {

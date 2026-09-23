@@ -6,6 +6,7 @@ import {
   mergeCanonicalSessionMessages,
   projectCanonicalSessionMessages,
   restoreCanonicalPrompt,
+  sessionMessageWindow,
 } from "../../src/util/session-message"
 
 describe("projectCanonicalSessionMessages", () => {
@@ -211,5 +212,24 @@ describe("mergeCanonicalSessionMessages", () => {
     const live = { ...projected, time: { created: 11 } } as Message
 
     expect(mergeCanonicalSessionMessages([live], [projected])).toEqual([live])
+  })
+})
+
+describe("sessionMessageWindow", () => {
+  const messages = Array.from({ length: 140 }, (_, index) => ({ id: `msg-${index}` }))
+
+  test("bounds the mounted transcript to the latest 20 messages", () => {
+    const visible = sessionMessageWindow(messages)
+
+    expect(visible).toHaveLength(20)
+    expect(visible[0]?.id).toBe("msg-120")
+    expect(visible.at(-1)?.id).toBe("msg-139")
+  })
+
+  test("keeps an explicitly selected historical invocation in the bounded window", () => {
+    const visible = sessionMessageWindow(messages, "msg-20")
+
+    expect(visible.at(-1)?.id).toBe("msg-20")
+    expect(visible.some((message) => message.id === "msg-139")).toBe(false)
   })
 })

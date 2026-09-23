@@ -13,6 +13,21 @@ import type {
 } from "@opencode-ai/sdk/v2"
 import type { PromptInfo, SkillMentionPart } from "../prompt/history"
 
+export const SESSION_MESSAGE_LIMIT = 100
+export const SESSION_RENDER_MESSAGE_LIMIT = 20
+
+export function sessionMessageWindow<T extends { id: string }>(
+  messages: readonly T[],
+  focusID?: string,
+  limit = SESSION_RENDER_MESSAGE_LIMIT,
+) {
+  if (messages.length <= limit) return [...messages]
+  if (!focusID) return messages.slice(-limit)
+  const focus = messages.findIndex((message) => message.id === focusID)
+  if (focus === -1) return messages.slice(-limit)
+  return messages.slice(Math.max(0, focus - limit + 1), focus + 1)
+}
+
 export function canonicalUserText(message: SessionMessageUser) {
   return message.text
 }

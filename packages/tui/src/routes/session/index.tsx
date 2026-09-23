@@ -129,6 +129,9 @@ import {
   mergeCanonicalSessionMessages,
   projectCanonicalSessionMessages,
   restoreCanonicalPrompt,
+  SESSION_MESSAGE_LIMIT,
+  SESSION_RENDER_MESSAGE_LIMIT,
+  sessionMessageWindow,
 } from "../../util/session-message"
 import { skillCommand, type SkillCommandContext } from "../../command-toolkit/skill"
 import { useSkillManager } from "../../component/skill-manager"
@@ -295,13 +298,15 @@ export function Session() {
   const canonicalParts = createMemo(
     () => new Map(canonicalProjection().map((item) => [item.message.id, item.parts] as const)),
   )
-  const messages = createMemo(() => {
+  const [renderLimit, setRenderLimit] = createSignal(SESSION_RENDER_MESSAGE_LIMIT)
+  const allMessages = createMemo(() => {
     const legacy = sync.data.message[route.sessionID] ?? []
     return mergeCanonicalSessionMessages(
       legacy,
       canonicalProjection().map((item) => item.message),
     )
   })
+  const messages = createMemo(() => sessionMessageWindow(allMessages(), route.messageID, renderLimit()))
   // Canonical projection creates fresh adapters per delta; stable IDs keep Solid from remounting the transcript.
   const messageIDs = createMemo(() => messages().map((message) => message.id))
   const messagesByID = createMemo(() => new Map(messages().map((message) => [message.id, message] as const)))
@@ -355,14 +360,14 @@ export function Session() {
   }
   const messagesBeforeRevert = () => {
     const messageID = revertInfo()?.messageID
-    if (!messageID) return messages()
-    const index = messages().findIndex((message) => message.id === messageID)
-    if (index === -1) return messages()
-    return messages().slice(0, index)
+    if (!messageID) return allMessages()
+    const index = allMessages().findIndex((message) => message.id === messageID)
+    if (index === -1) return allMessages()
+    return allMessages().slice(0, index)
   }
   const foregroundTasks = createMemo(() =>
     sync.data.capabilities.experimentalBackgroundSubagents
-      ? messages().flatMap((message) =>
+      ? allMessages().flatMap((message) =>
           messageParts(message.id).filter(
             (part): part is ToolPart =>
               part.type === "tool" &&
@@ -396,7 +401,7 @@ export function Session() {
   })
 
   const lastAssistant = createMemo(() => {
-    return messages().findLast((x) => x.role === "assistant")
+    return allMessages().findLast((x) => x.role === "assistant")
   })
 
   const dimensions = useTerminalDimensions()
@@ -1002,6 +1007,7 @@ export function Session() {
         name: "timeline",
       },
       run: () => {
+        setRenderLimit(SESSION_MESSAGE_LIMIT)
         dialog.replace(() => (
           <DialogTimeline
             onMove={(messageID) => {
@@ -1025,6 +1031,7 @@ export function Session() {
         name: "fork",
       },
       run: () => {
+        setRenderLimit(SESSION_MESSAGE_LIMIT)
         dialog.replace(() => (
           <DialogForkFromTimeline
             onMove={(messageID) => {
@@ -1172,10 +1179,10 @@ export function Session() {
           dialog.clear()
           const messageID = revertInfo()?.messageID
           if (!messageID) return
-          const index = messages().findIndex((message) => message.id === messageID)
+          const index = allMessages().findIndex((message) => message.id === messageID)
           if (index === -1) return
           const sessionID = route.sessionID
-          const message = messages()
+          const message = allMessages()
             .slice(index + 1)
             .find((message) => message.role === "user")
           try {
@@ -1454,7 +1461,7 @@ export function Session() {
         try {
           const sessionData = session()
           if (!sessionData) return
-          const sessionMessages = messages()
+          const sessionMessages = allMessages()
           const transcript = formatTranscript(
             sessionData,
             sessionMessages.map((msg) => ({ info: msg, parts: messageParts(msg.id) })),
@@ -1485,7 +1492,7 @@ export function Session() {
         try {
           const sessionData = session()
           if (!sessionData) return
-          const sessionMessages = messages()
+          const sessionMessages = allMessages()
 
           const defaultFilename = `session-${sessionData.id.slice(0, 8)}.md`
 
@@ -1746,7 +1753,13 @@ export function Session() {
                   scroll = r
                   // `onMouseScroll` is not a real scrollbox prop; track every scroll
                   // (wheel, key, and scrollbar drag) through the scrollbar's change event.
-                  r.verticalScrollBar.on("change", () => queueMicrotask(updateFollowOutput))
+                  r.verticalScrollBar.on("change", () =>
+                    queueMicrotask(() => {
+                      updateFollowOutput()
+                      if (r.scrollTop === 0 && r.scrollHeight > r.viewport.height) setRenderLimit(SESSION_MESSAGE_LIMIT)
+                      if (followOutput() && dialog.stack.length === 0) setRenderLimit(SESSION_RENDER_MESSAGE_LIMIT)
+                    }),
+                  )
                 }}
                 viewportOptions={{
                   paddingRight: showScrollbar() ? 1 : 0,
