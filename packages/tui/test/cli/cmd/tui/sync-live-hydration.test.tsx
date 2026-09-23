@@ -88,6 +88,95 @@ test("live messages use creation time with an ID tie-break", async () => {
   }
 })
 
+test("reopening a hydrated child recovers missed persisted text and tool parts without duplicates", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const child = { ...session, parentID: "ses_parent" }
+  const user = {
+    id: "msg_child_user",
+    sessionID,
+    role: "user" as const,
+    time: { created: 1 },
+    agent: "build",
+    model: { providerID: "test", modelID: "model" },
+  }
+  const assistantText = { ...assistant, id: "msg_child_answer", parentID: user.id, time: { created: 2, completed: 3 } }
+  const assistantTools = { ...assistant, id: "msg_child_tools", parentID: user.id, time: { created: 4 } }
+  let requests = 0
+  const { app, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json(child)
+    if (url.pathname === `/session/${sessionID}/message`) {
+      requests++
+      if (requests === 1) return json([])
+      return json([
+        {
+          info: user,
+          parts: [{ id: "prt_child_user", sessionID, messageID: user.id, type: "text", text: "inspect" }],
+        },
+        {
+          info: assistantText,
+          parts: [{ id: "prt_child_answer", sessionID, messageID: assistantText.id, type: "text", text: "found" }],
+        },
+        {
+          info: assistantTools,
+          parts: [
+            {
+              id: "prt_child_done",
+              sessionID,
+              messageID: assistantTools.id,
+              type: "tool",
+              callID: "done",
+              tool: "bash",
+              state: {
+                status: "completed",
+                input: {},
+                output: "ok",
+                title: "bash",
+                metadata: {},
+                time: { start: 4, end: 5 },
+              },
+            },
+            {
+              id: "prt_child_running",
+              sessionID,
+              messageID: assistantTools.id,
+              type: "tool",
+              callID: "running",
+              tool: "glob",
+              state: { status: "running", input: {}, title: "glob", metadata: {}, time: { start: 5 } },
+            },
+          ],
+        },
+      ])
+    }
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    return undefined
+  }, tmp.path)
+
+  try {
+    await sync.session.sync(sessionID)
+    expect(sync.data.message[sessionID]).toEqual([])
+    await sync.session.sync(sessionID, { reconcile: true })
+    expect(sync.data.message[sessionID].map((message) => message.id)).toEqual([
+      user.id,
+      assistantText.id,
+      assistantTools.id,
+    ])
+    expect(sync.data.part[assistantText.id]?.[0]).toMatchObject({ type: "text", text: "found" })
+    expect(sync.data.part[assistantTools.id]?.[0]).toMatchObject({
+      type: "tool",
+      state: { status: "completed", output: "ok" },
+    })
+    expect(sync.data.part[assistantTools.id]?.[1]).toMatchObject({ type: "tool", state: { status: "running" } })
+    await sync.session.sync(sessionID, { reconcile: true })
+    expect(requests).toBe(3)
+    expect(sync.data.message[sessionID]).toHaveLength(3)
+    expect(sync.data.part[assistantTools.id]).toHaveLength(2)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("stale session hydration does not overwrite live message parts", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")
