@@ -1996,6 +1996,16 @@ describe("tool.task.destination", () => {
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E, R> => effect.pipe(Effect.provideService(TargetRegistry.Service, registry))
 
+  // Registry resolved at layer construction (the production path) so the
+  // registry-resolved Task tool below sees the target without a runtime override.
+  const destRegistry = controlledRegistry({}).registry
+  const namedLayer = testEffect(
+    layer({}, [
+      [LocationServiceMap.node, buildLocationServiceMap([], [localProvider, rexdDestinationProvider])],
+      [TargetRegistry.node, Layer.succeed(TargetRegistry.Service, destRegistry)],
+    ]),
+  )
+
   rexdDestination.instance("places a child on a different target at an explicit directory", () =>
     Effect.gen(function* () {
       destinationAgent = generalDestinationAgent()
@@ -2044,6 +2054,38 @@ describe("tool.task.destination", () => {
       expect(calls[0]?.targetID).toBe(destID)
       expect(calls[0]?.directory).toBe(destDirectory)
       expect(seen?.sessionID).toBe(child.id)
+    }),
+  )
+
+  namedLayer.instance("reaches child creation through the registry-resolved Task tool", () =>
+    Effect.gen(function* () {
+      destinationAgent = generalDestinationAgent()
+      const sessions = yield* Session.Service
+      const registry = yield* ToolRegistry.Service
+      const { chat, assistant } = yield* seed()
+      const promptOps = stubOps({ text: "placed" })
+
+      // Exercise the same execution path as production: the Task tool resolved
+      // from the registry (built before InstanceStore is wired into the runtime),
+      // not a fresh `yield* TaskTool` whose init runs inside the instance context.
+      const { task } = yield* registry.named()
+      const result = yield* task.execute(
+        { description: "inspect remote", prompt: "inspect", subagent_type: "general", target: destID, directory: destDirectory },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      const child = yield* sessions.get(result.metadata.sessionId)
+      expect(child.target).toEqual(destTarget)
+      expect(child.directory).toBe(destDirectory)
     }),
   )
 
