@@ -892,7 +892,9 @@ describe("tool.task", () => {
       const failure = Cause.squash(exit.cause)
       expect(failure).toBeInstanceOf(Error)
       if (!(failure instanceof Error)) throw new Error("expected Error defect")
-      expect(failure.message).toBe(`Subagent failed (task_id: ${child?.id}): Network connection lost`)
+      expect(failure.message).toContain(`Task error (task_id: ${child?.id},`)
+      expect(failure.message).toContain("Network connection lost")
+      expect(failure.message).toContain("phase: unknown")
     }),
   )
 
@@ -934,9 +936,8 @@ describe("tool.task", () => {
       const failure = Cause.squash(exit.cause)
       expect(failure).toBeInstanceOf(Error)
       if (!(failure instanceof Error)) throw new Error("expected Error defect")
-      expect(failure.message).toBe(
-        `Subagent failed (task_id: ${child?.id}): The user rejected permission to use this specific tool call.`,
-      )
+      expect(failure.message).toContain(`Task error (task_id: ${child?.id},`)
+      expect(failure.message).toContain("The user rejected permission to use this specific tool call.")
     }),
   )
 
@@ -1043,40 +1044,40 @@ describe("tool.task", () => {
     }),
   )
 
-  it.instance("execute creates a child when task_id does not exist", () =>
+  it.instance("rejects an explicit missing task_id without creating a child", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
       const def = yield* tool.init()
-      let seen: SessionPrompt.PromptInput | undefined
-      const promptOps = stubOps({ text: "created", onPrompt: (input) => (seen = input) })
+      const exit = yield* def
+        .execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+            task_id: "ses_missing",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: stubOps() },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.exit)
 
-      const result = yield* def.execute(
-        {
-          description: "inspect bug",
-          prompt: "look into the cache key path",
-          subagent_type: "general",
-          task_id: "ses_missing",
-        },
-        {
-          sessionID: chat.id,
-          messageID: assistant.id,
-          agent: "build",
-          abort: new AbortController().signal,
-          extra: { promptOps },
-          messages: [],
-          metadata: () => Effect.void,
-          ask: () => Effect.void,
-        },
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected task failure")
+      expect(Cause.squash(exit.cause)).toHaveProperty(
+        "message",
+        "Cannot resume Task: task_id ses_missing was not found",
       )
-
-      const kids = yield* sessions.children(chat.id)
-      expect(kids).toHaveLength(1)
-      expect(kids[0]?.id).toBe(result.metadata.sessionId)
-      expect(result.metadata.sessionId).not.toBe("ses_missing")
-      expect(result.output).toContain(`<task id="${result.metadata.sessionId}" state="completed">`)
-      expect(seen?.sessionID).toBe(result.metadata.sessionId)
+      expect(yield* sessions.children(chat.id)).toHaveLength(0)
     }),
   )
 
@@ -1258,6 +1259,58 @@ describe("tool.task", () => {
         .pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
+    }),
+  )
+
+  it.instance("cancellation retains the child ID, call correlation, model and observed duration", () =>
+    Effect.gen(function* () {
+      const jobs = yield* BackgroundJob.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const ready = yield* Deferred.make<void>()
+      const published = yield* Deferred.make<Record<string, unknown>>()
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) => Deferred.succeed(ready, undefined).pipe(Effect.flatMap(() => Effect.never)),
+      }
+      const fiber = yield* def
+        .execute(
+          { description: "inspect bug", prompt: "check cache", subagent_type: "general" },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID: "call-cancelled",
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: (input) => Deferred.succeed(published, input.metadata ?? {}).pipe(Effect.asVoid),
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.exit, Effect.forkChild)
+      yield* Deferred.await(ready)
+      const child = (yield* jobs.list()).find((job) => job.metadata?.parentSessionId === chat.id)
+      expect(child).toBeDefined()
+      if (!child) throw new Error("task job not found")
+      expect(yield* Deferred.await(published)).toMatchObject({
+        sessionId: child.id,
+        invocation: { callID: "call-cancelled" },
+      })
+      yield* jobs.cancel(child.id)
+      const exit = yield* Fiber.join(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected cancellation")
+      const error = Cause.squash(exit.cause)
+      expect(error).toBeInstanceOf(Error)
+      if (!(error instanceof Error)) throw new Error("expected Error")
+      expect(error.message).toContain(`Task cancelled (task_id: ${child.id}, call_id: call-cancelled,`)
+      expect(error.message).toContain("model:")
+      expect(error.message).toMatch(/elapsed_ms: \d+/)
+      expect(error.message).toContain("phase: unknown")
+      expect((yield* (yield* Session.Service).get(SessionID.make(child.id))).parentID).toBe(chat.id)
     }),
   )
 
