@@ -17,6 +17,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     fetch?: typeof fetch
     headers?: RequestInit["headers"]
     events?: EventSource
+    sseInactivityMs?: number
   }) => {
     const abort = new AbortController()
     const remoteStatus = useRemoteStatus()
@@ -161,35 +162,62 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       sse = ctrl
       ;(async () => {
         let attempt = 0
-        while (true) {
+        while (!abort.signal.aborted && !ctrl.signal.aborted) {
+          const connection = new AbortController()
+          const cancel = () => connection.abort()
+          ctrl.signal.addEventListener("abort", cancel, { once: true })
+          let watchdog: ReturnType<typeof setTimeout> | undefined
+          const armWatchdog = () => {
+            clearTimeout(watchdog)
+            watchdog = setTimeout(() => connection.abort(), props.sseInactivityMs ?? 30_000)
+          }
+          try {
+            armWatchdog()
+            const events = await sdk.global.event({
+              signal: connection.signal,
+              sseMaxRetryAttempts: 0,
+            })
+
+            if (Flag.OPENCODE_EXPERIMENTAL_WORKSPACES) {
+              // Start syncing workspaces, it's important to do this after
+              // we've started listening to events
+              await sdk.sync.start().catch(() => {})
+            }
+
+            for await (const event of events.stream) {
+              if (ctrl.signal.aborted) break
+              armWatchdog()
+              handleEvent(event)
+              attempt = 0
+            }
+          } catch (error) {
+            if (!ctrl.signal.aborted)
+              console.warn("TUI global event stream interrupted", {
+                name: error instanceof Error ? error.name : typeof error,
+              })
+          } finally {
+            clearTimeout(watchdog)
+            ctrl.signal.removeEventListener("abort", cancel)
+            connection.abort()
+            if (timer) clearTimeout(timer)
+            if (queue.length > 0) flush()
+          }
           if (abort.signal.aborted || ctrl.signal.aborted) break
-
-          const events = await sdk.global.event({
-            signal: ctrl.signal,
-            sseMaxRetryAttempts: 0,
-          })
-
-          if (Flag.OPENCODE_EXPERIMENTAL_WORKSPACES) {
-            // Start syncing workspaces, it's important to do this after
-            // we've started listening to events
-            await sdk.sync.start().catch(() => {})
-          }
-
-          for await (const event of events.stream) {
-            if (ctrl.signal.aborted) break
-            handleEvent(event)
-          }
-
-          if (timer) clearTimeout(timer)
-          if (queue.length > 0) flush()
           attempt += 1
-          if (abort.signal.aborted || ctrl.signal.aborted) break
-
-          // Exponential backoff
           const backoff = Math.min(retryDelay * 2 ** (attempt - 1), maxRetryDelay)
-          await new Promise((resolve) => setTimeout(resolve, backoff))
+          await new Promise<void>((resolve) => {
+            const timeout = setTimeout(() => {
+              ctrl.signal.removeEventListener("abort", stop)
+              resolve()
+            }, backoff)
+            const stop = () => {
+              clearTimeout(timeout)
+              resolve()
+            }
+            ctrl.signal.addEventListener("abort", stop, { once: true })
+          })
         }
-      })().catch(() => {})
+      })()
     }
 
     onMount(async () => {

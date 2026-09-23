@@ -335,6 +335,55 @@ test("message reconciliation preserves a newer live completion event", async () 
   }
 })
 
+test("server reconnection immediately refreshes a missed Task completion", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const running = { ...assistant, time: { created: 1 } }
+  const completed = { ...assistant, time: { created: 1, completed: 2 }, finish: "stop" as const }
+  const task = (status: "running" | "completed") => ({
+    id: partID,
+    sessionID,
+    messageID,
+    type: "tool" as const,
+    tool: "task",
+    callID: "call_task",
+    state:
+      status === "running"
+        ? { status, input: {}, title: "subagent", metadata: {}, time: { start: 1 } }
+        : { status, input: {}, output: "done", title: "subagent", metadata: {}, time: { start: 1, end: 2 } },
+  })
+  let requests = 0
+  const { app, emit, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json(session)
+    if (url.pathname === `/session/${sessionID}/message`) {
+      requests++
+      return json([
+        {
+          info: requests === 1 ? running : completed,
+          parts: [task(requests === 1 ? "running" : "completed")],
+        },
+      ])
+    }
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    return undefined
+  }, tmp.path)
+
+  try {
+    await sync.session.sync(sessionID)
+    expect("completed" in sync.data.message[sessionID][0].time).toBe(false)
+    expect(sync.data.part[messageID][0]).toMatchObject({ state: { status: "running" } })
+    emit(global({ id: "evt_reconnected", type: "server.connected", properties: {} }))
+    await wait(() => {
+      const time = sync.data.message[sessionID]?.[0]?.time
+      return !!time && "completed" in time && time.completed === 2
+    }, 1_000)
+    expect(requests).toBe(2)
+    expect(sync.data.part[messageID][0]).toMatchObject({ state: { status: "completed" } })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("resolved V2 interactions are not resurrected by stale hydration", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")
