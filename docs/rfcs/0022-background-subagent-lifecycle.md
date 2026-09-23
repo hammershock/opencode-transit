@@ -215,15 +215,18 @@ sequenceDiagram
 
 ## 8. 实施切分和依赖
 
-本 RFC 接受后分别创建符合 fork Ready 契约的 issue；每项各用一条 semantic branch、worktree 和 PR。推荐顺序：
+实施 issue 已先建档以便评审依赖；**RFC-0022 仍是 Draft，以下 feature issue 均明确 blocked、并非 Ready**。每项实施使用自己的 semantic branch、worktree 和 PR，issue 是任务状态的唯一实时来源。现有行为的两项 bug 可先独立处理，但不得借修 bug 偷偷启用本 RFC 的新控制语义。
 
-1. **执行 owner 与异常消失修复**：复现父回复、页面切换、Instance dispose、进程退出和显式停止；修复不应终止的路径，建立 owner loss 可诊断事实。复用已合并的取消与调用关联修复，不重做 #429/#430/#433。
-2. **统一 Task 视图**：从 invocation/Session 结算及当前 owner 派生状态、结果和新鲜度；提供只读 `task_status` 与 TUI/CLI 一致投影。已计划的 [#431](https://github.com/hammershock/opencode-transit/issues/431) 视觉工作依赖此契约或与它明确协作。
-3. **输入语义**：active-only `task_send` 与 receipt；`task_id` queued follow-up 的独立身份和防错投递。
-4. **等待和中断**：`task_wait` 的无丢唤醒订阅，`task_interrupt` 的精确 owner 校验与队列保留。
-5. **结果通知与恢复**：幂等父输入、删除屏障、idle/重启处理；完整 TUI、mini/run 验收。
+| 阶段 | Issue 与独立结果                                                                                                                                                                                                                                            | 前置条件                                                     |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| 0    | [#561](https://github.com/hammershock/opencode-transit/issues/561)：后台 child 执行所有权与异常消失；[#562](https://github.com/hammershock/opencode-transit/issues/562)：已有 child 消息的空白视图                                                          | 可并行诊断和修复既有行为；不依赖 RFC 接受                    |
+| 1    | [#563](https://github.com/hammershock/opencode-transit/issues/563)：持久结算加当前 owner 观测的统一 Task 状态                                                                                                                                               | RFC-0022 接受；#561                                          |
+| 2    | [#564](https://github.com/hammershock/opencode-transit/issues/564)：父 Agent 的只读 `task_status`；[#565](https://github.com/hammershock/opencode-transit/issues/565)：active steer 与 queued follow-up                                                     | RFC-0022 接受；#563；两项可并行且需协调共享 contract         |
+| 3    | [#566](https://github.com/hammershock/opencode-transit/issues/566)：有界事件等待；[#567](https://github.com/hammershock/opencode-transit/issues/567)：精确中断；现有 [#431](https://github.com/hammershock/opencode-transit/issues/431)：当前与历史进度展示 | #566/#567 依赖 #563、#565；#431 依赖 #562，沿用已合并的 #430 |
+| 4    | [#568](https://github.com/hammershock/opencode-transit/issues/568)：幂等结果通知与删除屏障                                                                                                                                                                  | #563、#565、#566、#567                                       |
+| 5    | [#569](https://github.com/hammershock/opencode-transit/issues/569)：父 TUI 协作入口及 mini/run 验收                                                                                                                                                         | #562、#564–#568、#431；选址 UI 的实测另与现有 #547 衔接      |
 
-其中可独立复现的“子会话已有消息却显示空白”和“后台 job 被意外停止”应作为 bug issue 尽早诊断与修复；不必等全部新控制工具落地，但不能在修复中偷偷改变本 RFC 尚未接受的产品语义。RFC-0018 的跨 Target Task 交付按其自身 issue 推进；本 RFC 的控制面在该能力出现时必须读取 child 的真实 Location。
+已合并的 #429/#430/#433 是现有取消与 invocation 基础，不重新开任务。[#426](https://github.com/hammershock/opencode-transit/issues/426) 继续保留其诊断职责。RFC-0018 的跨 Target Task 交付由现有 [#547](https://github.com/hammershock/opencode-transit/issues/547) 负责；本 RFC 的控制面在该能力出现时必须读取 child 的真实 Location。
 
 ## 9. 验收场景与风险选择
 
