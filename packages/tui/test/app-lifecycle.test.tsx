@@ -2180,6 +2180,181 @@ test("an open Sessions dialog refreshes when another device projects a Session",
   }
 })
 
+test.each(["legacy", "v2"] as const)("Escape interrupts %s execution after prompt focus moves away", async (mode) => {
+  let disposeSlots = () => {}
+  const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
+  const core = await import("@opentui/core")
+  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  const events = createEventSource()
+  const paths: string[] = []
+  const requests: string[] = []
+  const session = {
+    id: "dummy",
+    title: "Interrupt integration",
+    slug: "dummy",
+    projectID: "project",
+    directory,
+    version: "0.0.0-test",
+    time: { created: 0, updated: 0 },
+  }
+  const calls = createFetch((url) => {
+    requests.push(url.pathname)
+    if (url.pathname === "/session/status") return json(mode === "legacy" ? { dummy: { type: "busy" } } : {})
+    if (url.pathname === "/agent")
+      return json([
+        {
+          name: "build",
+          mode: "primary",
+          hidden: false,
+          permission: [],
+          options: {},
+          model: { providerID: "test", modelID: "model" },
+        },
+      ])
+    if (url.pathname === "/api/target")
+      return json({ path: "/tmp/opencode/targets.jsonc", revision: "test", targets: [], diagnostics: [], valid: true })
+    if (url.pathname === "/config/providers")
+      return json({
+        providers: [
+          {
+            id: "test",
+            name: "Test",
+            source: "custom",
+            env: [],
+            options: {},
+            models: {
+              model: {
+                id: "model",
+                providerID: "test",
+                api: { id: "model", url: "http://test", npm: "test" },
+                name: "Test Model",
+                capabilities: {
+                  temperature: true,
+                  reasoning: false,
+                  attachment: false,
+                  toolcall: true,
+                  input: { text: true, audio: false, image: false, video: false, pdf: false },
+                  output: { text: true, audio: false, image: false, video: false, pdf: false },
+                  interleaved: false,
+                },
+                cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+                limit: { context: 100_000, output: 10_000 },
+                status: "active",
+                options: {},
+                headers: {},
+                release_date: "2026-01-01",
+              },
+            },
+          },
+        ],
+        default: { test: "model" },
+      })
+    if (url.pathname === "/session/dummy") return json(session)
+    if (url.pathname === "/session") return json([session])
+    if (url.pathname === "/session/dummy/message") return json([])
+    if (url.pathname === "/session/dummy/todo" || url.pathname === "/session/dummy/diff") return json([])
+    if (url.pathname === "/api/session/dummy")
+      return json({
+        data: {
+          id: "dummy",
+          projectID: "project",
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 0, updated: 0 },
+          title: "Interrupt integration",
+          location: { directory },
+          agent: "build",
+          model: { providerID: "test", id: "model" },
+        },
+      })
+    if (url.pathname === "/api/session/dummy/message") return json({ data: [], cursor: {} })
+    if (url.pathname === "/api/session/dummy/model-context") return json({})
+    if (url.pathname === "/api/session/dummy/target-resolution")
+      return json({ status: "resolved", location: { directory } })
+    if (url.pathname === "/api/session/dummy/activate") return json({ data: { status: "unchanged", diagnostics: [] } })
+    if (url.pathname === "/api/session/dummy/interrupt" || url.pathname === "/session/dummy/abort") {
+      paths.push(url.pathname)
+      return url.pathname.startsWith("/api/") ? new Response(null, { status: 204 }) : json(true)
+    }
+  })
+  let started!: () => void
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
+  })
+
+  try {
+    const { run } = await import("../src/app")
+    const task = Effect.runPromise(
+      run({
+        url: "http://test",
+        directory,
+        config: createTuiResolvedConfig({ plugin_enabled: {} }),
+        fetch: calls.fetch,
+        events: events.source,
+        args: { continue: true },
+        pluginHost: {
+          async start(input) {
+            disposeSlots = input.runtime.setupSlots(input.api).dispose
+            started()
+          },
+          async dispose() {
+            disposeSlots()
+          },
+        },
+      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+    )
+
+    await ready
+    const editor = await waitForEditor(setup).catch((error) => {
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\nRequests: ${requests.join(", ")}`)
+    })
+    await setup.waitForVisualIdle()
+    events.emit(
+      mode === "legacy"
+        ? {
+            directory,
+            project: "project",
+            payload: {
+              id: "evt_interrupt_busy",
+              type: "session.status",
+              properties: { sessionID: "dummy", status: { type: "busy" } },
+            },
+          }
+        : {
+            directory,
+            project: "project",
+            payload: {
+              id: "evt_interrupt_v2",
+              type: "session.next.prompted",
+              properties: {
+                sessionID: "dummy",
+                messageID: "msg_running",
+                timestamp: 20,
+                prompt: { text: "A running V2 prompt" },
+                delivery: "steer",
+              },
+            },
+          },
+    )
+    await waitForFrame(setup, mode === "legacy" ? "esc interrupt" : "A running V2 prompt")
+    if (mode === "legacy") await waitForFrame(setup, "esc interrupt")
+    editor.blur()
+    setup.mockInput.pressEscape()
+    if (mode === "legacy") await waitForFrame(setup, "again to interrupt")
+    else await Bun.sleep(50)
+    expect(paths).toEqual([])
+    setup.mockInput.pressEscape()
+    await waitForRequestCount(paths, "/api/session/dummy/interrupt", 1)
+    expect(paths).toContain("/session/dummy/abort")
+
+    process.emit("SIGHUP")
+    await task
+  } finally {
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    mock.restore()
+  }
+})
+
 test("event subscriber failure preserves production command palette rendering and search", async () => {
   let api: TuiPluginApi | undefined
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })

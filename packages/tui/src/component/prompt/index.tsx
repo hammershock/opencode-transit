@@ -24,6 +24,7 @@ import { useSDK } from "../../context/sdk"
 import { useRoute } from "../../context/route"
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
+import { useData } from "../../context/data"
 import { useEvent } from "../../context/event"
 import { editorSelectionKey, useEditorContext, type EditorSelection } from "../../context/editor"
 import { normalizePromptContent, openEditor } from "../../editor"
@@ -216,7 +217,14 @@ export function Prompt(props: PromptProps) {
   const tuiConfig = useTuiConfig()
   const dialog = useDialog()
   const toast = useToast()
+  const data = useData()
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+  const interruptible = createMemo(() => {
+    if (status().type !== "idle") return true
+    if (!props.sessionID) return false
+    const latest = data.session.message.list(props.sessionID)?.[0]
+    return latest?.type === "user" || (latest?.type === "assistant" && !latest.time.completed)
+  })
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
@@ -540,10 +548,9 @@ export function Prompt(props: PromptProps) {
         name: "session.interrupt",
         category: "Session",
         hidden: true,
-        enabled: status().type !== "idle",
-        run: () => {
+        enabled: interruptible(),
+        run: async () => {
           if (auto()?.visible) return
-          if (!input.focused) return
           // TODO: this should be its own command
           if (store.mode === "shell") {
             setStore("mode", "normal")
@@ -558,10 +565,14 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void sdk.client.session.abort({
-              sessionID: props.sessionID,
-            })
             setStore("interrupt", 0)
+            const interrupted = await Promise.allSettled([
+              sdk.client.v2.session.interrupt({ sessionID: props.sessionID }, { throwOnError: true }),
+              sdk.client.session.abort({ sessionID: props.sessionID }, { throwOnError: true }),
+            ])
+            if (interrupted.every((result) => result.status === "rejected")) {
+              toast.show({ message: "Failed to interrupt session", variant: "error" })
+            }
           }
           dialog.clear()
         },
