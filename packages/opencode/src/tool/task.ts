@@ -162,7 +162,9 @@ export const TaskTool = Tool.define(
       }
 
       const session = params.task_id
-        ? yield* sessions.get(SessionID.make(params.task_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+        ? yield* sessions
+            .get(SessionID.make(params.task_id))
+            .pipe(Effect.mapError(() => new Error(`Cannot resume Task: task_id ${params.task_id} was not found`)))
         : undefined
       const childPermission = deriveSubagentSessionPermission({
         parentSessionPermission: parent.permission ?? [],
@@ -181,25 +183,6 @@ export const TaskTool = Tool.define(
           action: "deny" as const,
         })) ?? []),
       ]
-      const nextSession =
-        session ??
-        (yield* sessions.create({
-          parentID: ctx.sessionID,
-          title: params.description + ` (@${next.name} subagent)`,
-          agent: next.id ?? next.name,
-          permissionBoundary: [...(parent.permissionBoundary ?? []), parentPolicy.rules],
-          permission: [
-            ...childPermission,
-            ...childToolDenies.filter(
-              (deny) =>
-                !childPermission.some(
-                  (rule) =>
-                    rule.permission === deny.permission && rule.pattern === deny.pattern && rule.action === deny.action,
-                ),
-            ),
-          ],
-        }))
-
       const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
         Effect.provideService(Database.Service, database),
         Effect.orDie,
@@ -212,21 +195,50 @@ export const TaskTool = Tool.define(
         providerID: msg.info.providerID,
       }
       const childMessageID = MessageID.ascending()
-      const metadata = {
-        parentSessionId: ctx.sessionID,
-        invocation: { parentMessageID: ctx.messageID, callID: ctx.callID, childMessageID },
-        sessionId: nextSession.id,
-        model,
-        ...(runInBackground ? { background: true } : {}),
-      }
-
-      yield* ctx.metadata({
-        title: params.description,
-        metadata,
-      })
+      // Admission must publish the resumable child identity before cancellation can interrupt this invocation.
+      const admitted = yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const nextSession =
+            session ??
+            (yield* sessions.create({
+              parentID: ctx.sessionID,
+              title: params.description + ` (@${next.name} subagent)`,
+              agent: next.id ?? next.name,
+              permissionBoundary: [...(parent.permissionBoundary ?? []), parentPolicy.rules],
+              permission: [
+                ...childPermission,
+                ...childToolDenies.filter(
+                  (deny) =>
+                    !childPermission.some(
+                      (rule) =>
+                        rule.permission === deny.permission && rule.pattern === deny.pattern && rule.action === deny.action,
+                    ),
+                ),
+              ],
+            }))
+          const metadata = {
+            parentSessionId: ctx.sessionID,
+            invocation: { parentMessageID: ctx.messageID, callID: ctx.callID, childMessageID },
+            sessionId: nextSession.id,
+            model,
+            ...(runInBackground ? { background: true } : {}),
+          }
+          yield* ctx.metadata({ title: params.description, metadata })
+          return { nextSession, metadata }
+        }),
+      )
+      const nextSession = admitted.nextSession
+      const metadata = admitted.metadata
 
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
+
+      const startedAt = Date.now()
+      function taskFailure(state: "error" | "cancelled", detail: string) {
+        return new Error(
+          `Task ${state} (task_id: ${nextSession.id}, call_id: ${ctx.callID ?? "unknown"}, model: ${model.providerID}/${model.modelID}, elapsed_ms: ${Math.max(0, Date.now() - startedAt)}, phase: unknown): ${detail.slice(0, 500)}`,
+        )
+      }
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
         const parts = yield* ops.resolvePromptParts(params.prompt)
@@ -246,11 +258,11 @@ export const TaskTool = Tool.define(
             "message" in result.info.error.data && typeof result.info.error.data.message === "string"
               ? result.info.error.data.message
               : result.info.error.name
-          return yield* Effect.fail(new Error(`Subagent failed (task_id: ${nextSession.id}): ${message}`))
+          return yield* Effect.fail(taskFailure("error", message))
         }
         const failed = result.parts.findLast((item) => item.type === "tool" && item.state.status === "error")
         if (failed?.type === "tool" && failed.state.status === "error") {
-          return yield* Effect.fail(new Error(`Subagent failed (task_id: ${nextSession.id}): ${failed.state.error}`))
+          return yield* Effect.fail(taskFailure("error", failed.state.error))
         }
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
       })
@@ -367,8 +379,16 @@ export const TaskTool = Tool.define(
               background.waitForPromotion(nextSession.id),
             )
             if (result?.metadata?.background === true) return backgroundResult()
-            if (result?.status === "error") return yield* Effect.fail(new Error(result.error ?? "Task failed"))
-            if (result?.status === "cancelled") return yield* Effect.fail(new Error("Task cancelled"))
+            if (result?.status === "error")
+              return yield* Effect.fail(
+                result.error?.startsWith(`Task error (task_id: ${nextSession.id},`)
+                  ? new Error(result.error)
+                  : taskFailure("error", result.error ?? "Unknown error"),
+              )
+            if (result?.status === "cancelled")
+              return yield* Effect.fail(
+                taskFailure("cancelled", "The invocation stopped; the child Session can be resumed"),
+              )
             return {
               title: params.description,
               metadata,
