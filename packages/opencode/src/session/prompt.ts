@@ -8,6 +8,7 @@ import { MessageV2 } from "./message-v2"
 import { SessionRevert } from "./revert"
 import { Session } from "./session"
 import { Agent } from "../agent/agent"
+import { resolveLocationAgent } from "../agent/location-agent"
 import { Provider } from "@/provider/provider"
 
 import { type Tool as AITool, tool, jsonSchema } from "ai"
@@ -128,7 +129,7 @@ export interface Interface {
   readonly resetShell: (sessionID: SessionID) => Effect.Effect<void>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly slashCommand: (input: SlashCommandInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
-  readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
+  readonly resolvePromptParts: (template: string, sessionID?: SessionID) => Effect.Effect<PromptInput["parts"]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPrompt") {}
@@ -191,7 +192,7 @@ const layer = Layer.effect(
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
-        resolvePromptParts: (template: string) => resolvePromptParts(template),
+        resolvePromptParts: (template: string, sessionID?: SessionID) => resolvePromptParts(template, sessionID),
         prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
       } satisfies TaskPromptOps
     })
@@ -201,11 +202,29 @@ const layer = Layer.effect(
       yield* state.cancel(sessionID)
     })
 
-    const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
+    const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (
+      template: string,
+      sessionID?: SessionID,
+    ) {
       const ctx = yield* InstanceState.context
       const parts: Types.DeepMutable<PromptInput["parts"]> = [{ type: "text", text: template }]
       const files = ConfigMarkdown.files(template)
       const seen = new Set<string>()
+
+      // When resolving for a child session, read referenced files at the child
+      // Location so the controller never touches a same-named file or guesses
+      // the target HOME.
+      const child = sessionID
+        ? yield* Effect.gen(function* () {
+            const location = yield* locationAccess.require(sessionID).pipe(Effect.catch(Effect.die))
+            return yield* Effect.gen(function* () {
+              const fs = yield* FSUtil.Service
+              const home = (yield* Location.Service).home
+              return { fs, home, directory: location.directory, posix: location.target.type === "rexd" }
+            }).pipe(Effect.provide(locations.get(location)), Effect.orDie)
+          })
+        : undefined
+
       yield* Effect.forEach(
         files,
         Effect.fnUntraced(function* (match) {
@@ -214,17 +233,45 @@ const layer = Layer.effect(
           if (seen.has(name)) return
           seen.add(name)
 
+          const pathImpl = child?.posix ? path.posix : path
           const filepath = name.startsWith("~/")
-            ? path.join(os.homedir(), name.slice(2))
-            : path.resolve(ctx.worktree, name)
+            ? pathImpl.join(child?.home ?? os.homedir(), name.slice(2))
+            : pathImpl.resolve(child?.directory ?? ctx.worktree, name)
 
-          const info = yield* fsys.stat(filepath).pipe(Effect.option)
+          const targetFs = child?.fs ?? fsys
+          const info = yield* targetFs.stat(filepath).pipe(Effect.option)
           if (Option.isNone(info)) {
+            if (child)
+              return yield* Effect.die(new Error(`File reference "${name}" does not exist at the child location`))
             const found = yield* agents.get(name)
             if (found) parts.push({ type: "agent", name: found.name })
             return
           }
           const stat = info.value
+          if (child) {
+            if (stat.type === "Directory")
+              return yield* Effect.die(new Error(`Directory reference "${name}" is not supported for child prompts`))
+            if (Number(stat.size) > Truncate.MAX_BYTES)
+              return yield* Effect.die(
+                new Error(
+                  `File reference "${name}" exceeds the maximum attachment size of ${Truncate.MAX_BYTES} bytes`,
+                ),
+              )
+            const content = yield* targetFs.readFile(filepath).pipe(Effect.orDie)
+            if (content.byteLength > Truncate.MAX_BYTES)
+              return yield* Effect.die(
+                new Error(
+                  `File reference "${name}" exceeds the maximum attachment size of ${Truncate.MAX_BYTES} bytes`,
+                ),
+              )
+            parts.push({
+              type: "file",
+              url: `data:text/plain;base64,${Buffer.from(content).toString("base64")}`,
+              filename: name,
+              mime: "text/plain",
+            })
+            return
+          }
           parts.push({
             type: "file",
             url: pathToFileURL(filepath).href,
@@ -1178,7 +1225,7 @@ const layer = Layer.effect(
         const locationTools = Context.get(locationContext, LocationToolRegistry.Service)
         const locationPolicy = Context.get(locationContext, ExecutionPolicy.Service)
         const locationRegistry = registry
-        const locationFilesystem = fsys
+        const locationFilesystem = Context.get(locationContext, FSUtil.Service)
         yield* contextAt({ sessionID, agent: session.agent ?? "build", location: loopLocation })
 
         while (true) {
@@ -1263,13 +1310,29 @@ const layer = Layer.effect(
             continue
           }
 
-          const agent = yield* agents.get(lastUser.agent)
-          if (!agent) {
-            const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-            const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-            const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
-            yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
-            throw error
+          let agent: Agent.Info
+          if (session.metadata?.targetAgent === true) {
+            // A destination child resolves its Agent definition live from the child
+            // Location's AgentV2 registry, never the controller catalog, so a
+            // target-only Agent remains usable.
+            const located = yield* resolveLocationAgent(session.agent ?? lastUser.agent, locationContext)
+            if (!located) {
+              const error = new NamedError.Unknown({
+                message: `Agent definition for "${lastUser.agent}" is not available at the child location`,
+              })
+              yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+              throw error
+            }
+            agent = located
+          } else {
+            agent = yield* agents.get(lastUser.agent)
+            if (!agent) {
+              const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
+              const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+              const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
+              yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+              throw error
+            }
           }
           const maxSteps = agent.steps ?? Infinity
           const policy = yield* locationPolicy.resolve(sessionID, agent.id ?? agent.name).pipe(Effect.orDie)

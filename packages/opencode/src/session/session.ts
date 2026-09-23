@@ -277,6 +277,15 @@ export const GlobalInfo = Schema.Struct({
 }).annotate({ identifier: "GlobalSession" })
 export type GlobalInfo = Types.DeepMutable<Schema.Schema.Type<typeof GlobalInfo>>
 
+export const CreateDestination = Schema.Struct({
+  target: Location.Target,
+  directory: Schema.String,
+  workspaceID: Schema.optional(WorkspaceV2.ID),
+  lastKnownTargetName: Schema.optional(Schema.String),
+  path: Schema.optional(Schema.String),
+})
+export type CreateDestination = Types.DeepMutable<Schema.Schema.Type<typeof CreateDestination>>
+
 export const CreateInput = Schema.optional(
   Schema.Struct({
     parentID: Schema.optional(SessionID),
@@ -287,6 +296,7 @@ export const CreateInput = Schema.optional(
     permission: Schema.optional(PermissionV1.Ruleset),
     approvalMode: Schema.optional(ApprovalMode.Mode),
     workspaceID: Schema.optional(WorkspaceV2.ID),
+    destination: Schema.optional(CreateDestination),
   }),
 )
 export type CreateInput = Types.DeepMutable<Schema.Schema.Type<typeof CreateInput>>
@@ -294,6 +304,7 @@ export type CreateOptions = CreateInput & {
   permissionBoundary?: SessionPolicy.Boundary
   target?: Location.Target
   lastKnownTargetName?: string
+  destination?: CreateDestination
 }
 
 export const ForkInput = Schema.Struct({
@@ -451,6 +462,7 @@ export interface Interface {
     workspaceID?: WorkspaceV2.ID
     target?: Location.Target
     lastKnownTargetName?: string
+    destination?: CreateDestination
   }) => Effect.Effect<Info>
   readonly fork: (input: {
     sessionID: SessionID
@@ -735,20 +747,24 @@ const layer: Layer.Layer<
       workspaceID?: WorkspaceV2.ID
       target?: Location.Target
       lastKnownTargetName?: string
+      destination?: CreateDestination
     }) {
       const ctx = yield* InstanceState.context
       const workspace = yield* InstanceState.workspaceID
       const location = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
       const parent = input?.parentID ? yield* get(input.parentID).pipe(Effect.orDie) : undefined
+      const destination = input?.destination
       return yield* createNext({
         parentID: input?.parentID,
-        directory: parent?.directory ?? ctx.directory,
-        target: parent ? parent.target : (input?.target ?? location?.target),
-        lastKnownTargetName: parent
-          ? parent.lastKnownTargetName
-          : (input?.lastKnownTargetName ?? location?.lastKnownTargetName),
-        portableTargetLabel: parent?.portableTargetLabel,
-        path: parent ? parent.path : sessionPath(ctx.worktree, ctx.directory),
+        directory: destination ? destination.directory : (parent?.directory ?? ctx.directory),
+        target: destination ? destination.target : parent ? parent.target : (input?.target ?? location?.target),
+        lastKnownTargetName: destination
+          ? destination.lastKnownTargetName
+          : parent
+            ? parent.lastKnownTargetName
+            : (input?.lastKnownTargetName ?? location?.lastKnownTargetName),
+        portableTargetLabel: destination ? undefined : parent?.portableTargetLabel,
+        path: destination ? destination.path : parent ? parent.path : sessionPath(ctx.worktree, ctx.directory),
         title: input?.title,
         agent: input?.agent,
         model: input?.model,
@@ -756,7 +772,11 @@ const layer: Layer.Layer<
         permission: input?.permission,
         permissionBoundary: input?.permissionBoundary,
         approvalMode: input?.approvalMode ?? parent?.approvalMode,
-        workspaceID: parent ? parent.workspaceID : (input?.workspaceID ?? workspace),
+        workspaceID: destination
+          ? destination.workspaceID
+          : parent
+            ? parent.workspaceID
+            : (input?.workspaceID ?? workspace),
       })
     })
 
