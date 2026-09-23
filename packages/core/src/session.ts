@@ -377,6 +377,23 @@ const layer = Layer.effect(
       const activation = yield* activateCatalog(session, location, true)
       if (activation.status === "unavailable") return yield* unavailable()
     })
+    // Drop the per-Session runtime cache (controller-local catalog snapshot included)
+    // so the next provider turn and /context inspection re-read the Target registry.
+    // Invalidation is a cheap in-process Ref clear; the registry itself is only loaded
+    // lazily by the renderer and never here.
+    const invalidateRuntimeContext = (sessionID: SessionSchema.ID, location: Location.Ref) =>
+      Effect.gen(function* () {
+        const runtime = yield* RuntimeContext.Service
+        yield* runtime.invalidate(sessionID)
+      }).pipe(
+        Effect.provide(locations.get(location)),
+        Effect.exit,
+        Effect.flatMap((exit) =>
+          Exit.isSuccess(exit)
+            ? Effect.void
+            : Effect.logWarning("Runtime context invalidation failed", { sessionID, cause: exit.cause }),
+        ),
+      )
     const runtimeBlockers = Effect.fn("V2Session.runtimeLocationBlockers")(function* (sessionID: SessionSchema.ID) {
       if (!(yield* store.get(sessionID))) return yield* new NotFoundError({ sessionID })
       const blockers: string[] = []
@@ -995,6 +1012,7 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             const location = yield* requireLocation(sessionID)
             const session = yield* result.get(sessionID)
+            yield* invalidateRuntimeContext(sessionID, location)
             return yield* activateCatalog(session, location, true)
           }),
         ),
@@ -1007,6 +1025,7 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             const location = yield* requireLocation(sessionID)
             const session = yield* result.get(sessionID)
+            yield* invalidateRuntimeContext(sessionID, location)
             const activation = yield* activateCatalog(session, location, true)
             if (activation.status === "unavailable")
               return yield* new OperationUnavailableError({ operation: "modelContext" })

@@ -1,6 +1,6 @@
 export * as RuntimeContextBuiltIns from "./builtins"
 
-import { DateTime, Effect, Layer } from "effect"
+import { DateTime, Effect, Exit, Layer } from "effect"
 import { ModelContext } from "@opencode-ai/schema/model-context"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
@@ -8,7 +8,10 @@ import { InstructionContext, render } from "../instruction-context"
 import { Location } from "../location"
 import { Reference } from "../reference"
 import { SessionSkillCatalog } from "../session/skill-catalog"
+import { SessionStore } from "../session/store"
+import { TargetRegistry } from "../target-registry"
 import { RuntimeContext } from "./index"
+import { renderAvailableTargets } from "./available-targets"
 
 export const skillsPart = {
   key: "skills",
@@ -24,6 +27,8 @@ const builtIns = Layer.effectDiscard(
     const location = yield* Location.Service
     const instructions = yield* InstructionContext.Service
     const references = yield* Reference.Service
+    const targets = yield* TargetRegistry.Service
+    const sessions = yield* SessionStore.Service
 
     yield* runtime.register({
       key: "environment",
@@ -90,13 +95,42 @@ const builtIns = Layer.effectDiscard(
       enabled: () => true,
       render: (sessionID) => SessionSkillCatalog.guidance(db, sessionID),
     })
+
+    yield* runtime.register({
+      key: "targets",
+      label: "Available targets",
+      tag: "<available-targets>",
+      order: 5,
+      cache: "session",
+      enabled: () => true,
+      render: (sessionID) =>
+        Effect.gen(function* () {
+          const info = yield* sessions.get(sessionID)
+          const isChild = info?.parentID !== undefined
+          const snapshot = yield* Effect.promise(() => targets.load()).pipe(
+            Effect.exit,
+            Effect.map((exit) =>
+              Exit.isSuccess(exit) ? ({ kind: "ok", snapshot: exit.value } as const) : ({ kind: "error" } as const),
+            ),
+          )
+          return renderAvailableTargets(snapshot, isChild)
+        }),
+    })
   }),
 )
 
 export const node = makeLocationNode({
   name: "runtime-context-builtins",
   layer: builtIns,
-  deps: [Database.node, Location.node, InstructionContext.node, Reference.node, RuntimeContext.node],
+  deps: [
+    Database.node,
+    Location.node,
+    InstructionContext.node,
+    Reference.node,
+    RuntimeContext.node,
+    TargetRegistry.node,
+    SessionStore.node,
+  ],
 })
 
 export function buildEnvironment(location: Location.Interface) {
