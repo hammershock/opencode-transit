@@ -466,7 +466,6 @@ export const TaskTool = Tool.define(
     const fs = yield* FSUtil.Service
     const locations = yield* LocationServiceMap.Service
     const locationAccess = yield* SessionLocationAccess.Service
-    const instances = Option.getOrUndefined(yield* Effect.serviceOption(InstanceStore.Service))
 
     const resolveParentPolicy = Effect.fn("TaskTool.resolveParentPolicy")(function* (
       sessionID: SessionID,
@@ -605,6 +604,11 @@ export const TaskTool = Tool.define(
         })
       }
 
+      // InstanceStore is resolved at execution time: the tool catalog is built
+      // before the global InstanceStore layer is wired into the runtime, so
+      // resolving it here (from the session-loop context) is what makes
+      // changed-location placement work in production.
+      const instances = Option.getOrUndefined(yield* Effect.serviceOption(InstanceStore.Service))
       if (planned.changedPlacement && !instances)
         return yield* Effect.fail(
           new Error("InstanceStore is unavailable; cannot place a child at a different location"),
