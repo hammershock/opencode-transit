@@ -309,6 +309,104 @@ test.each([
   }
 })
 
+test("a resolved Session keeps prompt input responsive while context activation is pending", async () => {
+  const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
+  const core = await import("@opentui/core")
+  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  const events = createEventSource()
+  const session = {
+    id: "dummy",
+    title: "Pending context activation",
+    slug: "dummy",
+    projectID: "project",
+    directory,
+    version: "0.0.0-test",
+    time: { created: 0, updated: 0 },
+  }
+  let activationStarted!: () => void
+  const activating = new Promise<void>((resolve) => {
+    activationStarted = resolve
+  })
+  const calls = createFetch(async (url) => {
+    if (url.pathname === "/api/target")
+      return json({ path: "/tmp/opencode/targets.jsonc", revision: "test", targets: [], diagnostics: [], valid: true })
+    if (url.pathname === "/config/providers")
+      return json({
+        providers: [{ id: "test", name: "Test", source: "custom", env: [], options: {}, models: {} }],
+        default: {},
+      })
+    if (url.pathname === "/api/session/dummy")
+      return json({
+        data: {
+          id: "dummy",
+          projectID: "project",
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 0, updated: 0 },
+          title: "Pending context activation",
+          location: { directory },
+          agent: "build",
+        },
+      })
+    if (url.pathname === "/api/session/dummy/message") return json({ data: [], cursor: {} })
+    if (url.pathname === "/session/dummy") return json(session)
+    if (url.pathname === "/session/dummy/message") return json([])
+    if (url.pathname === "/session/dummy/todo") return json([])
+    if (url.pathname === "/session/dummy/diff") return json([])
+    if (url.pathname === "/api/session/dummy/target-resolution")
+      return json({ status: "resolved", location: { directory } })
+    if (url.pathname === "/api/session/dummy/activate") {
+      activationStarted()
+      return new Promise<Response>(() => {})
+    }
+    if (url.pathname === "/api/session/dummy/model-context") return json({})
+    if (url.pathname === "/session") return json([session])
+    return undefined
+  })
+  let started!: () => void
+  let disposeSlots = () => {}
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
+  })
+
+  try {
+    const { run } = await import("../src/app")
+    const task = Effect.runPromise(
+      run({
+        url: "http://test",
+        directory,
+        config: createTuiResolvedConfig({ plugin_enabled: {} }),
+        fetch: calls.fetch,
+        events: events.source,
+        args: { continue: true },
+        pluginHost: {
+          async start(input) {
+            disposeSlots = input.runtime.setupSlots(input.api).dispose
+            started()
+          },
+          async dispose() {
+            disposeSlots()
+          },
+        },
+      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+    )
+
+    await ready
+    await activating
+    const editor = await waitForEditor(setup)
+    await setup.mockInput.typeText("still responsive")
+    await waitForEditorText(setup, "still responsive")
+    setup.mockInput.pressKey("p", { ctrl: true })
+    await waitForFrame(setup, "Commands")
+
+    process.emit("SIGHUP")
+    await task
+  } finally {
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    mock.restore()
+  }
+})
+
 test("Ctrl+P opens the production Skill Manager without a model turn", async () => {
   const setup = await createTestRenderer({ width: 100, height: 44, useThread: false })
   const core = await import("@opentui/core")

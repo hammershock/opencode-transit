@@ -239,7 +239,6 @@ export function Session() {
   }
   const pluginRuntime = usePluginRuntime()
   const route = useRouteData("session")
-  const [locationAccessReady, setLocationAccessReady] = createSignal(route.accessMode === "read-only")
   const { navigate } = useRoute()
   const sync = useSync()
   const data = useData()
@@ -385,7 +384,7 @@ export function Session() {
   const visible = createMemo(() => !session()?.parentID && permissions().length === 0 && questions().length === 0)
   const readOnly = createMemo(() => route.accessMode === "read-only")
   const disabled = createMemo(
-    () => (!locationAccessReady() && !readOnly()) || permissions().length > 0 || questions().length > 0,
+    () => route.accessMode === undefined || permissions().length > 0 || questions().length > 0,
   )
 
   const pending = createMemo(() => {
@@ -479,6 +478,15 @@ export function Session() {
               if (editorDirectory) editor.reconnect(editorDirectory)
               return true
             })()
+      // A resolved Location owns prompt capability. The context refresh below is best-effort and must not gate input.
+      if (writable) {
+        navigate({ ...route, accessMode: "read-write", resolution: undefined })
+      }
+      await sync.session.sync(sessionID)
+      if (route.sessionID === sessionID && scroll) {
+        if (route.messageID) scroll.scrollChildIntoView(route.messageID)
+        else scroll.scrollBy(100_000)
+      }
       if (writable && activation.sessionID !== sessionID) {
         activation.sessionID = sessionID
         try {
@@ -514,15 +522,6 @@ export function Session() {
             duration: 5000,
           })
         }
-      }
-      if (writable) {
-        navigate({ ...route, accessMode: "read-write", resolution: undefined })
-        setLocationAccessReady(true)
-      }
-      await sync.session.sync(sessionID)
-      if (route.sessionID === sessionID && scroll) {
-        if (route.messageID) scroll.scrollChildIntoView(route.messageID)
-        else scroll.scrollBy(100_000)
       }
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
