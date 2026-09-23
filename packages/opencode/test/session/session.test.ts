@@ -428,11 +428,31 @@ describe("Session", () => {
       const permission = [
         { permission: "external_directory" as const, pattern: "/tmp/skill/*", action: "allow" as const },
       ]
-      const fork = yield* Effect.acquireRelease(
-        session.fork({ sessionID: created.id, permission }),
-        (info) => session.remove(info.id).pipe(Effect.ignore),
+      const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id, permission }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
       )
       expect(fork.permission).toEqual(permission)
+    }),
+  )
+
+  it.instance("fork preserves raw rules and parent boundaries without adding derived grants", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const permission = [
+        { permission: "read" as const, pattern: "*.env", action: "deny" as const },
+        { permission: "external_directory" as const, pattern: "/historical/*", action: "allow" as const },
+      ]
+      const permissionBoundary = [[{ action: "bash", resource: "*", effect: "deny" as const }]]
+      const created = yield* Effect.acquireRelease(session.create({ permission, permissionBoundary }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+
+      expect(fork.permission).toEqual(permission)
+      expect(fork.permissionBoundary).toEqual(permissionBoundary)
+      expect(fork.permission).toHaveLength(2)
     }),
   )
 

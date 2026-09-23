@@ -13,6 +13,7 @@ import { WorkspaceID } from "../workspace-id"
 import { Location } from "../location"
 import { PermissionV1 } from "./permission"
 import { ApprovalMode } from "../approval-mode"
+import { SessionPolicy } from "../session-policy"
 
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
 
@@ -576,6 +577,7 @@ export const SessionInfo = Schema.Struct({
     archived: optional(Schema.Finite),
   }),
   permission: optional(PermissionV1.Ruleset),
+  permissionBoundary: optional(SessionPolicy.Boundary),
   subagentAccess: optional(SubagentAccess),
   revert: optional(SessionRevert),
 }).annotate({ identifier: "Session" })

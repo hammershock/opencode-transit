@@ -18,6 +18,7 @@ import { HarnessInstructions } from "@opencode-ai/core/harness/instructions"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { SessionLocationMutation } from "@opencode-ai/core/session/location-mutation"
 import { SessionActivity } from "@opencode-ai/core/session/activity"
+import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
 import { LocationEnvironmentAgentV2 } from "@opencode-ai/core/location-environment-agent-v2"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -50,6 +51,7 @@ const applicationServices = LayerNode.group([
   SessionLocationAccess.node,
   SessionLocationMutation.node,
   SessionActivity.node,
+  SessionPolicyAccess.node,
 ])
 
 export function createRoutes(password?: string) {

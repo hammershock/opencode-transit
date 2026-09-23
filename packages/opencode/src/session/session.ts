@@ -1,4 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { SessionPolicy } from "@opencode-ai/schema/session-policy"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Slug } from "@opencode-ai/core/util/slug"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
@@ -116,6 +117,7 @@ export function fromRow(row: SessionRow): Info {
     metadata: row.metadata ?? undefined,
     revert,
     permission: row.permission ? [...row.permission] : undefined,
+    permissionBoundary: row.permission_boundary?.map((rules) => rules.map((rule) => ({ ...rule }))),
     subagentAccess: row.subagent_access ?? undefined,
     time: {
       created: row.time_created,
@@ -160,6 +162,7 @@ export function toRow(info: Info) {
         }
       : null,
     permission: info.permission,
+    permission_boundary: info.permissionBoundary,
     subagent_access: info.subagentAccess ?? null,
     time_created: info.time.created,
     time_updated: info.time.updated,
@@ -255,6 +258,7 @@ export const Info = Schema.Struct({
   metadata: optional(Metadata),
   time: Time,
   permission: optional(PermissionV1.Ruleset),
+  permissionBoundary: optional(SessionPolicy.Boundary),
   subagentAccess: optional(SessionV1.SubagentAccess),
   revert: optional(Revert),
 }).annotate({ identifier: "Session" })
@@ -287,6 +291,7 @@ export const CreateInput = Schema.optional(
 )
 export type CreateInput = Types.DeepMutable<Schema.Schema.Type<typeof CreateInput>>
 export type CreateOptions = CreateInput & {
+  permissionBoundary?: SessionPolicy.Boundary
   target?: Location.Target
   lastKnownTargetName?: string
 }
@@ -441,12 +446,17 @@ export interface Interface {
     model?: Schema.Schema.Type<typeof Model>
     metadata?: typeof Metadata.Type
     permission?: PermissionV1.Ruleset
+    permissionBoundary?: SessionPolicy.Boundary
     approvalMode?: ApprovalMode.Mode
     workspaceID?: WorkspaceV2.ID
     target?: Location.Target
     lastKnownTargetName?: string
   }) => Effect.Effect<Info>
-  readonly fork: (input: { sessionID: SessionID; messageID?: MessageID; permission?: PermissionV1.Ruleset }) => Effect.Effect<Info, NotFound>
+  readonly fork: (input: {
+    sessionID: SessionID
+    messageID?: MessageID
+    permission?: PermissionV1.Ruleset
+  }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
@@ -542,6 +552,7 @@ const layer: Layer.Layer<
       metadata?: typeof Metadata.Type
       permission?: PermissionV1.Ruleset
       subagentAccess?: SessionV1.SubagentAccess
+      permissionBoundary?: SessionPolicy.Boundary
       approvalMode?: ApprovalMode.Mode
     }) {
       const ctx = yield* InstanceState.context
@@ -566,6 +577,7 @@ const layer: Layer.Layer<
         model: input.model,
         metadata: input.metadata,
         permission: input.permission ? [...input.permission] : undefined,
+        permissionBoundary: input.permissionBoundary?.map((rules) => rules.map((rule) => ({ ...rule }))),
         subagentAccess: input.subagentAccess,
         approvalMode: input.approvalMode ?? "normal",
         cost: 0,
@@ -718,6 +730,7 @@ const layer: Layer.Layer<
       model?: Schema.Schema.Type<typeof Model>
       metadata?: typeof Metadata.Type
       permission?: PermissionV1.Ruleset
+      permissionBoundary?: SessionPolicy.Boundary
       approvalMode?: ApprovalMode.Mode
       workspaceID?: WorkspaceV2.ID
       target?: Location.Target
@@ -741,6 +754,7 @@ const layer: Layer.Layer<
         model: input?.model,
         metadata: input?.metadata,
         permission: input?.permission,
+        permissionBoundary: input?.permissionBoundary,
         approvalMode: input?.approvalMode ?? parent?.approvalMode,
         workspaceID: parent ? parent.workspaceID : (input?.workspaceID ?? workspace),
       })
@@ -761,7 +775,8 @@ const layer: Layer.Layer<
         title,
         metadata: structuredClone(original.metadata),
         subagentAccess: structuredClone(original.subagentAccess),
-        permission: input.permission ? [...input.permission] : undefined,
+        permission: input.permission ?? original.permission,
+        permissionBoundary: original.permissionBoundary,
       })
       const msgs = yield* messages({ sessionID: input.sessionID })
       const idMap = new Map<string, MessageID>()

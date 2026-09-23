@@ -16,6 +16,7 @@ import { EventV2 } from "../../event"
 import { Location } from "../../location"
 import { ModelV2 } from "../../model"
 import { PermissionV2 } from "../../permission"
+import { ExecutionPolicy } from "../../permission/policy"
 import { ProviderV2 } from "../../provider"
 import { QuestionV2 } from "../../question"
 import { RuntimeContext } from "../../runtime-context"
@@ -95,6 +96,7 @@ const layer = Layer.effect(
     const llm = yield* LLMClient.Service
     const agents = yield* AgentV2.Service
     const tools = yield* ToolRegistry.Service
+    const policy = yield* ExecutionPolicy.Service
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
     const location = yield* Location.Service
@@ -209,7 +211,12 @@ const layer = Layer.effect(
       const entries = yield* SessionHistory.entriesForRunner(db, session.id)
       const context = entries.map((entry) => entry.message)
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
-      const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
+      const toolMaterialization = isLastStep
+        ? undefined
+        : yield* Effect.gen(function* () {
+            const snapshot = yield* policy.resolve(session.id, agent.id).pipe(Effect.orDie)
+            return yield* tools.materialize(snapshot.rules, snapshot.ceilings)
+          })
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const request = LLM.request({
         model,
@@ -463,6 +470,7 @@ export const node = makeLocationNode({
   service: Service,
   layer,
   deps: [
+    ExecutionPolicy.node,
     EventV2.node,
     llmClient,
     AgentV2.node,

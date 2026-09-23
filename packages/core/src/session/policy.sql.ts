@@ -2,6 +2,12 @@ import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core"
 import { SessionTable } from "./sql"
 import type { SessionSchema } from "./schema"
 
+/** Database-local controller identity; never part of Session export or sync. */
+export const SessionPolicyDeviceTable = sqliteTable("session_policy_device", {
+  id: integer().primaryKey(),
+  device_id: text().notNull(),
+})
+
 export const SessionPolicyReviewTable = sqliteTable(
   "session_policy_review",
   {

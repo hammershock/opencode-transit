@@ -4,6 +4,7 @@ import { makeLocationNode } from "./effect/app-node"
 import { Array, Context, Effect, Layer, Types } from "effect"
 import { Agent } from "@opencode-ai/schema/agent"
 import { State } from "./state"
+import type { Permission } from "@opencode-ai/schema/permission"
 
 export const ID = Agent.ID
 export type ID = typeof ID.Type
@@ -38,6 +39,10 @@ export interface Interface extends State.Transformable<Draft> {
   readonly resolve: (id?: ID | string) => Effect.Effect<Info | undefined>
   readonly select: (id?: ID | string) => Effect.Effect<Selection>
   readonly all: () => Effect.Effect<Info[]>
+  readonly permissionLayers: (
+    agent: Info,
+  ) => Effect.Effect<{ defaults: Permission.Ruleset; configured: Permission.Ruleset }>
+  readonly capturePermissionDefaults: (id: ID, rules: Permission.Ruleset) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/Agent") {}
@@ -45,6 +50,7 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/v2
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    const permissionDefaults = new Map<ID, Permission.Ruleset>()
     const state = State.create<Data, Draft>({
       initial: () => ({ agents: new Map() }),
       draft: (draft) => ({
@@ -61,6 +67,7 @@ const layer = Layer.effect(
         },
         remove: (id) => {
           draft.agents.delete(id)
+          permissionDefaults.delete(id)
         },
       }),
     })
@@ -102,6 +109,24 @@ const layer = Layer.effect(
       all: Effect.fn("AgentV2.all")(function* () {
         return Array.fromIterable(state.get().agents.values())
       }),
+      permissionLayers: Effect.fn("AgentV2.permissionLayers")(function* (agent) {
+        const defaults = permissionDefaults.get(agent.id) ?? []
+        // Replaced plugin rulesets are configured policy, not generated defaults.
+        const prefix = defaults.every((rule, index) => {
+          const current = agent.permissions[index]
+          return current?.action === rule.action && current.resource === rule.resource && current.effect === rule.effect
+        })
+        return prefix
+          ? { defaults, configured: agent.permissions.slice(defaults.length) }
+          : { defaults: [], configured: agent.permissions }
+      }),
+      capturePermissionDefaults: (id, rules) =>
+        Effect.sync(() => {
+          permissionDefaults.set(
+            id,
+            rules.map((rule) => ({ ...rule })),
+          )
+        }),
     })
   }),
 )

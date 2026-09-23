@@ -21,6 +21,7 @@ import { LocationProcess } from "./location-process"
 import { LocationFormatter } from "./location-formatter"
 import { LocationServiceMap } from "./location-service-map"
 import { PermissionV2 } from "./permission"
+import { ExecutionPolicy } from "./permission/policy"
 import { PluginV2 } from "./plugin"
 import { PluginInternal } from "./plugin/internal"
 import { Policy } from "./policy"
@@ -74,6 +75,7 @@ export const locationServices = LayerNode.group([
   LocationFormatter.node,
   FileMutation.node,
   PermissionV2.node,
+  ExecutionPolicy.node,
   ToolOutputStore.node,
   ToolRegistry.node,
   ToolRegistry.toolsNode,

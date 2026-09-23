@@ -130,6 +130,42 @@ it.live("accepts and drops individual allows, preserving order and original data
   }),
 )
 
+it.live("foreign reviews do not invalidate an unchanged local activation", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture
+    yield* f.policy.review(f.request)
+    const foreign = f.make("device-b")
+    const pending = yield* foreign.inspect(f.sessionID)
+    expect(pending.status).toBe("pending")
+    yield* foreign.review({
+      ...f.request,
+      requestID: "review-device-b",
+      expectedRevision: pending.revision,
+      legacyDigest: pending.legacyDigest,
+      locationRevision: pending.locationRevision,
+      location: pending.location,
+    })
+
+    expect((yield* f.policy.inspect(f.sessionID)).status).toBe("reviewed")
+    expect((yield* foreign.inspect(f.sessionID)).status).toBe("reviewed")
+    expect((yield* f.policy.inspect(f.sessionID)).review?.deviceID).toBe("device-a")
+    expect((yield* foreign.inspect(f.sessionID)).review?.deviceID).toBe("device-b")
+  }),
+)
+
+it.live("review evidence without a basis epoch stays conservative", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture
+    yield* f.policy.review(f.request)
+    const row = yield* f.db.select().from(SessionPolicyReviewTable).get()
+    if (!row || typeof row.data !== "object" || row.data === null) throw new Error("Missing review fixture")
+    const { basisRevision: _, ...legacy } = row.data as SessionPolicy.Review & { basisRevision?: number }
+    yield* f.db.update(SessionPolicyReviewTable).set({ data: legacy }).run()
+
+    expect((yield* f.policy.inspect(f.sessionID)).status).toBe("pending")
+  }),
+)
+
 it.live("exact review retries return the original receipt and conflicting reuse fails", () =>
   Effect.gen(function* () {
     const f = yield* fixture

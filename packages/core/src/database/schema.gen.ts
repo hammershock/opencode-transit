@@ -34,6 +34,12 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_policy_device\` (
+          \`id\` integer PRIMARY KEY,
+          \`device_id\` text NOT NULL
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_policy_review\` (
           \`session_id\` text NOT NULL,
           \`device_id\` text NOT NULL,
@@ -243,6 +249,8 @@ export default {
           \`revert\` text,
           \`permission\` text,
           \`permission_revision\` integer DEFAULT 0 NOT NULL,
+          \`permission_basis_revision\` integer DEFAULT 0 NOT NULL,
+          \`permission_boundary\` text,
           \`subagent_access\` text,
           \`agent\` text,
           \`model\` text,

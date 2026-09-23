@@ -1,4 +1,7 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
+import { PermissionContext } from "@/agent/permission-context"
+import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { TargetRegistry } from "@opencode-ai/core/target-registry"
@@ -95,6 +98,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
+    const policies = yield* PermissionContext.Service
     const plugin = yield* Plugin.Service
     const subagents = Option.getOrUndefined(yield* Effect.serviceOption(Subagent.Service))
     const truncate = yield* Truncate.Service
@@ -278,6 +282,9 @@ const layer = Layer.effect(
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
+      const policy = input.sessionID
+        ? yield* policies.resolve(input.sessionID, input.agent.id ?? input.agent.name)
+        : undefined
       const isSubagent = input.sessionID
         ? yield* session.get(input.sessionID).pipe(
             Effect.map((info) => info.parentID != null),
@@ -285,6 +292,8 @@ const layer = Layer.effect(
           )
         : Effect.succeed(false)
       const filtered = (yield* all()).filter((tool) => {
+        const action = ["write", "apply_patch"].includes(tool.id) ? "edit" : tool.id
+        if (policy && ExecutionPolicy.whollyDisabled(policy, action)) return false
         if (tool.id === SlashCommandTool.id && isSubagent) return false
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
@@ -438,6 +447,8 @@ export const node = LayerNode.make({
   service: Service,
   layer,
   deps: [
+    SessionPolicyAccess.node,
+    PermissionContext.node,
     Config.node,
     Plugin.node,
     Question.node,

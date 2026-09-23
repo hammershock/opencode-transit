@@ -27,6 +27,7 @@ import { ToolRegistry as LocationToolRegistry } from "@opencode-ai/core/tool/reg
 import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { AgentV2 } from "@opencode-ai/core/agent"
+import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
 import { ToolCallPart } from "@opencode-ai/llm"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 
@@ -115,6 +116,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   messages: SessionV1.WithParts[]
   promptOps: TaskPromptOps
   locationTools?: LocationToolRegistry.Materialization
+  policy?: ExecutionPolicy.Snapshot
 }) {
   const tools: Record<string, AITool> = {}
   const run = yield* EffectBridge.make()
@@ -132,7 +134,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     messageID: input.processor.message.id,
     callID: options.toolCallId,
     extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck, promptOps: input.promptOps },
-    agent: input.agent.name,
+    agent: input.agent.id ?? input.agent.name,
     messages: input.messages,
     metadata: (val) =>
       input.processor.updateToolCall(options.toolCallId, (match) => {
@@ -152,6 +154,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       permission
         .ask({
           ...req,
+          agent: input.agent.id ?? input.agent.name,
           sessionID: input.session.id,
           tool: { messageID: input.processor.message.id, callID: options.toolCallId },
           ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
@@ -221,7 +224,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             input
               .locationTools!.settle({
                 sessionID: SessionSchema.ID.make(input.session.id),
-                agent: AgentV2.ID.make(input.agent.name),
+                agent: AgentV2.ID.make(input.agent.id ?? input.agent.name),
                 assistantMessageID: SessionMessage.ID.make(input.processor.message.id),
                 call: ToolCallPart.make({ id: options.toolCallId, name: definition.name, input: args }),
               })
@@ -460,7 +463,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     })
   }
 
-  if (flags.experimentalCodeMode) return tools
+  if (flags.experimentalCodeMode) return visible(tools, input.policy)
 
   for (const [key, entry] of Object.entries(yield* mcp.tools())) {
     const item = McpCatalog.convertTool(entry.def, entry.client, entry.timeout)
@@ -565,7 +568,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     tools[key] = item
   }
 
-  return tools
+  return visible(tools, input.policy)
 })
 
 function toRecord(value: unknown) {
@@ -676,6 +679,7 @@ export const resolveDefinitions = Effect.fn("SessionTools.resolveDefinitions")(f
   permission?: import("@opencode-ai/core/v1/permission").PermissionV1.Ruleset
   sessionID: SessionID
   locationTools?: LocationToolRegistry.Materialization
+  policy?: ExecutionPolicy.Snapshot
 }) {
   const registry = yield* ToolRegistry.Service
   const mcp = yield* MCP.Service
@@ -730,7 +734,22 @@ export const resolveDefinitions = Effect.fn("SessionTools.resolveDefinitions")(f
     }
   }
 
-  return [...tools.values()]
+  return [...tools.values()].filter(
+    (tool) => !input.policy || !ExecutionPolicy.whollyDisabled(input.policy, permissionAction(tool.name)),
+  )
 })
+
+function permissionAction(name: string) {
+  if (["edit", "write", "apply_patch"].includes(name)) return "edit"
+  if (Object.values(MCP_RESOURCE_TOOLS).some((value) => value === name)) return "read"
+  return name
+}
+
+function visible<T>(tools: Record<string, T>, policy?: ExecutionPolicy.Snapshot) {
+  if (!policy) return tools
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !ExecutionPolicy.whollyDisabled(policy, permissionAction(name))),
+  )
+}
 
 export * as SessionTools from "./tools"
