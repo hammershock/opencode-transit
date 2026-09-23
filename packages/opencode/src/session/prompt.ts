@@ -192,6 +192,7 @@ const layer = Layer.effect(
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
+        cancelRunner: (sessionID: SessionID) => state.cancelRunner(sessionID),
         resolvePromptParts: (template: string) => resolvePromptParts(template),
         prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
       } satisfies TaskPromptOps

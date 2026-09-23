@@ -208,6 +208,7 @@ function stubOps(opts?: {
 }): TaskPromptOps {
   return {
     cancel: () => Effect.void,
+    cancelRunner: () => Effect.void,
     resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
     prompt: (input) =>
       Effect.sync(() => {
@@ -1007,6 +1008,7 @@ describe("tool.task", () => {
           Effect.sync(() => {
             cancelled.resolve(sessionID)
           }),
+        cancelRunner: () => Effect.void,
         resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
         prompt: (input) =>
           Effect.promise(() => {
@@ -1308,6 +1310,7 @@ describe("tool.task", () => {
       const published = yield* Deferred.make<Record<string, unknown>>()
       const promptOps: TaskPromptOps = {
         cancel: () => Effect.void,
+        cancelRunner: () => Effect.void,
         resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
         prompt: (input) => Deferred.succeed(ready, undefined).pipe(Effect.flatMap(() => Effect.never)),
       }
@@ -1362,6 +1365,7 @@ describe("tool.task", () => {
       let runs = 0
       const promptOps: TaskPromptOps = {
         cancel: () => Effect.void,
+        cancelRunner: () => Effect.void,
         resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
         prompt: (input) => {
           if (input.sessionID === chat.id) {
@@ -1745,6 +1749,10 @@ describe("tool.task", () => {
           extra: {
             promptOps: {
               ...stubOps(),
+              // The job interruption must only stop the child runner. Calling
+              // the full cancel path here would close this same job twice.
+              cancel: (sessionID) => runState.cancel(sessionID),
+              cancelRunner: (sessionID) => runState.cancelRunner(sessionID),
               prompt: () => Effect.never,
             } satisfies TaskPromptOps,
           },
@@ -1754,7 +1762,7 @@ describe("tool.task", () => {
         },
       )
 
-      yield* runState.cancel(chat.id)
+      yield* runState.cancel(chat.id).pipe(Effect.timeout("2 seconds"))
       const waited = yield* jobs.wait({ id: result.metadata.sessionId, timeout: 1_000 })
       expect(waited.timedOut).toBe(false)
       expect(waited.info?.status).toBe("cancelled")

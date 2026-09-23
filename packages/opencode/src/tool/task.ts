@@ -20,6 +20,7 @@ import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
+  cancelRunner(sessionID: SessionID): Effect.Effect<void>
   resolvePromptParts(template: string): Effect.Effect<SessionPrompt.PromptInput["parts"]>
   prompt(input: SessionPrompt.PromptInput): Effect.Effect<SessionV1.WithParts>
 }
@@ -339,7 +340,7 @@ export const TaskTool = Tool.define(
           }),
           notify(nextSession.id),
         ]),
-        run: runTask().pipe(Effect.onInterrupt(() => ops.cancel(nextSession.id))),
+        run: runTask().pipe(Effect.onInterrupt(() => ops.cancelRunner(nextSession.id))),
       })
 
       function backgroundResult() {
