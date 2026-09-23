@@ -52,6 +52,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import { RuntimeContext } from "@opencode-ai/core/runtime-context"
 import { AgentV2 } from "@opencode-ai/core/agent"
+import { PluginV2 } from "@opencode-ai/core/plugin"
 import { PermissionContext } from "@/agent/permission-context"
 import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -1175,6 +1176,8 @@ const layer = Layer.effect(
         // Tool materializations retain registration identities and permission services from this context.
         // Keep the Location lease for the whole loop so the LayerMap TTL cannot dispose them mid-turn.
         const locationContext = yield* Layer.build(locationLayer)
+        // Fresh in-process runs can start before the Core Agent plugins finish registering `build`.
+        yield* Context.get(locationContext, PluginV2.Service).wait(PluginV2.INTERNAL_READY_ID)
         const locationTools = Context.get(locationContext, LocationToolRegistry.Service)
         const locationPolicy = Context.get(locationContext, ExecutionPolicy.Service)
         const locationRegistry = registry
