@@ -190,6 +190,28 @@ describe("PermissionV2", () => {
     }),
   )
 
+  it.effect("auto approval bypasses asks but preserves explicit denies", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ approval_mode: "auto" })
+        .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+      const service = yield* PermissionV2.Service
+
+      expect(yield* service.ask(assertion())).toMatchObject({ effect: "allow" })
+      yield* service.assert(assertion())
+      expect(yield* service.list()).toEqual([])
+
+      yield* setRules([{ action: "read", resource: "*", effect: "deny" }])
+      expect(yield* service.ask(assertion())).toMatchObject({ effect: "deny" })
+      expect(yield* service.assert(assertion()).pipe(Effect.flip)).toBeInstanceOf(PermissionV2.BlockedError)
+    }),
+  )
+
   it.effect("allows managed output reads without granting external directory access", () =>
     Effect.gen(function* () {
       yield* setup([

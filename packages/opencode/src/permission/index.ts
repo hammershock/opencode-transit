@@ -8,11 +8,14 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { PermissionNative } from "./native"
+import type { ApprovalMode } from "@opencode-ai/schema/approval-mode"
 
 export const Event = PermissionV1.Event
 
+type AskInput = PermissionV1.AskInput & { agent?: string; approvalMode?: ApprovalMode.Mode }
+
 export interface Interface {
-  readonly ask: (input: PermissionV1.AskInput & { agent?: string }) => Effect.Effect<void, PermissionV1.Error>
+  readonly ask: (input: AskInput) => Effect.Effect<void, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
 }

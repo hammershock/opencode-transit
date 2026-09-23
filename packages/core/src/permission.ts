@@ -150,7 +150,10 @@ const layer = Layer.effect(
     ) {
       const session = yield* sessions.get(sessionID)
       if (!session) return yield* new SessionV2.NotFoundError({ sessionID })
-      return yield* policy.resolve(sessionID, agentID ?? session.agent)
+      return {
+        approvalMode: session.approvalMode ?? "normal",
+        policy: yield* policy.resolve(sessionID, agentID ?? session.agent),
+      }
     })
 
     function denied(input: AssertInput, snapshot: ExecutionPolicy.Snapshot) {
@@ -162,9 +165,14 @@ const layer = Layer.effect(
     }
 
     const evaluateInput = EffectRuntime.fnUntraced(function* (input: AssertInput) {
-      const rules = yield* configured(input.sessionID, input.agent)
-      if (denied(input, rules)) return { effect: "deny" as const, rules: [...rules.rules, ...rules.ceilings.flat()] }
-      const all = [...rules.rules, ...(yield* savedRules())]
+      const config = yield* configured(input.sessionID, input.agent)
+      if (denied(input, config.policy))
+        return {
+          effect: "deny" as const,
+          rules: [...config.policy.rules, ...config.policy.ceilings.flat()],
+        }
+      if (config.approvalMode === "auto") return { effect: "allow" as const, rules: config.policy.rules }
+      const all = [...config.policy.rules, ...(yield* savedRules())]
       const effects = input.resources.map((resource) => evaluate(input.action, resource, all).effect)
       const effect: Permission.Effect = effects.includes("deny") ? "deny" : effects.includes("ask") ? "ask" : "allow"
       return { effect, rules: all }
@@ -258,7 +266,7 @@ const layer = Layer.effect(
           const current = yield* configured(existing.request.sessionID, existing.agent).pipe(
             EffectRuntime.catchTag("Session.NotFoundError", () => new NotFoundError({ requestID: input.requestID })),
           )
-          if (denied(existing.request, current)) {
+          if (denied(existing.request, current.policy)) {
             yield* events.publish(Event.Replied, {
               sessionID: existing.request.sessionID,
               requestID: input.requestID,
@@ -267,7 +275,7 @@ const layer = Layer.effect(
             pending.delete(input.requestID)
             yield* Deferred.fail(
               existing.deferred,
-              new BlockedError({ rules: [...current.rules, ...current.ceilings.flat()] }),
+              new BlockedError({ rules: [...current.policy.rules, ...current.policy.ceilings.flat()] }),
             )
             return
           }
@@ -301,12 +309,12 @@ const layer = Layer.effect(
           for (const [id, item] of pending) {
             if (existing.remember === "runtime" && item.request.sessionID !== existing.request.sessionID) continue
             const input = { ...item.request }
-            const rules = yield* configured(item.request.sessionID, item.agent).pipe(
+            const config = yield* configured(item.request.sessionID, item.agent).pipe(
               EffectRuntime.catchTag("Session.NotFoundError", () => EffectRuntime.succeed(undefined)),
             )
-            if (!rules) continue
-            if (denied(input, rules)) continue
-            const effective = [...rules.rules, ...rememberedRules]
+            if (!config) continue
+            if (denied(input, config.policy)) continue
+            const effective = [...config.policy.rules, ...rememberedRules]
             if (
               !item.request.resources.every(
                 (resource) => evaluate(item.request.action, resource, effective).effect === "allow",

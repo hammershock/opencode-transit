@@ -120,10 +120,10 @@ const list = () =>
     return yield* permission.list()
   })
 
-const createSession = (title = "permission") =>
+const createSession = (input: { title?: string; approvalMode?: "normal" | "auto" } = {}) =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
-    return (yield* sessions.create({ title })).id
+    return (yield* sessions.create({ title: input.title ?? "permission", approvalMode: input.approvalMode })).id
   })
 
 // fromConfig tests
@@ -738,6 +738,42 @@ it.instance(
       yield* Fiber.await(fiber)
     }),
   { git: true, config: { permission: { bash: "ask" } } },
+)
+
+it.instance(
+  "ask - auto approval resolves ask without creating a pending request",
+  () =>
+    Effect.gen(function* () {
+      yield* ask({
+        sessionID: yield* createSession({ approvalMode: "auto" }),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      })
+      expect(yield* list()).toEqual([])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - auto approval preserves explicit deny",
+  () =>
+    Effect.gen(function* () {
+      const error = yield* fail(
+        ask({
+          sessionID: yield* createSession({ approvalMode: "auto" }),
+          permission: "bash",
+          patterns: ["rm -rf /"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "*", action: "allow" }],
+        }),
+      )
+      expect(error).toBeInstanceOf(PermissionV1.DeniedError)
+    }),
+  { git: true, config: { permission: { bash: "deny" } } },
 )
 
 it.instance(
