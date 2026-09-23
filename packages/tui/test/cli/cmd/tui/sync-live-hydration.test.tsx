@@ -175,6 +175,42 @@ test("session hydration restores pending V2 interactions", async () => {
   }
 })
 
+test("a missed legacy permission event is recovered while the session is working", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const permission = {
+    id: "per_legacy_missed",
+    sessionID,
+    permission: "external_directory",
+    patterns: ["/tmp/outside/*"],
+    always: ["/tmp/outside/*"],
+    metadata: {},
+  }
+  let permissionLists = 0
+  const running = { ...assistant, time: { created: 1 } }
+  const { app, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json({ ...session, approvalMode: "normal" })
+    if (url.pathname === `/session/${sessionID}/message`) return json([{ info: running, parts: [] }])
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    if (url.pathname === "/permission") {
+      permissionLists++
+      return json(permissionLists === 1 ? [] : [permission])
+    }
+    return undefined
+  }, tmp.path)
+
+  try {
+    await sync.session.sync(sessionID)
+    expect(sync.data.permission[sessionID]).toEqual([])
+
+    await wait(() => sync.data.permission[sessionID]?.some((request) => request.id === permission.id), 3_000)
+    expect(permissionLists).toBeGreaterThanOrEqual(2)
+    expect(sync.data.permission[sessionID]).toEqual([expect.objectContaining({ id: permission.id })])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("resolved V2 interactions are not resurrected by stale hydration", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")

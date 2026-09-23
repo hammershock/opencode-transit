@@ -6,11 +6,14 @@ import { Deferred, Effect, Layer, Context } from "effect"
 import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import type { ApprovalMode } from "@opencode-ai/schema/approval-mode"
 
 export const Event = PermissionV1.Event
 
+type AskInput = PermissionV1.AskInput & { approvalMode?: ApprovalMode.Mode }
+
 export interface Interface {
-  readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
+  readonly ask: (input: AskInput) => Effect.Effect<void, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
 }
@@ -64,9 +67,9 @@ const layer = Layer.effect(
       }),
     )
 
-    const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
+    const ask = Effect.fn("Permission.ask")(function* (input: AskInput) {
       const { approved, pending } = yield* InstanceState.get(state)
-      const { ruleset, ...request } = input
+      const { ruleset, approvalMode, ...request } = input
       let needsAsk = false
 
       for (const pattern of request.patterns) {
@@ -82,6 +85,7 @@ const layer = Layer.effect(
       }
 
       if (!needsAsk) return
+      if (approvalMode === "auto") return
 
       const id = request.id ?? PermissionV1.ID.ascending()
       const info: PermissionV1.Request = {

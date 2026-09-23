@@ -200,7 +200,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
           try: () =>
             createCliRenderer({
               externalOutputMode: "passthrough",
-              targetFps: 60,
+              targetFps: 30,
               gatherStats: false,
               exitOnCtrlC: false,
               useKittyKeyboard: {},
