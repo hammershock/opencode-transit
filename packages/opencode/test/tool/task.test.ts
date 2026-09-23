@@ -1005,7 +1005,9 @@ describe("tool.task", () => {
       const failure = Cause.squash(exit.cause)
       expect(failure).toBeInstanceOf(Error)
       if (!(failure instanceof Error)) throw new Error("expected Error defect")
-      expect(failure.message).toBe(`Subagent failed (task_id: ${child?.id}): Network connection lost`)
+      expect(failure.message).toContain(`Task error (task_id: ${child?.id},`)
+      expect(failure.message).toContain("Network connection lost")
+      expect(failure.message).toContain("phase: unknown")
     }),
   )
 
@@ -1047,9 +1049,8 @@ describe("tool.task", () => {
       const failure = Cause.squash(exit.cause)
       expect(failure).toBeInstanceOf(Error)
       if (!(failure instanceof Error)) throw new Error("expected Error defect")
-      expect(failure.message).toBe(
-        `Subagent failed (task_id: ${child?.id}): The user rejected permission to use this specific tool call.`,
-      )
+      expect(failure.message).toContain(`Task error (task_id: ${child?.id},`)
+      expect(failure.message).toContain("The user rejected permission to use this specific tool call.")
     }),
   )
 
@@ -1156,13 +1157,12 @@ describe("tool.task", () => {
     }),
   )
 
-  it.instance("rejects a task_id that does not exist without creating a child", () =>
+  it.instance("rejects an explicit missing task_id without creating a child", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
       const def = yield* tool.init()
-      const promptOps = stubOps({ text: "created" })
 
       const exit = yield* def
         .execute(
@@ -1177,7 +1177,7 @@ describe("tool.task", () => {
             messageID: assistant.id,
             agent: "build",
             abort: new AbortController().signal,
-            extra: { promptOps },
+            extra: { promptOps: stubOps() },
             messages: [],
             metadata: () => Effect.void,
             ask: () => Effect.void,
@@ -1186,8 +1186,10 @@ describe("tool.task", () => {
         .pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isSuccess(exit)) throw new Error("expected unknown task_id failure")
-      expect(Cause.squash(exit.cause)).toHaveProperty("code", "task_not_found")
+      if (Exit.isSuccess(exit)) throw new Error("expected task failure")
+      const error = Cause.squash(exit.cause)
+      expect(error).toHaveProperty("code", "task_not_found")
+      expect(error).toHaveProperty("message", "Cannot resume Task: task_id ses_missing was not found")
       expect(yield* sessions.children(chat.id)).toHaveLength(0)
     }),
   )
@@ -1370,6 +1372,58 @@ describe("tool.task", () => {
         .pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
+    }),
+  )
+
+  it.instance("cancellation retains the child ID, call correlation, model and observed duration", () =>
+    Effect.gen(function* () {
+      const jobs = yield* BackgroundJob.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const ready = yield* Deferred.make<void>()
+      const published = yield* Deferred.make<Record<string, unknown>>()
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) => Deferred.succeed(ready, undefined).pipe(Effect.flatMap(() => Effect.never)),
+      }
+      const fiber = yield* def
+        .execute(
+          { description: "inspect bug", prompt: "check cache", subagent_type: "general" },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID: "call-cancelled",
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: (input) => Deferred.succeed(published, input.metadata ?? {}).pipe(Effect.asVoid),
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.exit, Effect.forkChild)
+      yield* Deferred.await(ready)
+      const child = (yield* jobs.list()).find((job) => job.metadata?.parentSessionId === chat.id)
+      expect(child).toBeDefined()
+      if (!child) throw new Error("task job not found")
+      expect(yield* Deferred.await(published)).toMatchObject({
+        sessionId: child.id,
+        invocation: { callID: "call-cancelled" },
+      })
+      yield* jobs.cancel(child.id)
+      const exit = yield* Fiber.join(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) throw new Error("expected cancellation")
+      const error = Cause.squash(exit.cause)
+      expect(error).toBeInstanceOf(Error)
+      if (!(error instanceof Error)) throw new Error("expected Error")
+      expect(error.message).toContain(`Task cancelled (task_id: ${child.id}, call_id: call-cancelled,`)
+      expect(error.message).toContain("model:")
+      expect(error.message).toMatch(/elapsed_ms: \d+/)
+      expect(error.message).toContain("phase: unknown")
+      expect((yield* (yield* Session.Service).get(SessionID.make(child.id))).parentID).toBe(chat.id)
     }),
   )
 

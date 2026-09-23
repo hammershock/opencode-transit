@@ -128,6 +128,13 @@ function providerMeta(metadata: Record<string, any> | undefined) {
   return Object.keys(rest).length > 0 ? rest : undefined
 }
 
+function taskRecovery(part: SessionV1.ToolPart) {
+  if (part.tool !== "task" || !("metadata" in part.state)) return ""
+  const id = part.state.metadata?.sessionId
+  if (typeof id !== "string" || !/^ses[A-Za-z0-9_-]{0,125}$/.test(id)) return ""
+  return `\nTask session: task_id=${id}. Resume with a new Task call.`
+}
+
 export const toModelMessagesEffect = Effect.fnUntraced(function* (
   input: WithParts[],
   model: Provider.Model,
@@ -340,7 +347,7 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
                 state: "output-error",
                 toolCallId: part.callID,
                 input: part.state.input,
-                errorText: part.state.error,
+                errorText: part.state.error + taskRecovery(part),
                 ...(part.metadata?.providerExecuted ? { providerExecuted: true } : {}),
                 ...(differentModel ? {} : { callProviderMetadata: providerMeta(part.metadata) }),
               })
@@ -354,7 +361,7 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
               state: "output-error",
               toolCallId: part.callID,
               input: part.state.input,
-              errorText: "[Tool execution was interrupted]",
+              errorText: "[Tool execution was interrupted]" + taskRecovery(part),
               ...(part.metadata?.providerExecuted ? { providerExecuted: true } : {}),
               ...(differentModel ? {} : { callProviderMetadata: providerMeta(part.metadata) }),
             })

@@ -1259,6 +1259,80 @@ describe("session.message-v2.toModelMessage", () => {
     ])
   })
 
+  test("replays interrupted Task ID only for admitted child sessions", async () => {
+    const userID = "m-user"
+    const assistantID = "m-assistant"
+    const input: SessionV1.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [{ ...basePart(userID, "u1"), type: "text", text: "delegate" }] as SessionV1.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "tool",
+            callID: "task-running",
+            tool: "task",
+            state: {
+              status: "running",
+              input: { prompt: "inspect", subagent_type: "general" },
+              metadata: { sessionId: "ses_child", invocation: { callID: "task-running" } },
+              time: { start: 0 },
+            },
+          },
+          {
+            ...basePart(assistantID, "a2"),
+            type: "tool",
+            callID: "task-cancelled",
+            tool: "task",
+            state: {
+              status: "error",
+              input: { prompt: "inspect", subagent_type: "general" },
+              error: "Tool execution aborted",
+              metadata: { interrupted: true, sessionId: "ses_cancelled" },
+              time: { start: 0, end: 1 },
+            },
+          },
+          {
+            ...basePart(assistantID, "a3"),
+            type: "tool",
+            callID: "task-not-admitted",
+            tool: "task",
+            state: {
+              status: "error",
+              input: { prompt: "inspect", subagent_type: "general" },
+              error: "Task unavailable",
+              time: { start: 0, end: 1 },
+            },
+          },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    const result = await MessageV2.toModelMessages(input, model)
+    const tool = result.find((message) => message.role === "tool")
+    expect(tool).toBeDefined()
+    if (tool?.role !== "tool") throw new Error("tool message missing")
+    expect(tool.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolCallId: "task-running",
+          output: { type: "error-text", value: expect.stringContaining("task_id=ses_child") },
+        }),
+        expect.objectContaining({
+          toolCallId: "task-cancelled",
+          output: { type: "error-text", value: expect.stringContaining("task_id=ses_cancelled") },
+        }),
+        expect.objectContaining({
+          toolCallId: "task-not-admitted",
+          output: { type: "error-text", value: "Task unavailable" },
+        }),
+      ]),
+    )
+  })
+
   test("substitutes space for empty text between signed reasoning blocks", async () => {
     // Reproduces the bug pattern: [reasoning(sig), text(""), reasoning(sig), text(full)]
     const assistantID = "m-assistant"
