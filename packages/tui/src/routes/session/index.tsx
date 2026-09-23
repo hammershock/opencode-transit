@@ -299,6 +299,7 @@ export function Session() {
     () => new Map(canonicalProjection().map((item) => [item.message.id, item.parts] as const)),
   )
   const [renderLimit, setRenderLimit] = createSignal(SESSION_RENDER_MESSAGE_LIMIT)
+  const [historyState, setHistoryState] = createSignal<"loading" | "ready" | "error">("loading")
   const allMessages = createMemo(() => {
     const legacy = sync.data.message[route.sessionID] ?? []
     return mergeCanonicalSessionMessages(
@@ -440,6 +441,7 @@ export function Session() {
 
   createEffect(() => {
     const sessionID = route.sessionID
+    setHistoryState("loading")
     void (async () => {
       const previousWorkspace = untrack(() => project.workspace.current())
       const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
@@ -487,7 +489,16 @@ export function Session() {
       if (writable) {
         navigate({ ...route, accessMode: "read-write", resolution: undefined })
       }
-      await sync.session.sync(sessionID)
+      try {
+        await sync.session.sync(sessionID, { reconcile: true })
+      } catch (error) {
+        if (route.sessionID !== sessionID) return
+        setHistoryState("error")
+        toast.show({ message: errorMessage(error), variant: "error", duration: 5000 })
+        return
+      }
+      if (route.sessionID !== sessionID) return
+      setHistoryState("ready")
       if (route.sessionID === sessionID && scroll) {
         if (route.messageID) scroll.scrollChildIntoView(route.messageID)
         else scroll.scrollBy(100_000)
@@ -772,7 +783,7 @@ export function Session() {
             tools: ModelContextGeneration["tools"] | null
             model: { id: string; providerID: string; variant?: string } | null
             headers: Readonly<Record<string, string>> | null
-            compaction: { reason: "auto" | "manual"; summary: string; recent: string } | null
+            compaction: { reason: "auto" | "manual"; summary: string; recent: string; source?: "legacy" } | null
             subagentCatalog: ModelContextGeneration["subagentCatalog"] | null
             subagentGuidance: string | null
             subagentRefresh: ModelContextGeneration["subagentRefresh"]
@@ -1747,6 +1758,9 @@ export function Session() {
             <Show when={route.taskDescription}>
               <text fg={theme.textMuted}>Task invocation: {route.taskDescription}</text>
             </Show>
+            <Show when={!session()}>
+              <text fg={theme.textMuted}>Loading session…</text>
+            </Show>
             <Show when={session()}>
               <scrollbox
                 ref={(r) => {
@@ -1778,6 +1792,15 @@ export function Session() {
                 scrollAcceleration={scrollAcceleration()}
               >
                 <box height={1} />
+                <Show when={messageIDs().length === 0}>
+                  <text fg={historyState() === "error" ? theme.error : theme.textMuted}>
+                    {historyState() === "loading"
+                      ? "Loading transcript…"
+                      : historyState() === "error"
+                        ? "Could not load transcript. Reopen this session to retry."
+                        : "No messages yet."}
+                  </text>
+                </Show>
                 <For each={messageIDs()}>
                   {(messageID, index) => {
                     const message = createMemo(() => messagesByID().get(messageID))

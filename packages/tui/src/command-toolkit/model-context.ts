@@ -16,7 +16,7 @@ export type ModelContextGeneration = {
   tools?: ReadonlyArray<{ name: string; description: string; inputSchema: unknown }> | null
   model?: { id: string; providerID: string; variant?: string } | null
   headers?: Readonly<Record<string, string>> | null
-  compaction?: { reason: "auto" | "manual"; summary: string; recent: string } | null
+  compaction?: { reason: "auto" | "manual"; summary: string; recent: string; source?: "legacy" } | null
   subagentCatalog?: {
     revision: string
     activatedAt: string

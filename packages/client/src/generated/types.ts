@@ -1022,7 +1022,12 @@ export type SessionsModelContextOutput = {
   }>
   readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string } | null
   readonly headers: { readonly [x: string]: string } | null
-  readonly compaction: { readonly reason: "auto" | "manual"; readonly summary: string; readonly recent: string } | null
+  readonly compaction: {
+    readonly reason: "auto" | "manual"
+    readonly summary: string
+    readonly recent: string
+    readonly source?: "legacy" | null
+  } | null
   readonly subagentCatalog?: {
     readonly revision: string
     readonly activatedAt: string
