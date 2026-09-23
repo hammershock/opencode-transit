@@ -211,6 +211,130 @@ test("a missed legacy permission event is recovered while the session is working
   }
 })
 
+test.each(["working", "idle"] as const)(
+  "a missed task completion event is recovered from persisted messages while locally %s",
+  async (localStatus) => {
+    await using tmp = await tmpdir()
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const running = { ...assistant, time: localStatus === "working" ? { created: 1 } : { created: 1, completed: 2 } }
+    const completed = { ...assistant, time: { created: 1, completed: 2 }, finish: "stop" as const }
+    const task = (status: "running" | "completed") => ({
+      id: partID,
+      sessionID,
+      messageID,
+      type: "tool" as const,
+      tool: "task",
+      callID: "call_task",
+      state:
+        status === "running"
+          ? { status, input: {}, title: "subagent", metadata: {}, time: { start: 1 } }
+          : { status, input: {}, output: "done", title: "subagent", metadata: {}, time: { start: 1, end: 2 } },
+    })
+    let messageRequests = 0
+    const limits: string[] = []
+    const { app, sync } = await mount((url) => {
+      if (url.pathname === `/session/${sessionID}`) return json(session)
+      if (url.pathname === `/session/${sessionID}/message`) {
+        messageRequests++
+        limits.push(url.searchParams.get("limit") ?? "")
+        return json([
+          {
+            info: messageRequests === 1 ? running : completed,
+            parts: [task(messageRequests === 1 ? "running" : "completed")],
+          },
+        ])
+      }
+      if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`)
+        return json([])
+      if (url.pathname === "/session/status") return json({})
+      return undefined
+    }, tmp.path)
+
+    try {
+      await sync.session.sync(sessionID)
+      expect(sync.data.part[messageID][0]).toMatchObject({ state: { status: "running" } })
+
+      await wait(
+        () =>
+          sync.data.part[messageID]?.[0]?.type === "tool" && sync.data.part[messageID][0].state.status === "completed",
+        3_500,
+      )
+
+      expect(messageRequests).toBe(2)
+      expect(limits).toEqual(["100", "10"])
+      expect(sync.data.message[sessionID][0]).toMatchObject({ time: { completed: 2 } })
+      expect(sync.data.session_status[sessionID]).toEqual({ type: "idle" })
+    } finally {
+      app.renderer.destroy()
+    }
+  },
+)
+
+test("message reconciliation preserves a newer live completion event", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const running = { ...assistant, time: { created: 1 } }
+  const stale = {
+    id: partID,
+    sessionID,
+    messageID,
+    type: "tool" as const,
+    tool: "task",
+    callID: "call_task",
+    state: { status: "running" as const, input: {}, title: "subagent", metadata: {}, time: { start: 1 } },
+  }
+  let resolveReconciliation!: (response: Response) => void
+  const reconciliation = new Promise<Response>((resolve) => {
+    resolveReconciliation = resolve
+  })
+  let messageRequests = 0
+  const { app, emit, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json(session)
+    if (url.pathname === `/session/${sessionID}/message`) {
+      messageRequests++
+      if (messageRequests === 1) return json([{ info: running, parts: [stale] }])
+      return reconciliation
+    }
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    if (url.pathname === "/session/status") return json({})
+    return undefined
+  }, tmp.path)
+
+  try {
+    await sync.session.sync(sessionID)
+    await wait(() => messageRequests === 2, 3_500)
+    emit(
+      global({
+        id: "evt_task_completed",
+        type: "message.part.updated",
+        properties: {
+          sessionID,
+          time: 2,
+          part: {
+            ...stale,
+            state: {
+              status: "completed",
+              input: {},
+              output: "live completion",
+              title: "subagent",
+              metadata: {},
+              time: { start: 1, end: 2 },
+            },
+          },
+        },
+      }),
+    )
+    resolveReconciliation(json([{ info: running, parts: [stale] }]))
+
+    await wait(() => sync.data.session_status[sessionID]?.type === "idle")
+    expect(sync.data.part[messageID][0]).toMatchObject({
+      state: { status: "completed", output: "live completion" },
+    })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("resolved V2 interactions are not resurrected by stale hydration", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")
