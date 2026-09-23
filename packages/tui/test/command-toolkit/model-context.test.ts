@@ -151,6 +151,21 @@ const generation: ModelContextGeneration = {
 }
 
 describe("model context inspector", () => {
+  test("shows a legacy compaction summary without the V2 checkpoint wrapper", () => {
+    const options = modelContextOptions({
+      ...generation,
+      compaction: {
+        source: "legacy",
+        reason: "auto",
+        summary: "Earlier work summary",
+        recent: "",
+      },
+    })
+    const checkpoint = options.find((option) => option.title === "conversation-checkpoints")
+    expect(checkpoint?.footer).toBe("legacy summary · 20chars")
+    expect(checkpoint?.value.content).toBe("Earlier work summary")
+  })
+
   test("registers a trusted, read-only Session command", async () => {
     const registry = new CommandRegistry<ModelContextCommandContext>()
     registry.register(modelContextCommand)

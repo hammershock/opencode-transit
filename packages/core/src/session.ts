@@ -3,7 +3,7 @@ export * from "./session/schema"
 
 import { Cause, DateTime, Effect, Exit, Layer, Schema, Context, Stream } from "effect"
 import { ListAnchor } from "@opencode-ai/schema/session"
-import { and, asc, desc, eq, gt, like, lt, or, type SQL } from "drizzle-orm"
+import { and, asc, desc, eq, gt, like, lt, or, sql, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
 import { ModelV2 } from "./model"
@@ -14,7 +14,7 @@ import { PromptInput } from "@opencode-ai/schema/prompt-input"
 import { EventV2 } from "./event"
 import { Database } from "./database/database"
 import { SessionProjector } from "./session/projector"
-import { SessionMessageTable, SessionTable } from "./session/sql"
+import { MessageTable, PartTable, SessionMessageTable, SessionTable } from "./session/sql"
 import { SessionSchema } from "./session/schema"
 import { AbsolutePath, PositiveInt, RelativePath } from "./schema"
 import { AgentV2 } from "./agent"
@@ -186,7 +186,7 @@ export interface Interface {
       tools: ModelContext.Tools
       model: ModelV2.Ref | null
       headers: Readonly<Record<string, string>>
-      compaction: { reason: "auto" | "manual"; summary: string; recent: string } | null
+      compaction: { reason: "auto" | "manual"; summary: string; recent: string; source?: "legacy" } | null
     },
     NotFoundError
   >
@@ -862,7 +862,12 @@ const layer = Layer.effect(
         }).pipe(Effect.exit)
 
         const compactionRow = yield* db
-          .select({ id: SessionMessageTable.id, type: SessionMessageTable.type, data: SessionMessageTable.data })
+          .select({
+            id: SessionMessageTable.id,
+            type: SessionMessageTable.type,
+            data: SessionMessageTable.data,
+            time: SessionMessageTable.time_created,
+          })
           .from(SessionMessageTable)
           .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "compaction")))
           .orderBy(desc(SessionMessageTable.seq))
@@ -876,6 +881,54 @@ const layer = Layer.effect(
               type: compactionRow.type,
             }).valueOrUndefined
           : undefined
+        const legacyRow = yield* db
+          .select({
+            id: MessageTable.id,
+            auto: sql<number>`json_extract(${PartTable.data}, '$.auto')`,
+            time: MessageTable.time_created,
+          })
+          .from(MessageTable)
+          .innerJoin(
+            PartTable,
+            and(
+              eq(PartTable.session_id, MessageTable.session_id),
+              sql`${PartTable.message_id} = json_extract(${MessageTable.data}, '$.parentID')`,
+              sql`json_extract(${PartTable.data}, '$.type') = 'compaction'`,
+            ),
+          )
+          .where(
+            and(
+              eq(MessageTable.session_id, sessionID),
+              sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`,
+              sql`json_extract(${MessageTable.data}, '$.summary') = 1`,
+              sql`json_extract(${MessageTable.data}, '$.finish') IS NOT NULL`,
+              sql`json_extract(${MessageTable.data}, '$.error') IS NULL`,
+            ),
+          )
+          .orderBy(desc(MessageTable.time_created), desc(MessageTable.id))
+          .limit(1)
+          .get()
+          .pipe(Effect.orDie)
+        const legacyParts =
+          legacyRow && (!compactionRow || legacyRow.time > compactionRow.time)
+            ? yield* db
+                .select({ text: sql<string>`json_extract(${PartTable.data}, '$.text')` })
+                .from(PartTable)
+                .where(
+                  and(
+                    eq(PartTable.session_id, sessionID),
+                    eq(PartTable.message_id, legacyRow.id),
+                    sql`json_extract(${PartTable.data}, '$.type') = 'text'`,
+                  ),
+                )
+                .orderBy(asc(PartTable.id))
+                .all()
+                .pipe(Effect.orDie)
+            : []
+        const legacySummary = legacyParts
+          .map((part) => part.text.trim())
+          .filter(Boolean)
+          .join("\n\n")
 
         return {
           runtimeParts: Exit.isSuccess(contextAttempt) ? contextAttempt.value.runtimeParts : [],
@@ -891,13 +944,20 @@ const layer = Layer.effect(
             ...(session.parentID ? { "x-parent-session-id": session.parentID } : {}),
           },
           compaction:
-            compactionMessage && compactionMessage.type === "compaction"
+            legacyRow && legacySummary && (!compactionRow || legacyRow.time > compactionRow.time)
               ? {
-                  reason: compactionMessage.reason,
-                  summary: compactionMessage.summary,
-                  recent: compactionMessage.recent,
+                  reason: legacyRow.auto ? ("auto" as const) : ("manual" as const),
+                  summary: legacySummary,
+                  recent: "",
+                  source: "legacy" as const,
                 }
-              : null,
+              : compactionMessage && compactionMessage.type === "compaction"
+                ? {
+                    reason: compactionMessage.reason,
+                    summary: compactionMessage.summary,
+                    recent: compactionMessage.recent,
+                  }
+                : null,
         }
       }),
       skillView: Effect.fn("V2Session.skillView")(function* (sessionID) {

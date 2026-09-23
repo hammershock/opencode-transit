@@ -3,7 +3,8 @@ import fs from "fs/promises"
 import { mkdtempSync } from "node:fs"
 import os from "os"
 import path from "path"
-import { Effect, Layer } from "effect"
+import { sql } from "drizzle-orm"
+import { DateTime, Effect, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -12,6 +13,8 @@ import { Location } from "@opencode-ai/core/location"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionMessage } from "@opencode-ai/core/session/message"
+import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionStore } from "@opencode-ai/core/session/store"
@@ -83,6 +86,62 @@ describe("SessionV2.activate refreshes the available-targets runtime context", (
       yield* session.activate(created.id)
       const refreshed = yield* session.requestContext(created.id)
       expect(targetsText(refreshed.runtimeParts)).toContain("<description>after</description>")
+    }),
+  )
+})
+
+describe("SessionV2.requestContext compaction inspection", () => {
+  it.effect("shows completed legacy summaries and prefers the newest checkpoint", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const created = yield* session.create({ location })
+      const { db } = yield* Database.Service
+
+      yield* db.run(sql`INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES ('legacy_user', ${created.id}, 1, 1, '{"role":"user"}')`)
+      yield* db.run(sql`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+        VALUES ('legacy_marker', 'legacy_user', ${created.id}, 1, 1, '{"type":"compaction","auto":true}')`)
+      yield* db.run(sql`INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES ('legacy_failed', ${created.id}, 2, 2, '{"role":"assistant","parentID":"legacy_user","summary":true,"error":{"name":"failed"}}')`)
+      expect((yield* session.requestContext(created.id)).compaction).toBeNull()
+
+      yield* db.run(sql`INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES ('legacy_summary', ${created.id}, 3, 3, '{"role":"assistant","parentID":"legacy_user","summary":true,"finish":"stop"}')`)
+      yield* db.run(sql`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+        VALUES ('legacy_text', 'legacy_summary', ${created.id}, 3, 3, '{"type":"text","text":"Earlier work summary"}')`)
+      expect((yield* session.requestContext(created.id)).compaction).toEqual({
+        source: "legacy",
+        reason: "auto",
+        summary: "Earlier work summary",
+        recent: "",
+      })
+
+      const events = yield* EventV2.Service
+      const messageID = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.Compaction.Ended, {
+        sessionID: created.id,
+        messageID,
+        timestamp: DateTime.makeUnsafe(4),
+        reason: "manual",
+        text: "New checkpoint",
+        recent: "Recent turns",
+      })
+      expect((yield* session.requestContext(created.id)).compaction).toEqual({
+        reason: "manual",
+        summary: "New checkpoint",
+        recent: "Recent turns",
+      })
+
+      yield* db.run(sql`INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES ('legacy_newer', ${created.id}, 5, 5, '{"role":"assistant","parentID":"legacy_user","summary":true,"finish":"stop"}')`)
+      yield* db.run(sql`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+        VALUES ('legacy_newer_text', 'legacy_newer', ${created.id}, 5, 5, '{"type":"text","text":"Latest legacy summary"}')`)
+      expect((yield* session.requestContext(created.id)).compaction).toEqual({
+        source: "legacy",
+        reason: "auto",
+        summary: "Latest legacy summary",
+        recent: "",
+      })
     }),
   )
 })
