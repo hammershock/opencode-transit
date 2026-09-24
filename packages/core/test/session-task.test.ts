@@ -1,0 +1,636 @@
+import { describe, expect, test } from "bun:test"
+import path from "path"
+import { SqliteClient } from "@effect/sql-sqlite-bun"
+import { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
+import { eq, sql } from "drizzle-orm"
+import { Effect, Exit } from "effect"
+import { DatabaseMigration } from "@opencode-ai/core/database/migration"
+import { Database } from "@opencode-ai/core/database/database"
+import { Project } from "@opencode-ai/core/project"
+import { ProjectTable } from "@opencode-ai/core/project/sql"
+import { AbsolutePath } from "@opencode-ai/core/schema"
+import { SessionSchema } from "@opencode-ai/core/session/schema"
+import { SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
+import { SessionTask } from "@opencode-ai/core/session/task"
+import { SessionTaskView } from "@opencode-ai/core/session/task-view"
+import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
+import { EventV2 } from "@opencode-ai/core/event"
+import { EventTable } from "@opencode-ai/core/event/sql"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
+import { testEffect } from "./lib/effect"
+import { tmpdir } from "./fixture/tmpdir"
+
+const makeDb = EffectDrizzleSqlite.makeWithDefaults()
+
+const fixture = Effect.gen(function* () {
+  const db = yield* makeDb
+  yield* DatabaseMigration.apply(db)
+  yield* db
+    .insert(ProjectTable)
+    .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+    .run()
+    .pipe(Effect.orDie)
+  const root = SessionSchema.ID.create()
+  yield* db
+    .insert(SessionTable)
+    .values({
+      id: root,
+      project_id: Project.ID.global,
+      slug: "root",
+      directory: "/project",
+      title: "root",
+      version: "test",
+    })
+    .run()
+    .pipe(Effect.orDie)
+  return { db, root }
+})
+
+const run = <A, E>(effect: Effect.Effect<A, E, import("effect/unstable/sql/SqlClient").SqlClient>) =>
+  Effect.runPromise(
+    effect.pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })), Effect.scoped),
+  )
+
+const eventIt = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProjector.node])))
+
+describe("SessionTask durable projection", () => {
+  eventIt.effect("serializes simultaneous promotion against the final root slot", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const events = yield* EventV2.Service
+      const root = SessionSchema.ID.create()
+      const rootInfo = {
+        id: root,
+        slug: "quota-root",
+        projectID: Project.ID.global,
+        directory: "/project",
+        title: "root",
+        version: "test",
+        time: { created: Date.now(), updated: Date.now() },
+      }
+      yield* events.publish(SessionV1.Event.Created, { sessionID: root, info: rootInfo })
+      const children = Array.from({ length: 9 }, () => SessionSchema.ID.create())
+      yield* Effect.forEach(children, (child, index) =>
+        events.publish(SessionV1.Event.Created, {
+          sessionID: child,
+          info: { ...rootInfo, id: child, slug: `child-${index}`, parentID: root },
+          ...(index < 7
+            ? {
+                task: {
+                  inputID: `msg_promote_${index}`,
+                  rootSessionID: root,
+                  parentSessionID: root,
+                  parentMessageID: `msg_parent_promote_${index}`,
+                  callID: `call-promote-${index}`,
+                  promptDigest: "digest",
+                  childSessionID: child,
+                  description: "task",
+                  agentID: "build",
+                  locationRevision: 0,
+                  backend: "legacy" as const,
+                },
+              }
+            : {}),
+        }),
+      )
+      yield* Effect.forEach(children.slice(7), (child, index) =>
+        db
+          .insert(SessionTaskTable)
+          .values({
+            input_id: `msg_promote_${index + 7}`,
+            root_session_id: root,
+            parent_session_id: root,
+            parent_message_id: `msg_parent_promote_${index + 7}`,
+            call_id: `call-promote-${index + 7}`,
+            prompt_digest: "digest",
+            child_session_id: child,
+            description: "task",
+            agent_id: "build",
+            location_revision: 0,
+            state: "queued",
+            backend: "legacy",
+            time_created: Date.now(),
+          })
+          .run()
+          .pipe(Effect.orDie),
+      )
+      const attempts = yield* Effect.forEach(
+        children.slice(7),
+        (child, index) =>
+          SessionTask.promote(db, events, { inputID: `msg_promote_${index + 7}`, childSessionID: child }).pipe(
+            Effect.exit,
+          ),
+        { concurrency: "unbounded" },
+      )
+      expect(attempts.filter(Exit.isSuccess)).toHaveLength(1)
+      expect(attempts.filter(Exit.isFailure)).toHaveLength(1)
+      const rows = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.root_session_id, root)).all()
+      expect(rows.filter((row) => row.state === "active" || row.state === "admitted")).toHaveLength(8)
+      expect(rows.filter((row) => row.state === "queued")).toHaveLength(1)
+    }),
+  )
+
+  eventIt.effect("projects child events and honors the parent deletion tombstone", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const events = yield* EventV2.Service
+      const root = SessionSchema.ID.create()
+      const child = SessionSchema.ID.create()
+      const rootInfo = {
+        id: root,
+        slug: "root",
+        projectID: Project.ID.global,
+        directory: "/project",
+        title: "root",
+        version: "test",
+        time: { created: Date.now(), updated: Date.now() },
+      }
+      const childInfo = {
+        ...rootInfo,
+        id: child,
+        slug: "child",
+        parentID: root,
+        title: "child",
+      }
+      const admission = {
+        inputID: "msg_event_admitted",
+        rootSessionID: root,
+        parentSessionID: root,
+        parentMessageID: "msg_parent_event",
+        callID: "call-event",
+        promptDigest: "digest",
+        childSessionID: child,
+        description: "event child",
+        agentID: "build",
+        locationRevision: 0,
+        backend: "legacy" as const,
+      }
+      yield* events.publish(SessionV1.Event.Created, { sessionID: root, info: rootInfo })
+      yield* events.publish(
+        SessionV1.Event.Created,
+        { sessionID: child, info: childInfo, task: admission },
+        { commit: () => SessionTask.validate(db, admission.inputID) },
+      )
+      expect((yield* SessionTask.find(db, admission.inputID))?.state).toBe("admitted")
+      yield* SessionTask.promote(db, events, { inputID: admission.inputID, childSessionID: child })
+      yield* SessionTask.archiveUnknown(yield* Database.Service, events, {
+        inputID: admission.inputID,
+        childSessionID: child,
+        operationID: "archive-event",
+        actor: { kind: "user", id: "user-test" },
+      })
+      const archived = yield* SessionTask.find(db, admission.inputID)
+      expect(archived?.abandoned_unknown).toBe(true)
+      expect(archived?.outcome).toBeNull()
+      expect(archived?.state).toBe("active")
+      yield* SessionTask.archiveUnknown(yield* Database.Service, events, {
+        inputID: admission.inputID,
+        childSessionID: child,
+        operationID: "archive-event",
+        actor: { kind: "user", id: "user-test" },
+      })
+      yield* SessionTask.settle(db, events, {
+        inputID: admission.inputID,
+        childSessionID: child,
+        outcome: "completed",
+        resultMessageID: "msg_exact_result",
+      })
+      const stored = yield* SessionTask.find(db, admission.inputID)
+      expect(stored?.outcome).toBe("completed")
+      expect(stored?.result_message_id).toBe("msg_exact_result")
+      const durable = yield* db
+        .select({ type: EventTable.type })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, child))
+        .all()
+        .pipe(Effect.orDie)
+      expect(durable.map((event) => event.type)).toContain(EventV2.versionedType(SessionTaskEvent.Promoted.type, 1))
+      expect(durable.map((event) => event.type)).toContain(EventV2.versionedType(SessionTaskEvent.Settled.type, 1))
+
+      yield* events.publish(SessionV1.Event.Deleted, { sessionID: root, info: rootInfo })
+      expect(yield* SessionTask.find(db, admission.inputID)).toBeUndefined()
+      yield* events.publish(SessionTaskEvent.Admitted, {
+        sessionID: child,
+        admission: { ...admission, inputID: "msg_late", parentMessageID: "msg_late_parent", callID: "call-late" },
+        timestamp: Date.now(),
+      })
+      expect(yield* SessionTask.find(db, "msg_late")).toBeUndefined()
+    }),
+  )
+
+  test("replays settled identity and a late admission through separate database instances", async () => {
+    await using temp = await tmpdir()
+    const layer = (name: string) =>
+      AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProjector.node]), [
+        [Database.node, Database.layerFromPath(path.join(temp.path, name))],
+      ])
+    const root = SessionSchema.ID.create()
+    const child = SessionSchema.ID.create()
+    const rootInfo = {
+      id: root,
+      slug: "root",
+      projectID: Project.ID.global,
+      directory: "/project",
+      title: "root",
+      version: "test",
+      time: { created: Date.now(), updated: Date.now() },
+    }
+    const admission = {
+      inputID: "msg_replay_input",
+      rootSessionID: root,
+      parentSessionID: root,
+      parentMessageID: "msg_replay_parent",
+      callID: "call-replay",
+      promptDigest: "digest",
+      childSessionID: child,
+      description: "replay child",
+      agentID: "build",
+      locationRevision: 0,
+      backend: "legacy" as const,
+    }
+    const records = await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const events = yield* EventV2.Service
+        yield* events.publish(SessionV1.Event.Created, { sessionID: root, info: rootInfo })
+        yield* events.publish(
+          SessionV1.Event.Created,
+          { sessionID: child, info: { ...rootInfo, id: child, parentID: root, slug: "child" }, task: admission },
+          { commit: () => SessionTask.validate(db, admission.inputID) },
+        )
+        yield* SessionTask.promote(db, events, { inputID: admission.inputID, childSessionID: child })
+        yield* SessionTask.settle(db, events, {
+          inputID: admission.inputID,
+          childSessionID: child,
+          outcome: "completed",
+          resultMessageID: "msg_replay_result",
+        })
+        yield* events.publish(SessionV1.Event.Deleted, { sessionID: root, info: rootInfo })
+        yield* events.publish(SessionTaskEvent.Admitted, {
+          sessionID: child,
+          admission: {
+            ...admission,
+            inputID: "msg_after_delete",
+            parentMessageID: "msg_after_delete_parent",
+            callID: "call-after-delete",
+          },
+          timestamp: Date.now(),
+        })
+        const rows = yield* db
+          .select()
+          .from(EventTable)
+          .orderBy(sql`rowid`)
+          .all()
+          .pipe(Effect.orDie)
+        return rows.map((row) => ({
+          id: row.id,
+          type: row.type,
+          aggregateID: row.aggregate_id,
+          seq: row.seq,
+          data: row.data,
+        }))
+      }).pipe(Effect.provide(layer("source.sqlite")), Effect.scoped),
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const events = yield* EventV2.Service
+        for (const record of records.slice(0, 4)) yield* events.replay(record)
+        expect((yield* SessionTask.find(db, admission.inputID))?.result_message_id).toBe("msg_replay_result")
+        for (const record of records.slice(4)) yield* events.replay(record)
+        expect(yield* SessionTask.find(db, admission.inputID)).toBeUndefined()
+        expect(yield* SessionTask.find(db, "msg_after_delete")).toBeUndefined()
+      }).pipe(Effect.provide(layer("target.sqlite")), Effect.scoped),
+    )
+  })
+})
+
+describe("SessionTask admission", () => {
+  test("legacy TaskPromptOps cannot advertise incomplete controls", async () => {
+    const result = SessionTaskCapability.evaluate(SessionTaskCapability.legacyTaskPromptOps)
+    expect(result.status).toBe("unsupported")
+    expect(result.status === "unsupported" ? result.missing : []).toContain("durable_queue")
+    expect(
+      Exit.isFailure(
+        await Effect.runPromiseExit(SessionTaskCapability.requireControl(SessionTaskCapability.legacyTaskPromptOps)),
+      ),
+    ).toBe(true)
+  })
+
+  test("reads bounded durable status without inventing a live owner", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db, root } = yield* fixture
+        const child = SessionSchema.ID.create()
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: child,
+            project_id: Project.ID.global,
+            parent_id: root,
+            slug: "child",
+            directory: "/project/private",
+            title: "child",
+            version: "test",
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* SessionTask.admit(db, {
+          inputID: "msg_view",
+          rootSessionID: root,
+          parentSessionID: root,
+          parentMessageID: "msg_parent_view",
+          callID: "call-view",
+          promptDigest: "digest",
+          childSessionID: child,
+          description: "inspect",
+          agentID: "build",
+          locationRevision: 0,
+          backend: "legacy",
+        })
+        const database = { db, filename: ":memory:" }
+        const admitted = yield* SessionTaskView.read(database, { parentSessionID: root, childSessionID: child })
+        expect(admitted.lifecycle).toBe("admitted")
+        expect(admitted.runtime).toBe("unknown")
+        expect(admitted.location.directory).toBeUndefined()
+        expect(admitted.target.invocation?.call_id).toBe("call-view")
+        const direct = yield* SessionTaskView.read(database, {
+          parentSessionID: root,
+          childSessionID: child,
+          invocation: admitted.target.invocation,
+        })
+        expect(direct.location.directory).toBeUndefined()
+        const historical = SessionSchema.ID.create()
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: historical,
+            project_id: Project.ID.global,
+            parent_id: root,
+            slug: "old",
+            directory: "/project",
+            title: "old child",
+            version: "test",
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const legacy = yield* SessionTaskView.read(database, { parentSessionID: root, childSessionID: historical })
+        expect(legacy.lifecycle).toBe("unscoped_legacy")
+        expect(legacy.target.invocation).toBeUndefined()
+        const forbidden = yield* SessionTaskView.read(database, {
+          parentSessionID: SessionSchema.ID.create(),
+          childSessionID: child,
+        }).pipe(Effect.exit)
+        expect(Exit.isFailure(forbidden)).toBe(true)
+      }),
+    )
+  })
+
+  test("atomically rejects the ninth root invocation without leaving an empty child", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db, root } = yield* fixture
+        const children = Array.from({ length: 9 }, () => SessionSchema.ID.create())
+        const attempts = yield* Effect.forEach(
+          children,
+          (child, index) =>
+            SessionTask.withOwner(child)(
+              db.transaction(
+                () =>
+                  Effect.gen(function* () {
+                    yield* db
+                      .insert(SessionTable)
+                      .values({
+                        id: child,
+                        project_id: Project.ID.global,
+                        parent_id: root,
+                        slug: String(index),
+                        directory: "/project",
+                        title: String(index),
+                        version: "test",
+                      })
+                      .run()
+                      .pipe(Effect.orDie)
+                    return yield* SessionTask.admit(db, {
+                      inputID: `msg_task_${index}`,
+                      rootSessionID: root,
+                      parentSessionID: root,
+                      parentMessageID: `msg_parent_${index}`,
+                      callID: `call-${index}`,
+                      promptDigest: "prompt",
+                      childSessionID: child,
+                      description: "task",
+                      agentID: "build",
+                      locationRevision: 0,
+                      backend: "legacy",
+                    })
+                  }),
+                { behavior: "immediate" },
+              ),
+            ).pipe(Effect.exit),
+          { concurrency: "unbounded" },
+        )
+        expect(attempts.filter(Exit.isSuccess)).toHaveLength(8)
+        expect(attempts.filter(Exit.isFailure)).toHaveLength(1)
+        const stored = yield* db.select().from(SessionTaskTable).all().pipe(Effect.orDie)
+        expect(stored).toHaveLength(8)
+        const sessions = yield* db.select({ id: SessionTable.id }).from(SessionTable).all().pipe(Effect.orDie)
+        expect(sessions).toHaveLength(9)
+        expect(children.filter((child) => !sessions.some((session) => session.id === child))).toHaveLength(1)
+      }),
+    )
+  })
+
+  test("bounds pending inputs per child and per root under concurrent admission", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db, root } = yield* fixture
+        const children = Array.from({ length: 5 }, () => SessionSchema.ID.create())
+        yield* Effect.forEach(children, (child, index) =>
+          db
+            .insert(SessionTable)
+            .values({
+              id: child,
+              project_id: Project.ID.global,
+              parent_id: root,
+              slug: `child-${index}`,
+              directory: "/project",
+              title: "child",
+              version: "test",
+            })
+            .run()
+            .pipe(Effect.orDie),
+        )
+        const admit = (child: SessionSchema.ID, index: number) =>
+          SessionTask.withOwner(child)(
+            db.transaction(
+              () =>
+                SessionTask.admit(db, {
+                  inputID: `msg_pending_${index}`,
+                  rootSessionID: root,
+                  parentSessionID: root,
+                  parentMessageID: `msg_parent_pending_${index}`,
+                  callID: `call-pending-${index}`,
+                  promptDigest: "prompt",
+                  childSessionID: child,
+                  description: "task",
+                  agentID: "build",
+                  locationRevision: 0,
+                  backend: "legacy",
+                  liveLegacyOwner: true,
+                }),
+              { behavior: "immediate" },
+            ),
+          )
+        yield* Effect.forEach(children, (child, index) => admit(child, index))
+        const pending = yield* Effect.forEach(
+          Array.from({ length: 65 }, (_, index) => index),
+          (index) => admit(children[index % children.length]!, index + 5).pipe(Effect.exit),
+          { concurrency: "unbounded" },
+        )
+        expect(pending.filter(Exit.isSuccess)).toHaveLength(64)
+        expect(pending.filter(Exit.isFailure)).toHaveLength(1)
+        expect((yield* db.select().from(SessionTaskTable).all()).length).toBe(69)
+      }),
+    )
+  })
+
+  test("rejects the seventeenth pending input for one child", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db, root } = yield* fixture
+        const child = SessionSchema.ID.create()
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: child,
+            project_id: Project.ID.global,
+            parent_id: root,
+            slug: "child",
+            directory: "/project",
+            title: "child",
+            version: "test",
+          })
+          .run()
+        const admit = (index: number) =>
+          SessionTask.withOwner(child)(
+            db.transaction(
+              () =>
+                SessionTask.admit(db, {
+                  inputID: `msg_child_${index}`,
+                  rootSessionID: root,
+                  parentSessionID: root,
+                  parentMessageID: `msg_parent_child_${index}`,
+                  callID: `call-child-${index}`,
+                  promptDigest: "prompt",
+                  childSessionID: child,
+                  description: "task",
+                  agentID: "build",
+                  locationRevision: 0,
+                  backend: "legacy",
+                  liveLegacyOwner: true,
+                }),
+              { behavior: "immediate" },
+            ),
+          )
+        yield* admit(0)
+        const attempts = yield* Effect.forEach(
+          Array.from({ length: 17 }, (_, index) => index + 1),
+          (index) => admit(index).pipe(Effect.exit),
+          { concurrency: "unbounded" },
+        )
+        expect(attempts.filter(Exit.isSuccess)).toHaveLength(16)
+        expect(attempts.filter(Exit.isFailure)).toHaveLength(1)
+      }),
+    )
+  })
+
+  test("keeps one child queue FIFO and settles the exact result reference", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db, root } = yield* fixture
+        const child = SessionSchema.ID.create()
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: child,
+            project_id: Project.ID.global,
+            parent_id: root,
+            slug: "child",
+            directory: "/project",
+            title: "child",
+            version: "test",
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const admit = (index: number) =>
+          db.transaction(
+            () =>
+              SessionTask.admit(db, {
+                inputID: `msg_task_${index}`,
+                rootSessionID: root,
+                parentSessionID: root,
+                parentMessageID: `msg_parent_${index}`,
+                callID: `call-${index}`,
+                promptDigest: `prompt-${index}`,
+                childSessionID: child,
+                description: "task",
+                agentID: "build",
+                locationRevision: 0,
+                backend: "legacy",
+                liveLegacyOwner: true,
+              }),
+            { behavior: "immediate" },
+          )
+        expect((yield* admit(0))?.state).toBe("admitted")
+        expect((yield* admit(1))?.state).toBe("queued")
+        expect((yield* admit(2))?.state).toBe("queued")
+        const pendingView = yield* SessionTaskView.read(
+          { db, filename: ":memory:" },
+          {
+            parentSessionID: root,
+            childSessionID: child,
+            invocation: { parent_session_id: root, parent_message_id: "msg_parent_1", call_id: "call-1" },
+          },
+        )
+        expect(pendingView.eligibility).toBe("frozen")
+        expect(
+          Exit.isFailure(
+            yield* SessionTask.projectPromoted(db, {
+              inputID: "msg_task_2",
+              childSessionID: child,
+              timestamp: Date.now(),
+            }).pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        yield* SessionTask.projectPromoted(db, {
+          inputID: "msg_task_0",
+          childSessionID: child,
+          timestamp: Date.now(),
+        })
+        yield* SessionTask.projectSettled(db, {
+          inputID: "msg_task_0",
+          childSessionID: child,
+          outcome: "completed",
+          resultMessageID: "msg_result_0",
+          timestamp: Date.now(),
+        })
+        yield* SessionTask.projectPromoted(db, {
+          inputID: "msg_task_1",
+          childSessionID: child,
+          timestamp: Date.now(),
+        })
+        expect((yield* SessionTask.find(db, "msg_task_1"))?.state).toBe("active")
+        expect((yield* SessionTask.find(db, "msg_task_0"))?.result_message_id).toBe("msg_result_0")
+        expect((yield* SessionTask.find(db, "msg_task_2"))?.state).toBe("queued")
+        expect(
+          (yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.root_session_id, root)).all()).length,
+        ).toBe(3)
+      }),
+    )
+  })
+})

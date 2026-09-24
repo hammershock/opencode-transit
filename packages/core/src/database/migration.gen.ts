@@ -52,5 +52,6 @@ export const migrations = (
     import("./migration/20260922185212_session-policy-review"),
     import("./migration/20260922205840_policy-runtime-binding"),
     import("./migration/20260923052013_policy-basis-revision"),
+    import("./migration/20260924090759_task-invocation"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

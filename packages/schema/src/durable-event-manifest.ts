@@ -4,6 +4,7 @@ import { Event } from "./event"
 import { SessionEvent } from "./session-event"
 import { SessionV1 } from "./session-v1"
 import { SessionPolicy } from "./session-policy"
+import { SessionTaskEvent } from "./session-task-event"
 import { Schema } from "effect"
 
 export const SessionDurable = {
@@ -15,6 +16,7 @@ const SessionSyncDefinitions = Event.inventory(
   SessionPolicy.Reviewed,
   ...SessionV1.Event.Definitions.filter((definition) => definition.durable !== undefined),
   ...SessionEvent.DurableDefinitions,
+  ...SessionTaskEvent.Definitions,
 )
 
 export const SessionSyncDurable = {
