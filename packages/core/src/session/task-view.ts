@@ -598,21 +598,22 @@ export const withObservedPhase = Effect.fn("SessionTaskView.withObservedPhase")(
   locations: LocationServiceMap.Interface,
 ) {
   if (view.runtime !== "observed") return view
+  const child = yield* database.db
+    .select()
+    .from(SessionTable)
+    .where(eq(SessionTable.id, view.target.task_id))
+    .get()
+    .pipe(Effect.orDie)
+  if (!child) return view
   return yield* Effect.gen(function* () {
-    const child = yield* database.db
-      .select()
-      .from(SessionTable)
-      .where(eq(SessionTable.id, view.target.task_id))
-      .get()
-      .pipe(Effect.orDie)
-    if (!child) return view
-    return yield* Effect.gen(function* () {
-      const permission = yield* PermissionV2.Service
-      const question = yield* QuestionV2.Service
-      return yield* withLivePhase(database, view, {
-        permissions: yield* permission.forSession(view.target.task_id),
-        questions: yield* question.list(),
-      })
-    }).pipe(Effect.provide(locations.get(SessionPolicyStore.locationFromRow(child))))
-  }).pipe(Effect.catch(() => Effect.succeed(view)))
+    const permission = yield* PermissionV2.Service
+    const question = yield* QuestionV2.Service
+    return yield* withLivePhase(database, view, {
+      permissions: yield* permission.forSession(view.target.task_id),
+      questions: yield* question.list(),
+    })
+  }).pipe(
+    Effect.provide(locations.get(SessionPolicyStore.locationFromRow(child))),
+    Effect.catch(() => Effect.succeed(view)),
+  )
 })

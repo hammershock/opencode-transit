@@ -6,6 +6,8 @@ import { Effect, Layer, Result, Schema } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
 import { ToolRegistry } from "@/tool/registry"
+import { protectStatus } from "@/tool/task-status"
+import { SessionTaskView } from "@opencode-ai/core/session/task-view"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { Tool } from "@/tool/tool"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
@@ -175,6 +177,17 @@ describe("tool.registry", () => {
       const second = yield* status!.execute({ target: { task_id: SessionID.make("ses_missing_b") } }, ctx)
       expect(first.output).toBe("task_target_unavailable")
       expect(second.output).toBe(first.output)
+    }),
+  )
+
+  withTaskBackend.instance("does not disguise a storage defect as an unknown target", () =>
+    Effect.gen(function* () {
+      expect((yield* protectStatus(Effect.fail(new SessionTaskView.TargetUnavailable()))).output).toBe(
+        "task_target_unavailable",
+      )
+      const broken = yield* protectStatus(Effect.die(new Error("database is closed: private path")))
+      expect(broken.output).toBe("task_status_unavailable")
+      expect(JSON.stringify(broken)).not.toContain("private path")
     }),
   )
 
