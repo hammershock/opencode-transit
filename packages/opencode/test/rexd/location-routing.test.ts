@@ -9,6 +9,8 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import type { RexdLease } from "../../src/rexd/connection"
 import { RexdFiles } from "../../src/rexd/location-files"
+import { rexdMutationNodes } from "../../src/rexd/location-mutation"
+import { LocationMutation } from "@opencode-ai/core/location-mutation"
 import { remoteGrep, upwardMany } from "../../src/rexd/location-filesystem"
 import { rexdFilesystemNodes } from "../../src/rexd/location-filesystem"
 import { inspectRexdLocation, rexdSessionNode, RexdLocationSession } from "../../src/rexd/location-session"
@@ -67,6 +69,45 @@ function processLease(handler?: (method: string, params: Record<string, unknown>
 
 describe("Rexd Location routing contract", () => {
   const targetID = Location.TargetID.make("00000000-0000-4000-8000-000000000001")
+  test("trailing slash in remote Location root keeps default workdir internal", async () => {
+    const directory = AbsolutePath.make("/workspace/repo/")
+    const { lease } = processLease((method, params) => {
+      if (method === "fs.stat") return { path: params.path, exists: true, type: "dir", mtime: 1 }
+      return undefined
+    })
+    const ref = Location.Ref.make({ target: { type: "rexd", targetID }, directory })
+    const session = rexdSessionNode(ref)
+    const node = rexdMutationNodes(session, targetID, directory)[0]
+    const layer = LayerNode.compile(node, [[session, Layer.succeed(RexdLocationSession, lease)]])
+    const context = await Effect.runPromise(Effect.scoped(Layer.build(layer)))
+    const mutation = Context.get(context, LocationMutation.Service)
+
+    expect(await Effect.runPromise(mutation.resolve({ path: ".", kind: "directory" }))).toEqual({
+      canonical: "/workspace/repo",
+      resource: ".",
+    })
+    expect(await Effect.runPromise(mutation.resolve({ path: "/workspace/repo", kind: "directory" }))).toEqual({
+      canonical: "/workspace/repo",
+      resource: ".",
+    })
+    expect(await Effect.runPromise(mutation.resolve({ path: "child", kind: "directory" }))).toEqual({
+      canonical: "/workspace/repo/child",
+      resource: "child",
+    })
+    expect(await Effect.runPromise(mutation.resolve({ path: "/workspace/repo-sibling", kind: "directory" }))).toEqual({
+      canonical: "/workspace/repo-sibling",
+      resource: "/workspace/repo-sibling",
+      externalDirectory: {
+        action: "external_directory",
+        directory: "/workspace/repo-sibling",
+        resource: "/workspace/repo-sibling/*",
+        save: "/workspace/repo-sibling/*",
+      },
+    })
+    const escape = await Effect.runPromise(Effect.flip(mutation.resolve({ path: "../sibling" })))
+    expect(escape).toMatchObject({ reason: "relative_escape" })
+  })
+
   test("process and formatter-style argv execution remain remote and shell-free", async () => {
     const { lease, calls } = processLease()
     const result = await runRexdProcess(lease, {
