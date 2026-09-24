@@ -22,7 +22,7 @@ import { SessionPolicy } from "@opencode-ai/schema/session-policy"
 import { SessionPolicyStore } from "./policy"
 import { SessionTask } from "./task"
 import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
-import { SessionTaskTable } from "./sql"
+import { SessionTaskDeletionTable, SessionTaskTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -418,13 +418,14 @@ const layer = Layer.effectDiscard(
     yield* events.project(SessionV1.Event.Deleted, (event) =>
       Effect.gen(function* () {
         yield* db
+          .insert(SessionTaskDeletionTable)
+          .values({ session_id: event.data.sessionID })
+          .onConflictDoNothing()
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
           .delete(SessionTaskTable)
-          .where(
-            or(
-              eq(SessionTaskTable.parent_session_id, event.data.sessionID),
-              eq(SessionTaskTable.root_session_id, event.data.sessionID),
-            ),
-          )
+          .where(SessionTask.deletionPredicate(event.data.sessionID))
           .run()
           .pipe(Effect.orDie)
         yield* db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie)

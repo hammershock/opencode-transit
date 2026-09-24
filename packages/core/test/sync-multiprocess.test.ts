@@ -15,6 +15,15 @@ type Message = {
   readonly error?: string
   readonly result?: {
     readonly session?: { readonly id: string; readonly title: string }
+    readonly tasks?: readonly {
+      readonly inputID: string
+      readonly childID: string
+      readonly state: string
+      readonly outcome?: string
+      readonly resultID?: string
+    }[]
+    readonly durable?: readonly { readonly seq: number; readonly type: string }[]
+    readonly deletion?: boolean
     readonly cursors: readonly { readonly device_id: string; readonly cursor: number }[]
     readonly lease?: { readonly owner: string; readonly expires_at: number }
   }
@@ -284,5 +293,150 @@ test("coordinates multi-TUI leadership, alternating updates, deletion and crash 
     })
   } finally {
     await Promise.all(workers.map((worker) => worker.stop()))
+  }
+}, 45_000)
+
+test("syncs Task facts both ways and keeps deleted root and child projections absent after delayed capture", async () => {
+  await using tmp = await tmpdir()
+  const cloudRoot = path.join(tmp.path, "cloud")
+  const a = spawnWorker({
+    workerID: "task-a",
+    deviceID: "task-device-a",
+    deviceRoot: path.join(tmp.path, "a"),
+    cloudRoot,
+  })
+  const b = spawnWorker({
+    workerID: "task-b",
+    deviceID: "task-device-b",
+    deviceRoot: path.join(tmp.path, "b"),
+    cloudRoot,
+  })
+  try {
+    await Promise.all([a.ready(), b.ready()])
+    const root = "ses_sync_task_root"
+    const childA = "ses_sync_task_child_a"
+    const childB = "ses_sync_task_child_b"
+    const childC = "ses_sync_task_child_c"
+    const childD = "ses_sync_task_child_d"
+    const childE = "ses_sync_task_child_e"
+    await a.request({ op: "create", sessionID: root, title: "Task root" })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: root })).result?.session?.id === root,
+      "root on device B",
+    )
+
+    await a.request({ op: "task", sessionID: root, childID: childA })
+    await waitUntilAsync(
+      async () =>
+        (await b.request({ op: "query", sessionID: childA })).result?.tasks?.[0]?.resultID === `msg_result_${childA}`,
+      "Task A on device B",
+    )
+    expect((await b.request({ op: "query", sessionID: childA })).result?.tasks).toEqual([
+      {
+        inputID: `msg_${childA}`,
+        childID: childA,
+        state: "settled",
+        outcome: "completed",
+        resultID: `msg_result_${childA}`,
+      },
+    ])
+
+    await b.request({ op: "task", sessionID: root, childID: childB })
+    await waitUntilAsync(
+      async () =>
+        (await a.request({ op: "query", sessionID: childB })).result?.tasks?.[0]?.resultID === `msg_result_${childB}`,
+      "Task B on device A",
+    )
+
+    await a.request({ op: "task", sessionID: root, childID: childC })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: childC })).result?.tasks?.[0]?.state === "settled",
+      "Task C on device B",
+    )
+    await a.request({ op: "admit-task", sessionID: root, childID: childC })
+    await b.request({ op: "delete", sessionID: childC })
+    await b.request({ op: "sync" })
+    await waitUntilAsync(
+      async () =>
+        (await a.request({ op: "query", sessionID: childC })).result?.session === undefined &&
+        (await b.request({ op: "query", sessionID: childC })).result?.session === undefined,
+      "child deletion on both devices",
+    ).catch(async (cause) => {
+      throw new Error(
+        JSON.stringify({
+          cause: String(cause),
+          a: (await a.request({ op: "query", sessionID: childC })).result,
+          b: (await b.request({ op: "query", sessionID: childC })).result,
+          recentA: a.messages.slice(-15),
+          recentB: b.messages.slice(-15),
+        }),
+      )
+    })
+    await a.request({ op: "flush-task", childID: childC })
+    await a.request({ op: "sync" })
+    for (const worker of [a, b]) {
+      const result = (await worker.request({ op: "query", sessionID: childC })).result
+      expect(result?.session).toBeUndefined()
+      expect(result?.tasks).toEqual([])
+      expect(result?.deletion).toBe(true)
+    }
+
+    await b.request({ op: "task", sessionID: root, childID: childD })
+    await waitUntilAsync(
+      async () => (await a.request({ op: "query", sessionID: childD })).result?.tasks?.[0]?.state === "settled",
+      "Task D on device A",
+    )
+    await b.request({ op: "admit-task", sessionID: root, childID: childD })
+    await b.request({ op: "task", sessionID: root, childID: childE, holdSettlement: true })
+    await waitUntilAsync(
+      async () => (await a.request({ op: "query", sessionID: childE })).result?.tasks?.[0]?.state === "active",
+      "unsettled Task E on device A",
+    )
+    await a.request({ op: "delete", sessionID: root })
+    await a.request({ op: "sync" })
+    await waitUntilAsync(
+      async () =>
+        (await a.request({ op: "query", sessionID: root })).result?.session === undefined &&
+        (await b.request({ op: "query", sessionID: root })).result?.session === undefined &&
+        (await a.request({ op: "query", sessionID: childD })).result?.tasks?.length === 0 &&
+        (await b.request({ op: "query", sessionID: childD })).result?.tasks?.length === 0 &&
+        (await a.request({ op: "query", sessionID: childE })).result?.tasks?.length === 0 &&
+        (await b.request({ op: "query", sessionID: childE })).result?.tasks?.length === 0,
+      "root deletion on both devices",
+    ).catch(async (cause) => {
+      throw new Error(
+        JSON.stringify({
+          cause: String(cause),
+          rootA: (await a.request({ op: "query", sessionID: root })).result,
+          rootB: (await b.request({ op: "query", sessionID: root })).result,
+          childA: (await a.request({ op: "query", sessionID: childD })).result,
+          childB: (await b.request({ op: "query", sessionID: childD })).result,
+        }),
+      )
+    })
+    await b.request({ op: "flush-task", childID: childD })
+    await b.request({ op: "flush-task", childID: childE })
+    await b.request({ op: "sync" })
+    await waitUntilAsync(
+      async () =>
+        (await a.request({ op: "query", sessionID: childD })).result?.durable?.some(
+          (event) => event.type === "session.task.admitted.1",
+        ) === true,
+      "delayed Task admission on device A",
+    )
+    await waitUntilAsync(
+      async () =>
+        (await a.request({ op: "query", sessionID: childE })).result?.durable?.some(
+          (event) => event.type === "session.task.settled.1",
+        ) === true,
+      "delayed Task settlement on device A",
+    )
+    for (const worker of [a, b]) {
+      expect((await worker.request({ op: "query", sessionID: root })).result?.session).toBeUndefined()
+      for (const sessionID of [childA, childB, childD, childE])
+        expect((await worker.request({ op: "query", sessionID })).result?.tasks).toEqual([])
+    }
+  } finally {
+    await Promise.all([a.stop(), b.stop()])
   }
 }, 45_000)

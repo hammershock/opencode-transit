@@ -1,6 +1,6 @@
 export * as SessionTask from "./task"
 
-import { and, asc, eq, inArray, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, or, sql } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
 import { Effect } from "effect"
 import type { Database } from "../database/database"
@@ -10,13 +10,17 @@ import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
 import { SessionSchema } from "./schema"
 import { EventTable } from "../event/sql"
 import { SessionV1 } from "../v1/session"
-import { SessionTaskTable } from "./sql"
+import { SessionTaskDeletionTable, SessionTaskTable } from "./sql"
 
 type DB = Database.Interface["db"]
 
 export const ACTIVE_LIMIT = 8
 export const CHILD_PENDING_LIMIT = 16
 export const ROOT_PENDING_LIMIT = 64
+
+export function deletionPredicate(sessionID: string) {
+  return or(eq(SessionTaskTable.parent_session_id, sessionID), eq(SessionTaskTable.root_session_id, sessionID))
+}
 
 /** The gate only orders local child operations; the immediate DB transaction arbitrates root quota. */
 const owners = KeyedMutex.makeUnsafe<string>()
@@ -80,6 +84,20 @@ export const admit = Effect.fn("SessionTask.admit")(function* (
   options?: { readonly validate?: boolean; readonly timestamp?: number },
 ) {
   if (options?.validate === false) {
+    const tombstone = yield* db
+      .select({ id: SessionTaskDeletionTable.session_id })
+      .from(SessionTaskDeletionTable)
+      .where(
+        inArray(SessionTaskDeletionTable.session_id, [
+          input.rootSessionID,
+          input.parentSessionID,
+          input.childSessionID,
+        ]),
+      )
+      .limit(1)
+      .get()
+      .pipe(Effect.orDie)
+    if (tombstone) return undefined
     const deleted = yield* db
       .select({ id: EventTable.id })
       .from(EventTable)

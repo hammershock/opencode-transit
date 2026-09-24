@@ -221,6 +221,11 @@ export const SessionTaskTable = sqliteTable(
   ],
 )
 
+/** Local projection barrier for deleted Task roots and parents, including sync control tombstones. */
+export const SessionTaskDeletionTable = sqliteTable("session_task_deletion", {
+  session_id: text().primaryKey(),
+})
+
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   session_id: text()
     .$type<SessionSchema.ID>()

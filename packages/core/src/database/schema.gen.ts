@@ -262,6 +262,11 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_task_deletion\` (
+          \`session_id\` text PRIMARY KEY
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_task\` (
           \`input_id\` text PRIMARY KEY,
           \`root_session_id\` text NOT NULL,

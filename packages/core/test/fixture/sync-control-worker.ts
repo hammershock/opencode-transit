@@ -7,10 +7,12 @@ import { eq, sql } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
+import { EventTable } from "@opencode-ai/core/event/sql"
 import { Global } from "@opencode-ai/core/global"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
-import { PartTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { PartTable, SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
+import { SessionTask } from "@opencode-ai/core/session/task"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { BaiduSyncProvider } from "@opencode-ai/core/sync/baidu-provider"
 import { BaiduCredential } from "@opencode-ai/core/sync/baidu-credential"
@@ -25,6 +27,7 @@ import { SessionSync } from "@opencode-ai/core/sync/session"
 import { SyncSetup } from "@opencode-ai/core/sync/setup"
 import { Flock } from "@opencode-ai/core/util/flock"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
 
 type Input = {
   readonly workerID: string
@@ -38,6 +41,16 @@ type Command =
   | { readonly id: string; readonly op: "update"; readonly sessionID: string; readonly title: string }
   | { readonly id: string; readonly op: "delete"; readonly sessionID: string }
   | { readonly id: string; readonly op: "query"; readonly sessionID: string }
+  | {
+      readonly id: string
+      readonly op: "task"
+      readonly sessionID: string
+      readonly childID: string
+      readonly holdSettlement?: boolean
+    }
+  | { readonly id: string; readonly op: "admit-task"; readonly sessionID: string; readonly childID: string }
+  | { readonly id: string; readonly op: "flush-task"; readonly childID: string }
+  | { readonly id: string; readonly op: "sync" }
   | { readonly id: string; readonly op: "expire-automatic-lease" }
 
 const value = process.argv[2]
@@ -186,6 +199,7 @@ const active = {
   enabled: true,
   intervalSeconds: 30 as const,
 }
+const heldTaskEvents = new Map<string, Parameters<typeof SessionSync.capture>[1]>()
 
 await mkdir(input.deviceRoot, { recursive: true })
 await mkdir(input.cloudRoot, { recursive: true })
@@ -329,6 +343,36 @@ await Effect.runPromise(
                   .where(eq(PartTable.session_id, sessionID))
                   .all(),
               )
+              const tasks = await Effect.runPromise(
+                database
+                  .select({
+                    inputID: SessionTaskTable.input_id,
+                    childID: SessionTaskTable.child_session_id,
+                    state: SessionTaskTable.state,
+                    outcome: SessionTaskTable.outcome,
+                    resultID: SessionTaskTable.result_message_id,
+                  })
+                  .from(SessionTaskTable)
+                  .where(eq(SessionTaskTable.child_session_id, sessionID))
+                  .all(),
+              )
+              const durable = await Effect.runPromise(
+                database
+                  .select({ seq: EventTable.seq, type: EventTable.type })
+                  .from(EventTable)
+                  .where(eq(EventTable.aggregate_id, sessionID))
+                  .all(),
+              )
+              const deletion = await Effect.runPromise(
+                syncDatabase.get<{ session_id: string }>(sql`
+                  SELECT session_id FROM sync_deletion_set WHERE space_id = ${spaceID} AND session_id = ${sessionID}
+                `),
+              )
+              const controlProjection = await Effect.runPromise(
+                syncDatabase.get<{ generation: number }>(sql`
+                  SELECT generation FROM sync_control_projection WHERE space_id = ${spaceID}
+                `),
+              )
               const cursors = await Effect.runPromise(
                 syncDatabase.all<{ device_id: string; cursor: number }>(
                   sql`SELECT device_id, cursor FROM sync_event_cursor WHERE space_id = ${spaceID}`,
@@ -346,10 +390,111 @@ await Effect.runPromise(
                 result: {
                   session: session ? { id: session.id, title: session.title } : undefined,
                   parts,
+                  tasks,
+                  durable,
+                  deletion: Boolean(deletion),
+                  controlProjection: controlProjection?.generation,
                   cursors,
                   lease,
                 },
               })
+              continue
+            }
+            if (command.op === "task") {
+              const rootID = SessionV2.ID.make(command.sessionID)
+              const childID = SessionV2.ID.make(command.childID)
+              const root = await Effect.runPromise(
+                database.select().from(SessionTable).where(eq(SessionTable.id, rootID)).get(),
+              )
+              if (!root) throw new Error(`Parent Session not found: ${rootID}`)
+              const timestamp = Date.now()
+              const admission = {
+                inputID: `msg_${command.childID}`,
+                rootSessionID: rootID,
+                parentSessionID: rootID,
+                parentMessageID: `msg_parent_${command.childID}`,
+                callID: `call_${command.childID}`,
+                promptDigest: "sync-task-test",
+                childSessionID: childID,
+                description: "sync task",
+                agentID: "build",
+                locationRevision: 0,
+                backend: "legacy" as const,
+              }
+              const created = await Effect.runPromise(
+                events.publish(
+                  SessionV1.Event.Created,
+                  {
+                    sessionID: childID,
+                    info: {
+                      id: childID,
+                      slug: command.childID,
+                      projectID: root.project_id,
+                      parentID: rootID,
+                      directory: root.directory,
+                      syncSpaceID: spaceID,
+                      title: "sync task child",
+                      version: "test",
+                      time: { created: timestamp, updated: timestamp },
+                    },
+                    task: admission,
+                  },
+                  { commit: () => SessionTask.validate(database, admission.inputID) },
+                ),
+              )
+              await Effect.runPromise(SessionSync.capture(store, created, timestamp))
+              const promoted = await Effect.runPromise(
+                events.publish(SessionTaskEvent.Promoted, {
+                  sessionID: childID,
+                  inputID: admission.inputID,
+                  timestamp: timestamp + 1,
+                }),
+              )
+              await Effect.runPromise(SessionSync.capture(store, promoted, timestamp + 1))
+              const settled = await Effect.runPromise(
+                events.publish(SessionTaskEvent.Settled, {
+                  sessionID: childID,
+                  inputID: admission.inputID,
+                  outcome: "completed",
+                  resultMessageID: `msg_result_${command.childID}`,
+                  timestamp: timestamp + 2,
+                }),
+              )
+              if (command.holdSettlement) heldTaskEvents.set(command.childID, settled)
+              else await Effect.runPromise(SessionSync.capture(store, settled, timestamp + 2))
+              emit({ type: "response", id: command.id, ok: true })
+              continue
+            }
+            if (command.op === "admit-task") {
+              const event = await Effect.runPromise(
+                events.publish(SessionTaskEvent.Admitted, {
+                  sessionID: SessionV2.ID.make(command.childID),
+                  admission: {
+                    inputID: `msg_late_${command.childID}`,
+                    rootSessionID: SessionV2.ID.make(command.sessionID),
+                    parentSessionID: SessionV2.ID.make(command.sessionID),
+                    parentMessageID: `msg_parent_late_${command.childID}`,
+                    callID: `call_late_${command.childID}`,
+                    promptDigest: "sync-task-late-test",
+                    childSessionID: SessionV2.ID.make(command.childID),
+                    description: "late sync task",
+                    agentID: "build",
+                    locationRevision: 0,
+                    backend: "legacy" as const,
+                  },
+                  timestamp: Date.now(),
+                }),
+              )
+              heldTaskEvents.set(command.childID, event)
+              emit({ type: "response", id: command.id, ok: true })
+              continue
+            }
+            if (command.op === "flush-task") {
+              const pending = heldTaskEvents.get(command.childID)
+              if (!pending) throw new Error(`No held Task event: ${command.childID}`)
+              await Effect.runPromise(SessionSync.capture(store, pending))
+              heldTaskEvents.delete(command.childID)
+              emit({ type: "response", id: command.id, ok: true })
               continue
             }
             if (command.op === "update") {
@@ -380,6 +525,11 @@ await Effect.runPromise(
             }
             if (command.op === "delete") {
               await Effect.runPromise(control.deleteSession({ sessionID: command.sessionID }))
+              emit({ type: "response", id: command.id, ok: true })
+              continue
+            }
+            if (command.op === "sync") {
+              await Effect.runPromise(control.now())
               emit({ type: "response", id: command.id, ok: true })
               continue
             }

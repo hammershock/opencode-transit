@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "9635ae80-5d16-415c-80ae-fab0fd3d797b",
+  "id": "d3e55e6e-a015-439e-8f97-4d8cd14c385c",
   "prevIds": [
-    "73fe022e-9a8d-4042-9ae7-7e7a5ec23b3a"
+    "9635ae80-5d16-415c-80ae-fab0fd3d797b"
   ],
   "ddl": [
     {
@@ -88,6 +88,10 @@
     },
     {
       "name": "session",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_task_deletion",
       "entityType": "tables"
     },
     {
@@ -1658,6 +1662,16 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_task_deletion"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "input_id",
       "entityType": "columns",
       "table": "session_task"
@@ -2490,6 +2504,15 @@
       "nameExplicit": false,
       "name": "session_pk",
       "table": "session",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_task_deletion_pk",
+      "table": "session_task_deletion",
       "entityType": "pks"
     },
     {
