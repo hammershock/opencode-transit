@@ -41,6 +41,10 @@ import type {
   SessionsInterruptOutput,
   SessionsStatusInput,
   SessionsStatusOutput,
+  SessionsSendInput,
+  SessionsSendOutput,
+  SessionsReconcileInput,
+  SessionsReconcileOutput,
   SessionsMessageInput,
   SessionsMessageOutput,
   MessagesListInput,
@@ -609,6 +613,30 @@ export function make(options: ClientOptions) {
             },
             successStatus: 200,
             declaredStatuses: [404, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      send: (input: SessionsSendInput, requestOptions?: RequestOptions) =>
+        request<SessionsSendOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/task/send`,
+            body: { target: input["target"], operation_id: input["operation_id"], text: input["text"] },
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      reconcile: (input: SessionsReconcileInput, requestOptions?: RequestOptions) =>
+        request<SessionsReconcileOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/task/reconcile`,
+            body: { target: input["target"], operation_id: input["operation_id"], disposition: input["disposition"] },
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 503, 401],
             empty: false,
           },
           requestOptions,

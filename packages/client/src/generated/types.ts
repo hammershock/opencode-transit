@@ -1323,6 +1323,30 @@ export type SessionsHistoryOutput = {
             }>
           }
           readonly delivery: "steer" | "queue"
+          readonly task?:
+            | {
+                readonly kind: "invocation"
+                readonly admission: {
+                  readonly inputID: string
+                  readonly rootSessionID: string
+                  readonly parentSessionID: string
+                  readonly parentMessageID: string
+                  readonly callID: string
+                  readonly promptDigest: string
+                  readonly childSessionID: string
+                  readonly description: string
+                  readonly agentID: string
+                  readonly locationRevision: number
+                  readonly backend: "legacy" | "v2"
+                }
+              }
+            | {
+                readonly kind: "steer"
+                readonly invocationInputID: string
+                readonly operationID: string
+                readonly promptDigest: string
+              }
+            | null
         }
       }
     | {
@@ -2167,6 +2191,30 @@ export type SessionsEventsOutput =
           }>
         }
         readonly delivery: "steer" | "queue"
+        readonly task?:
+          | {
+              readonly kind: "invocation"
+              readonly admission: {
+                readonly inputID: string
+                readonly rootSessionID: string
+                readonly parentSessionID: string
+                readonly parentMessageID: string
+                readonly callID: string
+                readonly promptDigest: string
+                readonly childSessionID: string
+                readonly description: string
+                readonly agentID: string
+                readonly locationRevision: number
+                readonly backend: "legacy" | "v2"
+              }
+            }
+          | {
+              readonly kind: "steer"
+              readonly invocationInputID: string
+              readonly operationID: string
+              readonly promptDigest: string
+            }
+          | undefined
       }
     }
   | {
@@ -2935,6 +2983,105 @@ export type SessionsStatusOutput = {
       | undefined
   }>
   readonly next?: string | undefined
+}
+
+export type SessionsSendInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly target: {
+    readonly target: {
+      readonly task_id: string
+      readonly invocation: {
+        readonly parent_session_id: string
+        readonly parent_message_id: string
+        readonly call_id: string
+      }
+      readonly input_id: string
+    }
+    readonly operation_id: string
+    readonly text: string
+  }["target"]
+  readonly operation_id: {
+    readonly target: {
+      readonly task_id: string
+      readonly invocation: {
+        readonly parent_session_id: string
+        readonly parent_message_id: string
+        readonly call_id: string
+      }
+      readonly input_id: string
+    }
+    readonly operation_id: string
+    readonly text: string
+  }["operation_id"]
+  readonly text: {
+    readonly target: {
+      readonly task_id: string
+      readonly invocation: {
+        readonly parent_session_id: string
+        readonly parent_message_id: string
+        readonly call_id: string
+      }
+      readonly input_id: string
+    }
+    readonly operation_id: string
+    readonly text: string
+  }["text"]
+}
+
+export type SessionsSendOutput = {
+  readonly input_id: string
+  readonly state: "admitted" | "promoted" | "not_delivered"
+  readonly reason: string | null
+}
+
+export type SessionsReconcileInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly target: {
+    readonly target: {
+      readonly task_id: string
+      readonly invocation: {
+        readonly parent_session_id: string
+        readonly parent_message_id: string
+        readonly call_id: string
+      }
+      readonly input_id: string
+    }
+    readonly operation_id: string
+    readonly disposition: "resume_pending" | "cancel_pending"
+  }["target"]
+  readonly operation_id: {
+    readonly target: {
+      readonly task_id: string
+      readonly invocation: {
+        readonly parent_session_id: string
+        readonly parent_message_id: string
+        readonly call_id: string
+      }
+      readonly input_id: string
+    }
+    readonly operation_id: string
+    readonly disposition: "resume_pending" | "cancel_pending"
+  }["operation_id"]
+  readonly disposition: {
+    readonly target: {
+      readonly task_id: string
+      readonly invocation: {
+        readonly parent_session_id: string
+        readonly parent_message_id: string
+        readonly call_id: string
+      }
+      readonly input_id: string
+    }
+    readonly operation_id: string
+    readonly disposition: "resume_pending" | "cancel_pending"
+  }["disposition"]
+}
+
+export type SessionsReconcileOutput = {
+  readonly input_id: string
+  readonly disposition: "resume_pending" | "cancel_pending"
+  readonly eligibility: "eligible" | "frozen" | "cancelled"
+  readonly capacity_state: "available" | "capacity_unavailable" | "not_applicable"
 }
 
 export type SessionsMessageInput = {

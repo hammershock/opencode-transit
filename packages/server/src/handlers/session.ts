@@ -20,6 +20,8 @@ import { HttpServerRequest } from "effect/unstable/http"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTaskView } from "@opencode-ai/core/session/task-view"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
+import { SessionTaskDelivery } from "@opencode-ai/core/session/task-delivery"
+import { SessionTask } from "@opencode-ai/core/session/task"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 
 const DefaultSessionsLimit = 50
@@ -634,6 +636,122 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               : error instanceof SessionTaskView.TargetUnavailable
                 ? new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })
                 : error,
+          ),
+        ),
+      )
+      .handle("session.task.send", (ctx) =>
+        Effect.gen(function* () {
+          const capability = SessionTaskCapability.evaluate(taskBackend)
+          if (capability.status === "unsupported")
+            return yield* new ServiceUnavailableError({
+              service: "task_control_unsupported",
+              message: `Task control unsupported: ${capability.missing.join(", ")}`,
+            })
+          yield* session
+            .get(ctx.params.sessionID)
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", () =>
+                Effect.fail(new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })),
+              ),
+            )
+          const target = ctx.payload.target
+          if (target.invocation.parent_session_id !== ctx.params.sessionID)
+            return yield* new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })
+          if (!ctx.payload.operation_id || !ctx.payload.text)
+            return yield* new InvalidRequestError({ message: "Invalid Task send request" })
+          const receipt = yield* SessionTaskDelivery.send({
+            childSessionID: target.task_id,
+            invocationInputID: target.input_id,
+            invocation: {
+              parentSessionID: ctx.params.sessionID,
+              parentMessageID: target.invocation.parent_message_id,
+              callID: target.invocation.call_id,
+            },
+            operationID: ctx.payload.operation_id,
+            text: ctx.payload.text,
+          })
+          return { input_id: receipt.inputID, state: receipt.state, reason: receipt.reason }
+        }).pipe(
+          Effect.mapError((error) =>
+            error instanceof SessionTaskDelivery.UnknownOrForbidden
+              ? new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })
+              : error instanceof SessionTask.AdmissionConflict
+                ? new ConflictError({ message: "Task invocation conflict" })
+                : error instanceof SessionTaskDelivery.NotRunning
+                  ? new ConflictError({ message: "Task is not running" })
+                  : error instanceof SessionTaskDelivery.Unavailable
+                    ? new ServiceUnavailableError({
+                        service: "task_control_unavailable",
+                        message: "Task control unavailable",
+                      })
+                    : error instanceof ServiceUnavailableError ||
+                        error instanceof SessionNotFoundError ||
+                        error instanceof InvalidRequestError
+                      ? error
+                      : new ServiceUnavailableError({
+                          service: "task_control_unavailable",
+                          message: "Task control unavailable",
+                        }),
+          ),
+        ),
+      )
+      .handle("session.task.reconcile", (ctx) =>
+        Effect.gen(function* () {
+          const capability = SessionTaskCapability.evaluate(taskBackend)
+          if (capability.status === "unsupported")
+            return yield* new ServiceUnavailableError({
+              service: "task_control_unsupported",
+              message: `Task control unsupported: ${capability.missing.join(", ")}`,
+            })
+          yield* session
+            .get(ctx.params.sessionID)
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", () =>
+                Effect.fail(new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })),
+              ),
+            )
+          const target = ctx.payload.target
+          if (target.invocation.parent_session_id !== ctx.params.sessionID)
+            return yield* new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })
+          if (!ctx.payload.operation_id)
+            return yield* new InvalidRequestError({ message: "Invalid Task reconcile request" })
+          const receipt = yield* SessionTaskDelivery.reconcile({
+            childSessionID: target.task_id,
+            inputID: target.input_id,
+            invocation: {
+              parentSessionID: ctx.params.sessionID,
+              parentMessageID: target.invocation.parent_message_id,
+              callID: target.invocation.call_id,
+            },
+            operationID: ctx.payload.operation_id,
+            actor: { kind: "user", id: "instance-user" },
+            disposition: ctx.payload.disposition,
+          })
+          return {
+            input_id: receipt.inputID,
+            disposition: receipt.disposition,
+            eligibility: receipt.eligibility,
+            capacity_state: receipt.capacityState,
+          }
+        }).pipe(
+          Effect.mapError((error) =>
+            error instanceof SessionTaskDelivery.UnknownOrForbidden
+              ? new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })
+              : error instanceof SessionTask.AdmissionConflict
+                ? new ConflictError({ message: "Task invocation conflict" })
+                : error instanceof SessionTaskDelivery.Unavailable
+                  ? new ServiceUnavailableError({
+                      service: "task_control_unavailable",
+                      message: "Task control unavailable",
+                    })
+                  : error instanceof ServiceUnavailableError ||
+                      error instanceof SessionNotFoundError ||
+                      error instanceof InvalidRequestError
+                    ? error
+                    : new ServiceUnavailableError({
+                        service: "task_control_unavailable",
+                        message: "Task control unavailable",
+                      }),
           ),
         ),
       )
