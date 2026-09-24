@@ -1,7 +1,7 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { describe, expect } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Cause, Effect, Exit, Layer } from "effect"
+import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import type * as Scope from "effect/Scope"
 import os from "os"
 import path from "path"
@@ -20,6 +20,7 @@ import { Plugin } from "../../src/plugin"
 import { testEffect } from "../lib/effect"
 import { Tool } from "@/tool/tool"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { MAX_TIMEOUT_MS, Parameters } from "@/tool/shell/prompt"
 import { InstanceStore } from "@/project/instance-store"
 
 const shellLayer = Layer.mergeAll(
@@ -37,6 +38,14 @@ const shellLayer = Layer.mergeAll(
   testInstanceStoreLayer,
 )
 const it = testEffect(shellLayer)
+
+it.live("rejects shell timeouts above the advertised maximum", () =>
+  Effect.sync(() => {
+    const decode = Schema.decodeUnknownSync(Parameters)
+    expect(() => decode({ command: "pwd", timeout: MAX_TIMEOUT_MS + 1 })).toThrow()
+    expect(decode({ command: "pwd", timeout: MAX_TIMEOUT_MS }).timeout).toBe(MAX_TIMEOUT_MS)
+  }),
+)
 type ShellTestServices =
   | (typeof shellLayer extends Layer.Layer<infer ROut, infer _E, infer _RIn> ? ROut : never)
   | InstanceStore.Service
