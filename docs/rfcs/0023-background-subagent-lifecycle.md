@@ -73,6 +73,8 @@ Transit 不需要复制 Codex 的工具名、Agent 拓扑、默认并发数或�
 - Child 保留自身 Location；目标选择及校验遵守 RFC-0018。控制机上的 Session execution owner 与 Rexd 工作区执行能力分别判断：持久状态/结果查询及本地 durable pending 取消无需 Rexd 连通；当前控制进程仍持有 owner 时可请求中断其执行链，但须单独报告远端进程停止是否得到确认；依赖目标执行能力的新调用按现有 Location 策略拒绝。所有分支都不得本机 fallback，也不把 target ID 当成 owner 身份。Agent 定义、模型、经济信息和访问状态分别沿用 RFC-0014/0016；控制消息不提升为用户授权或系统指令。
 - v1 对一个 root 委派树设有限 active 配额：最多 8 个 invocation，计入所有代际正在执行、等待权限/问题/子任务结果的调用，以及 owner unknown 且尚未管理性归档的调用；持久 pending 不占 active 配额。新 child 或 idle child 的新调用须在 root 范围原子取得额度，已满即在接纳前返回含当前用量与上限的 `capacity_exceeded`，不形成 capacity queue。仅已持有 active 额度的 child 可接纳后续 follow-up 为 pending；每个 child 最多 16 项、每个 root 最多 64 项，满额时接纳前拒绝。前一调用结算、后一 eligible input 晋升时在同一 root 串行边界转移额度；无额度时不得晋升，已接纳输入保留可见并返回 `capacity_unavailable`，不暗中轮询启动。不同 child 不能各自读计数后同时超额晋升。等待子任务的祖先继续占额度；额度不足时子委派立即失败，`task_wait` 保持有界，不能形成隐式无限等待。管理性归档 unknown 可释放**策略额度**，不证明外部资源已停止。限额与用量在 API 返回；不引入独立的 `queued_capacity` 调度器，也不返回“已运行”。已有深度限制与经济预算仍分别生效。
 
+root 任一 invocation 结算或管理性 disposition 释放额度时，在同一串行边界按持久接纳顺序重新评估各 child 的队首 eligible pending；只有仍有适用 live owner、Location 可执行且成功取得额度者才晋升。frozen input 不会因额度释放而自动变为 eligible，也不能被同一 child 的后续输入越过；若无可晋升项就停止评估，等待下一次明确的结算、处置或恢复操作事件，不使用后台轮询或冷恢复自动执行。
+
 ## 3. 生命周期和真实性
 
 ### 3.1 状态分层
@@ -285,6 +287,7 @@ sequenceDiagram
 | 本机旧 owner 确认退出，A unknown 且 B/C 冻结                          | 用户归档 A 而不造 terminal；授权方按 input ID 对 B/C 分别继续或取消；原 input 最多执行一次，再可接纳 D       |
 | 只失去远端/另一控制机观测且 unknown 占满 root 额度                    | 用户可归档以放行无关 child；同 child 的继续/D 仍拒绝，直至旧 owner 排他终止有证据；无自动重放或假取消        |
 | active 额度已满时在现有 child 排队，另一个 child 尝试启动             | 前者受 16/64 pending 上限接纳，后者 `capacity_exceeded`；晋升原子转移/取得额度，不超出 root 8                |
+| eligible pending 因额度不足等待，随后其他 child 结算或 unknown 归档   | 释放事件按持久顺序重新评估并晋升可执行队首一次；frozen 项及其同 child 后继不偷跑，冷恢复不自动执行           |
 | 祖先等待子任务结果时额度已满                                          | 祖先仍占额度；新孙任务收到可处理的 capacity 错误，wait 有界结束，无隐式无限等待                              |
 | `task_stop` 首次覆盖 A/B/C 后响应丢失，随后 D 接纳并重试              | 同 `operation_id` 重试及重启后只对账 A/B/C，D 不受影响；冲突 ID 拒绝；无 owner 时 B/C 仍取消而 A unavailable |
 | Rexd 断线，controller owner 仍在                                      | 仍可读历史/结果、取消 pending、请求中断本地 owner；远端副作用未确认就明确报告，绝不本机 fallback             |
