@@ -1,5 +1,5 @@
 import { SessionV2 } from "@opencode-ai/core/session"
-import { DateTime, Effect, Option, Stream } from "effect"
+import { Cause, DateTime, Effect, Option, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { SessionsCursor } from "@opencode-ai/protocol/groups/session"
@@ -22,6 +22,7 @@ import { SessionTaskView } from "@opencode-ai/core/session/task-view"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { SessionTaskDelivery } from "@opencode-ai/core/session/task-delivery"
 import { SessionTask } from "@opencode-ai/core/session/task"
+import { SessionTaskWait } from "@opencode-ai/core/session/task-wait"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
@@ -765,6 +766,60 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                         message: "Task control unavailable",
                       }),
           ),
+        ),
+      )
+      .handle("session.taskWait", (ctx) =>
+        Effect.gen(function* () {
+          const capability = SessionTaskCapability.evaluate(taskBackend)
+          if (capability.status === "unsupported")
+            return yield* new ServiceUnavailableError({
+              service: "task_control_unsupported",
+              message: `Task control unsupported: ${capability.missing.join(", ")}`,
+            })
+          yield* session
+            .get(ctx.params.sessionID)
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", () =>
+                Effect.fail(new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })),
+              ),
+            )
+          return yield* SessionTaskWait.wait({
+            parentSessionID: ctx.params.sessionID,
+            targets: ctx.payload.targets,
+            until: ctx.payload.until,
+            timeoutMs: ctx.payload.timeout_ms,
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.provideService(EventV2.Service, events),
+            Effect.provideService(LocationServiceMap.Service, locations),
+          )
+        }).pipe(
+          Effect.mapError((error) =>
+            error instanceof SessionTaskWait.UnknownOrForbidden
+              ? new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })
+              : error instanceof SessionTaskWait.InvalidRequest
+                ? new InvalidRequestError({ message: "Invalid Task wait request" })
+                : error instanceof ServiceUnavailableError || error instanceof SessionNotFoundError
+                  ? error
+                  : new ServiceUnavailableError({
+                      service: "task_wait_unavailable",
+                      message: "Task wait unavailable",
+                    }),
+          ),
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt
+            const error = Cause.squash(cause)
+            return Effect.fail(
+              error instanceof SessionNotFoundError ||
+                error instanceof InvalidRequestError ||
+                error instanceof ServiceUnavailableError
+                ? error
+                : new ServiceUnavailableError({
+                    service: "task_wait_unavailable",
+                    message: "Task wait unavailable",
+                  }),
+            )
+          }),
         ),
       )
       .handle(

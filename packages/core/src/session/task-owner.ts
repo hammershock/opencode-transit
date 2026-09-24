@@ -37,6 +37,35 @@ type Lease = {
 }
 
 const active = new Map<string, Lease>()
+const listeners = new Map<string, Set<() => void>>()
+
+/** One-shot local owner transition signal; callers subscribe before reading the owner snapshot. */
+export function watch(filename: string, childSessionID: string) {
+  const key = lockPath(filename, childSessionID)
+  const callbacks = listeners.get(key) ?? new Set<() => void>()
+  listeners.set(key, callbacks)
+  let wake!: () => void
+  const changed = new Promise<void>((resolve) => {
+    wake = resolve
+  })
+  callbacks.add(wake)
+  return {
+    changed,
+    close: () => {
+      callbacks.delete(wake)
+      if (!callbacks.size) listeners.delete(key)
+    },
+  }
+}
+
+/** Test/diagnostic observation; this counts listeners, never owner state. */
+export function watcherCount(filename: string, childSessionID: string) {
+  return listeners.get(lockPath(filename, childSessionID))?.size ?? 0
+}
+
+function notify(key: string) {
+  for (const listener of listeners.get(key) ?? []) listener()
+}
 
 export async function observe(filename: string, childSessionID: string) {
   const lease = active.get(lockPath(filename, childSessionID))
@@ -247,7 +276,10 @@ export const withLease = <A, E, R>(
             { behavior: "immediate" },
           ),
         )
-        active.set(lockPath(database.filename!, input.childSessionID), lease)
+        const key = lockPath(database.filename!, input.childSessionID)
+        active.set(key, lease)
+        notify(key)
+        void lease.exited.then(() => notify(key))
         const lost = Effect.callback<never, LeaseLost>((resume) => {
           let listening = true
           void lease.exited.then(() => {
@@ -264,7 +296,11 @@ export const withLease = <A, E, R>(
     (lease) =>
       Effect.tryPromise({
         try: async () => {
-          if (database.filename) active.delete(lockPath(database.filename, input.childSessionID))
+          if (database.filename) {
+            const key = lockPath(database.filename, input.childSessionID)
+            active.delete(key)
+            notify(key)
+          }
           await lease.close()
         },
         catch: (error) => (error instanceof LeaseLost ? error : new LeaseLost()),

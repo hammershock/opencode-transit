@@ -420,8 +420,9 @@ export const layerWith = (options?: LayerOptions) =>
 
       function notify(event: Payload, isolateListeners: boolean) {
         return Effect.gen(function* () {
+          // A listener may unsubscribe during this publish; keep later listeners in the same dispatch.
           yield* Effect.forEach(
-            listeners,
+            [...listeners],
             (listener) => (isolateListeners ? observe(event, listener) : listener(event)),
             { discard: true },
           )

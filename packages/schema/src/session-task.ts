@@ -45,6 +45,12 @@ export const ReconcileReceipt = Schema.Struct({
   capacity_state: Schema.Literals(["available", "capacity_unavailable", "not_applicable"]),
 })
 
+export const WaitRequest = Schema.Struct({
+  targets: Schema.Array(ExactTarget),
+  until: Schema.optional(Schema.Literals(["terminal", "change"])),
+  timeout_ms: Schema.optional(Schema.Int),
+})
+
 export const View = Schema.Struct({
   target: Target,
   description: Schema.String,
@@ -111,4 +117,10 @@ export const StatusRequest = Schema.Struct({
 export const StatusPage = Schema.Struct({
   data: Schema.Array(View),
   next: Schema.optional(Schema.String),
+})
+
+export const WaitReceipt = Schema.Struct({
+  reason: Schema.Literals(["terminal", "state_changed", "needs_input", "unavailable", "parent_input", "timeout"]),
+  timed_out: Schema.Boolean,
+  data: Schema.Array(View),
 })

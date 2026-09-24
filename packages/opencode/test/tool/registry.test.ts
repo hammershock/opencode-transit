@@ -2,12 +2,22 @@ import { afterEach, describe, expect } from "bun:test"
 import path from "path"
 import fs from "fs/promises"
 import { fileURLToPath, pathToFileURL } from "url"
-import { Effect, Layer, Result, Schema } from "effect"
+import { Effect, Fiber, Layer, Option, Result, Schema } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
 import { ToolRegistry } from "@/tool/registry"
 import { protectStatus } from "@/tool/task-status"
 import { SessionTaskView } from "@opencode-ai/core/session/task-view"
+import { Database } from "@opencode-ai/core/database/database"
+import { EventV2 } from "@opencode-ai/core/event"
+import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { SessionSchema } from "@opencode-ai/core/session/schema"
+import { SessionMessage } from "@opencode-ai/core/session/message"
+import { Project } from "@opencode-ai/core/project"
+import { Prompt } from "@opencode-ai/schema/prompt"
+import { SessionTaskTable } from "@opencode-ai/core/session/sql"
+import { eq } from "drizzle-orm"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { Tool } from "@/tool/tool"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
@@ -70,11 +80,14 @@ const withBackground = testEffect(
   ]),
 )
 const withTaskBackend = testEffect(
-  LayerNode.compile(root, [
-    [Config.node, configLayer],
-    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalBackgroundSubagents: true })],
-    [LocationServiceMap.node, locationServiceMapLayer],
-  ]).pipe(
+  LayerNode.compile(
+    LayerNode.group([ToolRegistry.node, Agent.node, Database.node, EventV2.node, SessionProjector.node]),
+    [
+      [Config.node, configLayer],
+      [RuntimeFlags.node, RuntimeFlags.layer({ experimentalBackgroundSubagents: true })],
+      [LocationServiceMap.node, locationServiceMapLayer],
+    ],
+  ).pipe(
     Layer.provideMerge(
       Layer.succeed(SessionTaskCapability.Service, {
         id: "session_v2",
@@ -144,6 +157,7 @@ describe("tool.registry", () => {
       expect(ids).not.toContain("task_status")
       expect(ids).not.toContain("task_send")
       expect(ids).not.toContain("task_reconcile")
+      expect(ids).not.toContain("task_wait")
     }),
   )
 
@@ -153,6 +167,7 @@ describe("tool.registry", () => {
       expect(yield* registry.ids()).not.toContain("task_status")
       expect(yield* registry.ids()).not.toContain("task_send")
       expect(yield* registry.ids()).not.toContain("task_reconcile")
+      expect(yield* registry.ids()).not.toContain("task_wait")
     }),
   )
 
@@ -162,6 +177,7 @@ describe("tool.registry", () => {
       expect(yield* registry.ids()).toContain("task_status")
       expect(yield* registry.ids()).toContain("task_send")
       expect(yield* registry.ids()).toContain("task_reconcile")
+      expect(yield* registry.ids()).toContain("task_wait")
     }),
   )
 
@@ -183,6 +199,143 @@ describe("tool.registry", () => {
       const second = yield* status!.execute({ target: { task_id: SessionID.make("ses_missing_b") } }, ctx)
       expect(first.output).toBe("task_target_unavailable")
       expect(second.output).toBe(first.output)
+    }),
+  )
+
+  withTaskBackend.instance("returns a bounded wait error for an unknown exact child", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const wait = (yield* registry.all()).find((item) => item.id === "task_wait")
+      expect(wait).toBeDefined()
+      const parent = SessionID.make("ses_wait_parent")
+      const output = yield* wait!.execute(
+        {
+          targets: [
+            {
+              task_id: SessionID.make("ses_missing"),
+              input_id: "msg_missing",
+              invocation: { parent_session_id: parent, parent_message_id: "msg_parent", call_id: "call-task" },
+            },
+          ],
+          timeout_ms: 10,
+        },
+        {
+          sessionID: parent,
+          messageID: MessageID.make("msg_wait_parent"),
+          agent: "build",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+      expect(output.output).toBe("task_unknown_or_forbidden")
+    }),
+  )
+
+  withTaskBackend.instance("a pre-aborted model Task wait cancels without touching the child", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const wait = (yield* registry.all()).find((item) => item.id === "task_wait")
+      expect(wait).toBeDefined()
+      const parent = SessionID.make("ses_wait_parent")
+      const controller = new AbortController()
+      controller.abort()
+      const output = yield* wait!.execute(
+        {
+          targets: [
+            {
+              task_id: SessionID.make("ses_missing"),
+              input_id: "msg_missing",
+              invocation: { parent_session_id: parent, parent_message_id: "msg_parent", call_id: "call-task" },
+            },
+          ],
+          timeout_ms: 10_000,
+        },
+        {
+          sessionID: parent,
+          messageID: MessageID.make("msg_wait_parent"),
+          agent: "build",
+          abort: controller.signal,
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+      expect(output.output).toBe("task_wait_cancelled")
+    }),
+  )
+
+  withTaskBackend.instance("an in-flight model Task wait stops on ctx.abort without cancelling its child", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const wait = (yield* registry.all()).find((item) => item.id === "task_wait")
+      expect(wait).toBeDefined()
+      const parent = SessionSchema.ID.create()
+      const child = SessionSchema.ID.create()
+      const input = SessionMessage.ID.create()
+      const now = Date.now()
+      const info = {
+        id: parent,
+        slug: "wait-parent",
+        projectID: Project.ID.global,
+        directory: process.cwd(),
+        title: "wait parent",
+        version: "test",
+        time: { created: now, updated: now },
+      }
+      yield* events.publish(SessionV1.Event.Created, { sessionID: parent, info })
+      yield* events.publish(SessionV1.Event.Created, {
+        sessionID: child,
+        info: { ...info, id: child, slug: "wait-child", parentID: parent },
+        task: {
+          inputID: input,
+          rootSessionID: parent,
+          parentSessionID: parent,
+          parentMessageID: "msg_parent",
+          callID: "call-task",
+          promptDigest: "digest",
+          childSessionID: child,
+          description: "work",
+          agentID: "build",
+          locationRevision: 0,
+          backend: "v2" as const,
+        },
+        taskInput: { messageID: input, prompt: Prompt.make({ text: "work" }), delivery: "queue" },
+      })
+      const controller = new AbortController()
+      const waiting = yield* wait!
+        .execute(
+          {
+            targets: [
+              {
+                task_id: child,
+                input_id: input,
+                invocation: { parent_session_id: parent, parent_message_id: "msg_parent", call_id: "call-task" },
+              },
+            ],
+            timeout_ms: 10_000,
+          },
+          {
+            sessionID: parent,
+            messageID: MessageID.make("msg_parent"),
+            agent: "build",
+            abort: controller.signal,
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+      expect(Option.isNone(yield* Fiber.await(waiting).pipe(Effect.timeoutOption(10)))).toBe(true)
+      controller.abort()
+      const output = yield* Fiber.join(waiting)
+      expect(output.output).toBe("task_wait_cancelled")
+      const row = yield* database.db.select().from(SessionTaskTable).where(eq(SessionTaskTable.input_id, input)).get()
+      expect(row?.state).toBe("admitted")
     }),
   )
 
