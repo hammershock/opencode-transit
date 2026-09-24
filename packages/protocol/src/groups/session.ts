@@ -536,6 +536,32 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
       ),
     )
     .add(
+      HttpApiEndpoint.post("session.taskInterrupt", "/api/session/:sessionID/task/interrupt", {
+        params: { sessionID: Session.ID },
+        payload: SessionTask.InterruptRequest,
+        success: SessionTask.InterruptReceipt,
+        error: [SessionNotFoundError, ConflictError, InvalidRequestError, ServiceUnavailableError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.task.interrupt",
+          summary: "Interrupt one exact direct child Task invocation",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.taskStop", "/api/session/:sessionID/task/stop", {
+        params: { sessionID: Session.ID },
+        payload: SessionTask.StopRequest,
+        success: SessionTask.StopReceipt,
+        error: [SessionNotFoundError, ConflictError, InvalidRequestError, ServiceUnavailableError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.task.stop",
+          summary: "Stop one direct child Task's fixed current and pending scope",
+        }),
+      ),
+    )
+    .add(
       HttpApiEndpoint.get("session.message", "/api/session/:sessionID/message/:messageID", {
         params: { sessionID: Session.ID, messageID: SessionMessage.ID },
         success: Schema.Struct({ data: SessionMessage.Message }),

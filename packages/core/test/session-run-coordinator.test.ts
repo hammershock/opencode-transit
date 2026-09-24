@@ -215,6 +215,41 @@ describe("SessionRunCoordinator", () => {
     ),
   )
 
+  it.effect("signals only the bound invocation and preserves the queued successor", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>()
+        const secondStarted = yield* Deferred.make<void>()
+        const secondGate = yield* Deferred.make<void>()
+        const coordinatorRef: { current?: SessionRunCoordinator.Coordinator<string, never> } = {}
+        let runs = 0
+        const coordinator = yield* SessionRunCoordinator.make<string, never>({
+          drain: () =>
+            Effect.gen(function* () {
+              const index = ++runs
+              const unbind = coordinatorRef.current!.bindExact("child", index === 1 ? "A" : "B", `gen-${index}`)
+              return yield* (
+                index === 1
+                  ? Deferred.succeed(firstStarted, undefined).pipe(Effect.andThen(Effect.never))
+                  : Deferred.succeed(secondStarted, undefined).pipe(Effect.andThen(Deferred.await(secondGate)))
+              ).pipe(Effect.ensuring(Effect.sync(unbind)))
+            }),
+        })
+        coordinatorRef.current = coordinator
+        const run = yield* coordinator.run("child").pipe(Effect.forkChild)
+        yield* Deferred.await(firstStarted)
+        yield* coordinator.wake("child")
+        expect(coordinator.requestInterruptExact("child", "A", "wrong-generation")).toBe(false)
+        expect(coordinator.requestInterruptExact("child", "A", "gen-1")).toBe(true)
+        yield* Deferred.await(secondStarted)
+        expect(coordinator.requestInterruptExact("child", "A", "gen-1")).toBe(false)
+        yield* Deferred.succeed(secondGate, undefined)
+        yield* Fiber.await(run)
+        expect(runs).toBe(2)
+      }),
+    ),
+  )
+
   it.effect("interrupts active execution and clears its pending wake", () =>
     Effect.scoped(
       Effect.gen(function* () {

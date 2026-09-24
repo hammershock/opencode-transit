@@ -15,6 +15,7 @@ import {
   SessionTaskDeletionTable,
   SessionTaskOperationTable,
   SessionTaskSteerTable,
+  SessionTaskStopTable,
   SessionTaskTable,
 } from "./sql"
 
@@ -27,6 +28,21 @@ export const ROOT_PENDING_LIMIT = 64
 export function deletionPredicate(sessionID: string) {
   return or(eq(SessionTaskTable.parent_session_id, sessionID), eq(SessionTaskTable.root_session_id, sessionID))
 }
+
+/** Both local Deleted projection and SyncControl tombstones clear Task facts identically. */
+export const deleteProjectionForSession = Effect.fn("SessionTask.deleteProjectionForSession")(function* (
+  db: Pick<DB, "delete">,
+  sessionID: string,
+) {
+  yield* db
+    .delete(SessionTaskStopTable)
+    .where(
+      or(eq(SessionTaskStopTable.parent_session_id, sessionID), eq(SessionTaskStopTable.root_session_id, sessionID)),
+    )
+    .run()
+    .pipe(Effect.orDie)
+  yield* db.delete(SessionTaskTable).where(deletionPredicate(sessionID)).run().pipe(Effect.orDie)
+})
 
 /** The gate only orders local child operations; the immediate DB transaction arbitrates root quota. */
 const owners = KeyedMutex.makeUnsafe<string>()
@@ -719,6 +735,93 @@ export const projectReconciled = Effect.fn("SessionTask.projectReconciled")(func
     .where(eq(SessionTaskTable.input_id, input.inputID))
     .run()
     .pipe(Effect.orDie)
+})
+
+export const projectStopped = Effect.fn("SessionTask.projectStopped")(function* (
+  db: DB,
+  input: {
+    childSessionID: string
+    rootSessionID: string
+    parentSessionID: string
+    operationID: string
+    intent: "interrupt" | "stop"
+    actorKind: "user" | "parent"
+    actorID: string
+    members: readonly { inputID: string; state: "active" | "pending" }[]
+    timestamp: number
+  },
+) {
+  const previous = yield* db
+    .select()
+    .from(SessionTaskStopTable)
+    .where(eq(SessionTaskStopTable.operation_id, input.operationID))
+    .get()
+    .pipe(Effect.orDie)
+  if (previous) {
+    if (
+      previous.child_session_id !== input.childSessionID ||
+      previous.root_session_id !== input.rootSessionID ||
+      previous.parent_session_id !== input.parentSessionID ||
+      previous.actor_kind !== input.actorKind ||
+      previous.actor_id !== input.actorID ||
+      previous.intent !== input.intent ||
+      JSON.stringify(previous.members) !== JSON.stringify(input.members)
+    )
+      return yield* Effect.die(new AdmissionConflict())
+    return
+  }
+  const child = yield* db
+    .select({ id: SessionTable.id, parentID: SessionTable.parent_id })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, SessionSchema.ID.make(input.childSessionID)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!child || child.parentID !== input.parentSessionID) return
+  const tombstone = yield* db
+    .select({ id: SessionTaskDeletionTable.session_id })
+    .from(SessionTaskDeletionTable)
+    .where(
+      inArray(SessionTaskDeletionTable.session_id, [input.rootSessionID, input.parentSessionID, input.childSessionID]),
+    )
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  if (tombstone) return
+  yield* db
+    .insert(SessionTaskStopTable)
+    .values({
+      operation_id: input.operationID,
+      root_session_id: input.rootSessionID,
+      parent_session_id: input.parentSessionID,
+      child_session_id: input.childSessionID,
+      actor_kind: input.actorKind,
+      actor_id: input.actorID,
+      intent: input.intent,
+      members: input.members,
+      time_created: input.timestamp,
+    })
+    .run()
+    .pipe(Effect.orDie)
+  for (const member of input.members) {
+    if (member.state !== "pending") continue
+    const row = yield* find(db, member.inputID)
+    if (!row || row.child_session_id !== input.childSessionID || row.state === "settled") continue
+    if (row.state === "active") return yield* Effect.die(new AdmissionConflict())
+    yield* db
+      .update(SessionTaskTable)
+      .set({
+        state: "settled",
+        eligibility: "cancelled",
+        outcome: "cancelled",
+        disposition_operation_id: `${input.operationID}:${member.inputID}`,
+        disposition_actor_id: input.actorID,
+        disposition_time: input.timestamp,
+        time_settled: input.timestamp,
+      })
+      .where(eq(SessionTaskTable.input_id, member.inputID))
+      .run()
+      .pipe(Effect.orDie)
+  }
 })
 
 function count(db: DB, where: SQL | undefined) {

@@ -281,12 +281,35 @@ const Endpoint3_21 = (raw: RawClient["server.session"]) => (input: Endpoint3_21I
     payload: { targets: input["targets"], until: input["until"], timeout_ms: input["timeout_ms"] },
   }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint3_22Request = Parameters<RawClient["server.session"]["session.message"]>[0]
+type Endpoint3_22Request = Parameters<RawClient["server.session"]["session.taskInterrupt"]>[0]
 type Endpoint3_22Input = {
   readonly sessionID: Endpoint3_22Request["params"]["sessionID"]
-  readonly messageID: Endpoint3_22Request["params"]["messageID"]
+  readonly target: Endpoint3_22Request["payload"]["target"]
 }
 const Endpoint3_22 = (raw: RawClient["server.session"]) => (input: Endpoint3_22Input) =>
+  raw["session.taskInterrupt"]({
+    params: { sessionID: input["sessionID"] },
+    payload: { target: input["target"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint3_23Request = Parameters<RawClient["server.session"]["session.taskStop"]>[0]
+type Endpoint3_23Input = {
+  readonly sessionID: Endpoint3_23Request["params"]["sessionID"]
+  readonly task_id: Endpoint3_23Request["payload"]["task_id"]
+  readonly operation_id: Endpoint3_23Request["payload"]["operation_id"]
+}
+const Endpoint3_23 = (raw: RawClient["server.session"]) => (input: Endpoint3_23Input) =>
+  raw["session.taskStop"]({
+    params: { sessionID: input["sessionID"] },
+    payload: { task_id: input["task_id"], operation_id: input["operation_id"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint3_24Request = Parameters<RawClient["server.session"]["session.message"]>[0]
+type Endpoint3_24Input = {
+  readonly sessionID: Endpoint3_24Request["params"]["sessionID"]
+  readonly messageID: Endpoint3_24Request["params"]["messageID"]
+}
+const Endpoint3_24 = (raw: RawClient["server.session"]) => (input: Endpoint3_24Input) =>
   raw["session.message"]({ params: { sessionID: input["sessionID"], messageID: input["messageID"] } }).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
@@ -315,7 +338,9 @@ const adaptGroup3 = (raw: RawClient["server.session"]) => ({
   send: Endpoint3_19(raw),
   reconcile: Endpoint3_20(raw),
   taskWait: Endpoint3_21(raw),
-  message: Endpoint3_22(raw),
+  taskInterrupt: Endpoint3_22(raw),
+  taskStop: Endpoint3_23(raw),
+  message: Endpoint3_24(raw),
 })
 
 type Endpoint4_0Request = Parameters<RawClient["server.message"]["session.messages"]>[0]

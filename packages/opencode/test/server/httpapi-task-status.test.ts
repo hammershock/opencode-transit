@@ -12,6 +12,41 @@ afterEach(async () => {
 })
 
 describe("Task status HttpApi capability boundary", () => {
+  test("complete HTTP control cancels pending input and retries a fixed stop scope", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const child = Bun.spawn([process.execPath, "test/fixture/task-control-http.ts"], {
+      cwd: import.meta.dir + "/../..",
+      env: {
+        ...process.env,
+        OPENCODE_DB: tmp.path + "/task-control-http.sqlite",
+        TASK_CONTROL_HTTP_DIRECTORY: tmp.path,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ])
+    expect(code, stderr).toBe(0)
+    const result = JSON.parse(
+      stdout
+        .split("\n")
+        .find((line) => line.startsWith("TASK_CONTROL_HTTP:"))!
+        .slice("TASK_CONTROL_HTTP:".length),
+    ) as {
+      stopped: { data: { input_id: string; state: string }[] }
+      retry: { data: { input_id: string; state: string }[] }
+      interrupted: { input_id: string; state: string }
+      first: string
+      later: string
+    }
+    expect(result.stopped.data).toEqual([{ input_id: result.first, state: "cancelled_pending" }])
+    expect(result.retry).toEqual(result.stopped)
+    expect(result.interrupted).toEqual({ input_id: result.later, state: "cancelled_pending" })
+  }, 45_000)
+
   test("legacy adapter returns explicit unsupported without resolving a target", async () => {
     await using tmp = await tmpdir({ git: true })
     for (const [route, body] of [
@@ -61,6 +96,17 @@ describe("Task status HttpApi capability boundary", () => {
           timeout_ms: 100,
         },
       ],
+      [
+        "interrupt",
+        {
+          target: {
+            task_id: "ses_hidden",
+            invocation: { parent_session_id: "ses_missing", parent_message_id: "msg_parent", call_id: "call-task" },
+            input_id: "msg_input",
+          },
+        },
+      ],
+      ["stop", { task_id: "ses_hidden", operation_id: "stop-1" }],
     ] as const) {
       const response = await HttpApiApp.webHandler().handler(
         new Request(`http://localhost/api/session/ses_missing/task/${route}`, {
@@ -172,6 +218,29 @@ describe("Task status HttpApi capability boundary", () => {
       expect(forbidden.status).toBe(unknown.status)
       expect(await forbidden.text()).toBe(await unknown.text())
     }
+    const interruptTarget = (taskID: string) => ({
+      target: {
+        task_id: taskID,
+        input_id: "msg_missing",
+        invocation: { parent_session_id: parent.id, parent_message_id: "msg_parent", call_id: "call-task" },
+      },
+    })
+    const unknownInterrupt = await request(`/api/session/${parent.id}/task/interrupt`, interruptTarget("ses_missing"))
+    const foreignInterrupt = await request(`/api/session/${parent.id}/task/interrupt`, interruptTarget(foreign.id))
+    expect(unknownInterrupt.status, await unknownInterrupt.clone().text()).toBe(404)
+    expect(foreignInterrupt.status).toBe(unknownInterrupt.status)
+    expect(await foreignInterrupt.text()).toBe(await unknownInterrupt.text())
+    const unknownStop = await request(`/api/session/${parent.id}/task/stop`, {
+      task_id: "ses_missing",
+      operation_id: "stop-unknown",
+    })
+    const foreignStop = await request(`/api/session/${parent.id}/task/stop`, {
+      task_id: foreign.id,
+      operation_id: "stop-unknown",
+    })
+    expect(unknownStop.status, await unknownStop.clone().text()).toBe(404)
+    expect(foreignStop.status).toBe(unknownStop.status)
+    expect(await foreignStop.text()).toBe(await unknownStop.text())
     const waitTarget = (taskID: string) => ({
       task_id: taskID,
       input_id: "msg_missing",

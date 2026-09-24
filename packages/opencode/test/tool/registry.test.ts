@@ -158,6 +158,8 @@ describe("tool.registry", () => {
       expect(ids).not.toContain("task_send")
       expect(ids).not.toContain("task_reconcile")
       expect(ids).not.toContain("task_wait")
+      expect(ids).not.toContain("task_interrupt")
+      expect(ids).not.toContain("task_stop")
     }),
   )
 
@@ -168,6 +170,8 @@ describe("tool.registry", () => {
       expect(yield* registry.ids()).not.toContain("task_send")
       expect(yield* registry.ids()).not.toContain("task_reconcile")
       expect(yield* registry.ids()).not.toContain("task_wait")
+      expect(yield* registry.ids()).not.toContain("task_interrupt")
+      expect(yield* registry.ids()).not.toContain("task_stop")
     }),
   )
 
@@ -178,6 +182,8 @@ describe("tool.registry", () => {
       expect(yield* registry.ids()).toContain("task_send")
       expect(yield* registry.ids()).toContain("task_reconcile")
       expect(yield* registry.ids()).toContain("task_wait")
+      expect(yield* registry.ids()).toContain("task_interrupt")
+      expect(yield* registry.ids()).toContain("task_stop")
     }),
   )
 

@@ -47,6 +47,10 @@ import type {
   SessionsReconcileOutput,
   SessionsTaskWaitInput,
   SessionsTaskWaitOutput,
+  SessionsTaskInterruptInput,
+  SessionsTaskInterruptOutput,
+  SessionsTaskStopInput,
+  SessionsTaskStopOutput,
   SessionsMessageInput,
   SessionsMessageOutput,
   MessagesListInput,
@@ -651,6 +655,30 @@ export function make(options: ClientOptions) {
             body: { targets: input["targets"], until: input["until"], timeout_ms: input["timeout_ms"] },
             successStatus: 200,
             declaredStatuses: [404, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      taskInterrupt: (input: SessionsTaskInterruptInput, requestOptions?: RequestOptions) =>
+        request<SessionsTaskInterruptOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/task/interrupt`,
+            body: { target: input["target"] },
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      taskStop: (input: SessionsTaskStopInput, requestOptions?: RequestOptions) =>
+        request<SessionsTaskStopOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/task/stop`,
+            body: { task_id: input["task_id"], operation_id: input["operation_id"] },
+            successStatus: 200,
+            declaredStatuses: [404, 409, 400, 503, 401],
             empty: false,
           },
           requestOptions,

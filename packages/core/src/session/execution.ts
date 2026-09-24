@@ -17,6 +17,12 @@ export interface Interface {
   readonly wakeAndWait: (sessionID: SessionSchema.ID) => Effect.Effect<void, SessionRunner.RunError>
   /** Interrupt active work owned by this process. Idle interruption is a no-op. */
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  /** Signal only the bound invocation generation. This never waits for settlement. */
+  readonly requestInterruptExact: (
+    sessionID: SessionSchema.ID,
+    inputID: string,
+    ownerGeneration: string,
+  ) => Effect.Effect<boolean>
 }
 
 /** Routes execution from a Session ID to the runner owned by that Session's Location. */
@@ -33,5 +39,6 @@ export const noopLayer = Layer.succeed(
     wake: () => Effect.void,
     wakeAndWait: () => Effect.void,
     interrupt: () => Effect.void,
+    requestInterruptExact: () => Effect.succeed(false),
   }),
 )

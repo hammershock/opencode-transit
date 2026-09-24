@@ -14,6 +14,10 @@ export interface Coordinator<Key, E> {
   readonly wakeAndWait: (key: Key) => Effect.Effect<void, E>
   /** Stops active execution and waits for its cleanup. */
   readonly interrupt: (key: Key) => Effect.Effect<void>
+  /** Bind an exact execution while its owner lease is held. */
+  readonly bindExact: (key: Key, inputID: string, ownerGeneration: string) => () => void
+  /** Compare and signal the bound fiber without waiting for cleanup under a child gate. */
+  readonly requestInterruptExact: (key: Key, inputID: string, ownerGeneration: string) => boolean
 }
 
 type Entry<E> = {
@@ -22,6 +26,7 @@ type Entry<E> = {
   owner?: Fiber.Fiber<void>
   pendingWake: boolean
   stopping: boolean
+  exact?: { readonly inputID: string; readonly ownerGeneration: string }
 }
 
 export const make = <Key, E>(options: {
@@ -122,5 +127,33 @@ export const make = <Key, E>(options: {
         return Fiber.interrupt(entry.owner)
       })
 
-    return { active: Effect.sync(() => new Set(active.keys())), run, wake, wakeAndWait, interrupt }
+    const bindExact = (key: Key, inputID: string, ownerGeneration: string) => {
+      const entry = active.get(key)
+      if (!entry?.owner) throw new Error("Cannot bind an execution without a coordinator owner")
+      const binding = { inputID, ownerGeneration }
+      entry.exact = binding
+      return () => {
+        if (entry.exact === binding) entry.exact = undefined
+      }
+    }
+
+    const requestInterruptExact = (key: Key, inputID: string, ownerGeneration: string) => {
+      const entry = active.get(key)
+      if (!entry?.owner || entry.exact?.inputID !== inputID || entry.exact.ownerGeneration !== ownerGeneration)
+        return false
+      // Capture this fiber before releasing the child gate. Awaiting its cleanup
+      // here would deadlock because settlement takes the same gate.
+      entry.owner.interruptUnsafe()
+      return true
+    }
+
+    return {
+      active: Effect.sync(() => new Set(active.keys())),
+      run,
+      wake,
+      wakeAndWait,
+      interrupt,
+      bindExact,
+      requestInterruptExact,
+    }
   })

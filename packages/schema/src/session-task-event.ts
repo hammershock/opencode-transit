@@ -79,4 +79,20 @@ export const Reconciled = Event.define({
   },
 })
 
-export const Definitions = Event.inventory(Admitted, Promoted, Settled, ArchivedUnknown, Reconciled)
+export const Stopped = Event.define({
+  type: "session.task.stopped",
+  durable: { aggregate: "sessionID", version: 1 },
+  schema: {
+    sessionID: SessionID,
+    rootSessionID: SessionID,
+    parentSessionID: SessionID,
+    operationID: Schema.String,
+    intent: Schema.Literals(["interrupt", "stop"]),
+    actorKind: Schema.Literals(["user", "parent"]),
+    actorID: Schema.String,
+    members: Schema.Array(Schema.Struct({ inputID: Schema.String, state: Schema.Literals(["active", "pending"]) })),
+    timestamp: Schema.Finite,
+  },
+})
+
+export const Definitions = Event.inventory(Admitted, Promoted, Settled, ArchivedUnknown, Reconciled, Stopped)

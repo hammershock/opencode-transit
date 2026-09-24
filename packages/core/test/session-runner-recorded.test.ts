@@ -97,6 +97,7 @@ const execution = Layer.effect(
       wake: coordinator.wake,
       wakeAndWait: coordinator.wakeAndWait,
       interrupt: coordinator.interrupt,
+      requestInterruptExact: () => Effect.succeed(false),
     })
   }),
 ).pipe(Layer.provide(runnerLayer))

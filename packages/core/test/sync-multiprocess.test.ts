@@ -35,6 +35,10 @@ type Message = {
       readonly disposition: string
       readonly capacityState: string
     }[]
+    readonly stopOperations?: readonly {
+      readonly operationID: string
+      readonly members: readonly { readonly inputID: string; readonly state: string }[]
+    }[]
     readonly durable?: readonly { readonly seq: number; readonly type: string }[]
     readonly deletion?: boolean
     readonly cursors: readonly { readonly device_id: string; readonly cursor: number }[]
@@ -548,3 +552,99 @@ test("syncs V2 steer, frozen follow-up and reconcile facts both ways without rev
     await Promise.all([a.stop(), b.stop()])
   }
 }, 60_000)
+
+test("syncs fixed Task stop scopes both ways and respects child and root tombstones for late events", async () => {
+  await using tmp = await tmpdir()
+  const cloudRoot = path.join(tmp.path, "cloud")
+  const a = spawnWorker({
+    workerID: "stop-a",
+    deviceID: "stop-device-a",
+    deviceRoot: path.join(tmp.path, "a"),
+    cloudRoot,
+  })
+  const b = spawnWorker({
+    workerID: "stop-b",
+    deviceID: "stop-device-b",
+    deviceRoot: path.join(tmp.path, "b"),
+    cloudRoot,
+  })
+  try {
+    await Promise.all([a.ready(), b.ready()])
+    const root = "ses_sync_stop_root"
+    await a.request({ op: "create", sessionID: root, title: "Task stop root" })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: root })).result?.session?.id === root,
+      "Task stop root on device B",
+    )
+    for (const [source, destination, child] of [
+      [a, b, "ses_sync_stop_from_a"],
+      [b, a, "ses_sync_stop_from_b"],
+    ] as const) {
+      await source.request({ op: "task-stop", sessionID: root, childID: child })
+      await waitUntilAsync(async () => {
+        const facts = (await destination.request({ op: "query", sessionID: child })).result
+        return (
+          facts?.v2Tasks?.length === 2 &&
+          facts.v2Tasks.every((task) => task.state === "settled" && task.eligibility === "cancelled") &&
+          facts.stopOperations?.[0]?.operationID === `stop_${child}`
+        )
+      }, `fixed Task stop on opposite device for ${child}`)
+      const facts = (await destination.request({ op: "query", sessionID: child })).result
+      expect(facts?.stopOperations?.[0]?.members.map((member) => member.inputID)).toEqual([
+        `msg_stop_${child}_a`,
+        `msg_stop_${child}_b`,
+      ])
+    }
+
+    const deletedChild = "ses_sync_stop_deleted_child"
+    await a.request({ op: "task-stop", sessionID: root, childID: deletedChild, holdStop: true })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: deletedChild })).result?.v2Tasks?.length === 2,
+      "pending stop scope before child deletion",
+    )
+    await b.request({ op: "delete", sessionID: deletedChild })
+    await b.request({ op: "sync" })
+    await waitUntilAsync(
+      async () => (await a.request({ op: "query", sessionID: deletedChild })).result?.deletion === true,
+      "child tombstone on stop source",
+    )
+    await a.request({ op: "flush-task", childID: deletedChild })
+    await a.request({ op: "sync" })
+    for (const worker of [a, b]) {
+      const facts = (await worker.request({ op: "query", sessionID: deletedChild })).result
+      expect(facts?.session).toBeUndefined()
+      expect(facts?.v2Tasks).toEqual([])
+      expect(facts?.stopOperations).toEqual([])
+    }
+
+    const deletedRootChild = "ses_sync_stop_deleted_root_child"
+    await b.request({ op: "task-stop", sessionID: root, childID: deletedRootChild, holdStop: true })
+    await waitUntilAsync(
+      async () => (await a.request({ op: "query", sessionID: deletedRootChild })).result?.v2Tasks?.length === 2,
+      "pending stop scope before root deletion",
+    )
+    await a.request({ op: "delete", sessionID: root })
+    await a.request({ op: "sync" })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: root })).result?.deletion === true,
+      "root tombstone on stop source",
+    )
+    await b.request({ op: "flush-task", childID: deletedRootChild })
+    await b.request({ op: "sync" })
+    await waitUntilAsync(
+      async () =>
+        (await a.request({ op: "query", sessionID: deletedRootChild })).result?.durable?.some(
+          (event) => event.type === "session.task.stopped.1",
+        ) === true,
+      "late stopped event arrival after root deletion",
+    )
+    for (const worker of [a, b]) {
+      expect((await worker.request({ op: "query", sessionID: root })).result?.session).toBeUndefined()
+      const facts = (await worker.request({ op: "query", sessionID: deletedRootChild })).result
+      expect(facts?.v2Tasks).toEqual([])
+      expect(facts?.stopOperations).toEqual([])
+    }
+  } finally {
+    await Promise.all([a.stop(), b.stop()])
+  }
+}, 90_000)
