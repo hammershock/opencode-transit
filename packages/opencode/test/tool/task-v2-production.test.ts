@@ -7,7 +7,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
 
-test("production V2 parent advertises and executes Task through a provider tool call", async () => {
+test.each([false, true])("production V2 parent executes Task with default HTTP handler first: %p", async (handlerFirst) => {
   await Effect.runPromise(
     Effect.gen(function* () {
       const llm = yield* TestLLMServer
@@ -33,6 +33,8 @@ test("production V2 parent advertises and executes Task through a provider tool 
           }),
           TASK_V2_TEST_DIRECTORY: temp.path,
           TASK_V2_TEST_LLM_URL: llm.url,
+          TASK_V2_TEST_DEFAULT_HANDLER_FIRST: String(handlerFirst),
+          TASK_V2_TEST_SETTLE: "true",
         },
         stdout: "pipe",
         stderr: "pipe",
@@ -50,7 +52,9 @@ test("production V2 parent advertises and executes Task through a provider tool 
       }
       expect(result.rows).toHaveLength(1)
       expect(result.rows[0]?.backend).toBe("v2")
+      expect(result.rows[0]?.state).toBe("settled")
       expect(result.legacyMessages).toBe(0)
+      expect(hits.some((hit) => JSON.stringify(hit.body).includes("CHILD_TASK_MARKER"))).toBe(true)
       const definitions = JSON.stringify(hits[0]?.body)
       for (const name of [
         "task",

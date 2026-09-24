@@ -78,6 +78,7 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { sessionExecutionLayer } from "@/effect/session-execution"
+import { taskBackendNode } from "@/effect/task-backend"
 import { lazy } from "@/util/lazy"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@opencode-ai/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
@@ -312,15 +313,14 @@ export function createRoutes(
   taskBackend?: SessionTaskCapability.Backend,
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
   const locationServiceMapV2 = sessionLocationMap
+  const taskCapability = Layer.succeed(SessionTaskCapability.Service, taskBackend ?? SessionTaskCapability.sessionV2)
 
   return Layer.mergeAll(
     rootApiRoutes,
     eventApiRoutes,
     ptyConnectApiRoutes,
     instanceRoutes,
-    taskBackend
-      ? serverRoutes.pipe(Layer.provide(Layer.succeed(SessionTaskCapability.Service, taskBackend)))
-      : serverRoutes.pipe(Layer.provide(Layer.succeed(SessionTaskCapability.Service, SessionTaskCapability.sessionV2))),
+    serverRoutes.pipe(Layer.provide(taskCapability)),
     docRoute,
     uiRoute,
   ).pipe(
@@ -345,6 +345,7 @@ export function createRoutes(
     ),
     Layer.provide(
       AppNodeBuilderV1.build(app, [
+        [taskBackendNode, taskCapability],
         [TargetRegistry.node, rexdTargetRegistryNode],
         [LocationServiceMap.node, locationServiceMapV2],
         [SessionExecution.node, sessionExecutionLayer],
