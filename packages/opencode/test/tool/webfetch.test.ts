@@ -1,11 +1,11 @@
 import { describe, expect } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
-import { Effect, Layer } from "effect"
+import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { Agent } from "../../src/agent/agent"
 import { Truncate } from "@/tool/truncate"
-import { WebFetchTool } from "../../src/tool/webfetch"
+import { Parameters, WebFetchTool } from "../../src/tool/webfetch"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Tool } from "@/tool/tool"
 import { testEffect } from "../lib/effect"
@@ -44,6 +44,37 @@ const exec = Effect.fn("WebFetchToolTest.exec")(function* (args: Tool.InferParam
 })
 
 describe("tool.webfetch", () => {
+  it.live("rejects timeout values outside the advertised range", () =>
+    Effect.sync(() => {
+      const decode = Schema.decodeUnknownSync(Parameters)
+      expect(() => decode({ url: "https://example.com", timeout: 0 })).toThrow()
+      expect(() => decode({ url: "https://example.com", timeout: 121 })).toThrow()
+      expect(decode({ url: "https://example.com", timeout: 120 }).timeout).toBe(120)
+    }),
+  )
+
+  it.instance("times out when a response stalls after its headers", () =>
+    withFetch(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("partial"))
+            },
+          }),
+          {
+            headers: { "content-type": "text/plain" },
+          },
+        ),
+      (url) =>
+        Effect.gen(function* () {
+          const exit = yield* exec({ url: url.toString(), format: "text", timeout: 0.05 }).pipe(Effect.exit)
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) expect(String(Cause.squash(exit.cause))).toContain("Request timed out")
+        }),
+    ),
+  )
+
   it.instance("returns image responses as file attachments", () =>
     Effect.gen(function* () {
       const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])

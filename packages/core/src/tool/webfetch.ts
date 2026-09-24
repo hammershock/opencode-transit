@@ -15,7 +15,7 @@ import { Tools } from "./tools"
 
 export const name = "webfetch"
 export const MAX_RESPONSE_BYTES = 5 * 1024 * 1024
-export const DEFAULT_TIMEOUT_SECONDS = 30
+export const DEFAULT_TIMEOUT_SECONDS = 120
 export const MAX_TIMEOUT_SECONDS = 120
 
 export const description = `Fetch content from an HTTP or HTTPS URL and return it as text, markdown, or HTML. Markdown is the default.
@@ -30,7 +30,7 @@ export const Input = Schema.Struct({
     .annotate({ description: "The format to return the content in. Defaults to markdown." })
     .pipe(Schema.withDecodingDefault(Effect.succeed("markdown" as const))),
   timeout: Timeout.pipe(Schema.optional).annotate({
-    description: `Optional timeout in seconds (maximum: ${MAX_TIMEOUT_SECONDS})`,
+    description: `Optional timeout in seconds (default: ${DEFAULT_TIMEOUT_SECONDS}; maximum: ${MAX_TIMEOUT_SECONDS})`,
   }),
 })
 
