@@ -2177,7 +2177,7 @@ describe("tool.task", () => {
     }),
   )
 
-  background.instance("background task completion waits for running updates", () =>
+  background.instance("legacy follow-up reports queued until the running task finishes", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
       const { chat, assistant } = yield* seed()
@@ -2234,7 +2234,12 @@ describe("tool.task", () => {
       expect(result.metadata.sessionId).toBe(started.metadata.sessionId)
       expect(result.metadata.background).toBe(true)
       expect(result.metadata.invocation.childMessageID).not.toBe(started.metadata.invocation.childMessageID)
-      expect(result.output).toContain("Background task updated")
+      expect(started.output).toContain("active steering and exact invocation interruption are unavailable")
+      expect(result.output).toContain('state="queued"')
+      expect(result.output).toContain("Background follow-up queued")
+      expect(result.output).toContain("has not been delivered to the running invocation")
+      expect(result.output).not.toContain("Additional context sent")
+      expect(prompts).toBe(1)
       first.resolve()
       expect((yield* jobs.get(started.metadata.sessionId))?.status).toBe("running")
       expect((yield* Effect.promise(() => updated.promise)).messageID).toBe(result.metadata.invocation.childMessageID)

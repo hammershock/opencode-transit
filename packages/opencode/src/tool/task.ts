@@ -65,18 +65,20 @@ const BACKGROUND_DESCRIPTION = [
   "Background mode: background=true launches the subagent asynchronously and returns immediately.",
   "Foreground is the default; use it when you need the result before continuing.",
   "Use background only for independent work that can run while you continue elsewhere.",
+  "task(task_id) queues a follow-up after the current task finishes. Use task_send for active steering when the child supports it.",
   "You will be notified automatically when it finishes.",
 ].join(" ")
 const BACKGROUND_STARTED = [
   "The task is working in the background. You will be notified automatically when it finishes.",
+  "This existing session uses the legacy Task backend: active steering and exact invocation interruption are unavailable for this child. Start a new parent session with background subagents enabled to use the new controls.",
   "DO NOT sleep, poll for progress, ask the task for status, or duplicate this task's work — avoid working with the same files or topics it is using.",
   "Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.",
 ].join("\n")
 const BACKGROUND_UPDATED = [
-  "Additional context sent to the running background task.",
-  "The task is still working in the background. You will be notified automatically when it finishes.",
+  "Follow-up queued. It will run after the current task and any earlier queued follow-ups finish; it has not been delivered to the running invocation.",
+  "This child uses the legacy Task backend and cannot receive active steering or exact invocation interruption. Start a new parent session with background subagents enabled to use the new controls.",
   "DO NOT sleep, poll for progress, ask the task for status, or duplicate this task's work — avoid working with the same files or topics it is using.",
-  "Work on non-overlapping tasks, or briefly tell the user what you sent and end your response.",
+  "Work on non-overlapping tasks, or briefly tell the user what you queued and end your response.",
 ].join("\n")
 
 const BaseParameterFields = {
@@ -1229,8 +1231,8 @@ export const TaskTool = Tool.define(
           },
           output: renderOutput({
             sessionID: nextSession.id,
-            state: "running",
-            summary: "Background task updated",
+            state: "queued",
+            summary: "Background follow-up queued",
             text: BACKGROUND_UPDATED,
             location: { id: planned.targetID, name: planned.targetName, directory: planned.directory },
           }),
