@@ -3,7 +3,6 @@ import { Database } from "bun:sqlite"
 import { Effect } from "effect"
 import { tmpdir } from "./fixture/fixture"
 import { TestLLMServer } from "./lib/llm-server"
-import { testProviderConfig } from "./lib/test-provider"
 
 const binary = process.env.OPENCODE_PACKAGED_BINARY
 
@@ -22,6 +21,17 @@ test.skipIf(!binary)("packaged default handler executes a V2 Task without legacy
         await using project = await tmpdir({ git: true })
         await using runtime = await tmpdir()
         const databasePath = `${runtime.path}/opencode.sqlite`
+        const config = {
+          experimental: { background_subagents: true },
+          providers: {
+            test: {
+              api: { type: "aisdk", package: "@ai-sdk/openai-compatible", url: llm.url },
+              request: { body: { apiKey: "test-key" } },
+              models: { "test-model": { api: { id: "test-model" } } },
+            },
+          },
+        }
+        await Bun.write(`${project.path}/opencode.jsonc`, JSON.stringify(config))
         const child = Bun.spawn(
           [binary!, "run", "--model", "test/test-model", "--agent", "build", "--auto", "PACKAGED_PARENT_MARKER"],
           {
@@ -36,15 +46,11 @@ test.skipIf(!binary)("packaged default handler executes a V2 Task without legacy
               XDG_STATE_HOME: `${runtime.path}/.local/state`,
               OPENCODE_DB: databasePath,
               OPENCODE_PURE: "1",
-              OPENCODE_DISABLE_PROJECT_CONFIG: "1",
               OPENCODE_DISABLE_AUTOUPDATE: "1",
               OPENCODE_DISABLE_AUTOCOMPACT: "1",
               OPENCODE_DISABLE_MODELS_FETCH: "1",
               OPENCODE_AUTH_CONTENT: "{}",
-              OPENCODE_CONFIG_CONTENT: JSON.stringify({
-                ...testProviderConfig(llm.url),
-                experimental: { background_subagents: true },
-              }),
+              OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
             },
             stdout: "pipe",
             stderr: "pipe",
@@ -57,7 +63,12 @@ test.skipIf(!binary)("packaged default handler executes a V2 Task without legacy
               throw new Error("packaged Task run timed out")
             }),
           ])
-          expect(code, stderr.slice(-2_000)).toBe(0)
+          if (code !== 0) {
+            const failure = new Database(databasePath, { readonly: true })
+            const messages = failure.query("SELECT type, data FROM session_message ORDER BY seq").all()
+            failure.close()
+            throw new Error(`Packaged Task failed: ${stdout.slice(-2_000)}\n${stderr.slice(-2_000)}\n${JSON.stringify(messages)}`)
+          }
           expect(stdout).toContain("parent completed")
           const hits = await Effect.runPromise(llm.hits)
           expect(hits.some((hit) => JSON.stringify(hit.body).includes("PACKAGED_CHILD_MARKER"))).toBe(true)
