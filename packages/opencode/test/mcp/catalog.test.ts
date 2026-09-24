@@ -27,6 +27,38 @@ function mcpTool() {
 }
 
 describe("McpCatalog.convertTool", () => {
+  test("shows and enforces the absolute timeout for direct calls", async () => {
+    const abort = new AbortController()
+    let observed: ReturnType<typeof McpCatalog.toolCallOptions> | undefined
+    const client = {
+      callTool: async (_request: unknown, _schema: unknown, options: ReturnType<typeof McpCatalog.toolCallOptions>) => {
+        observed = options
+        return { content: [] }
+      },
+    } as unknown as Client
+    const converted = McpCatalog.convertTool(mcpTool(), client, 30)
+    expect(converted.description).toContain("Timeout: 30 ms (absolute, including progress).")
+    await converted.execute?.({}, { ...options, abortSignal: abort.signal })
+    expect(observed?.timeout).toBe(30)
+    expect(observed?.resetTimeoutOnProgress).toBe(false)
+    expect(observed?.signal.aborted).toBe(false)
+    abort.abort()
+    expect(observed?.signal.aborted).toBe(true)
+  })
+
+  test("expires at the default absolute deadline even with progress callbacks", async () => {
+    expect(McpCatalog.toolDescription(undefined)).toContain("Timeout: 120000 ms")
+    const options = McpCatalog.toolCallOptions(undefined, 25)
+    const progress = setInterval(options.onprogress, 5)
+    try {
+      await new Promise<void>((resolve) => options.signal.addEventListener("abort", () => resolve(), { once: true }))
+      expect(options.signal.aborted).toBe(true)
+      expect(options.resetTimeoutOnProgress).toBe(false)
+    } finally {
+      clearInterval(progress)
+    }
+  })
+
   test("preserves content when structuredContent is also present", async () => {
     const content = [{ type: "image" as const, mimeType: "image/png", data: "AAAA" }]
     const structuredContent = { image: { mimeType: "image/png", data: "AAAA" } }

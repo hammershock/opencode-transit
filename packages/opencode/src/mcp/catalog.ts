@@ -9,6 +9,7 @@ import { dynamicTool, jsonSchema, type JSONSchema7, type Tool } from "ai"
 import { Effect } from "effect"
 
 const DEFAULT_TIMEOUT = 30_000
+export const DEFAULT_TOOL_TIMEOUT = 2 * 60_000
 const MAX_LIST_PAGES = 1_000
 
 const TolerantListToolsResultSchema = ListToolsResultSchema.extend({
@@ -39,6 +40,22 @@ export function defs(client: Client, timeout?: number) {
   return listTools(client, timeout ?? DEFAULT_TIMEOUT).pipe(Effect.catch(() => Effect.void))
 }
 
+export function toolDescription(description: string | undefined, timeout?: number) {
+  return `${description ?? ""}\n\nTimeout: ${timeout ?? DEFAULT_TOOL_TIMEOUT} ms (absolute, including progress).`
+}
+
+export function toolCallOptions(signal?: AbortSignal, timeout?: number) {
+  const duration = timeout ?? DEFAULT_TOOL_TIMEOUT
+  // The SDK's progress-reset option is an idle timer, not an absolute deadline.
+  // Keep a separate abort clock so progress cannot prolong execution forever.
+  return {
+    resetTimeoutOnProgress: false,
+    signal: AbortSignal.any(signal ? [signal, AbortSignal.timeout(duration)] : [AbortSignal.timeout(duration)]),
+    timeout: duration,
+    onprogress: () => {},
+  }
+}
+
 export function convertTool(mcpTool: MCPToolDef, client: Client, timeout?: number): Tool {
   const inputSchema: JSONSchema7 = {
     ...(mcpTool.inputSchema as JSONSchema7),
@@ -48,7 +65,7 @@ export function convertTool(mcpTool: MCPToolDef, client: Client, timeout?: numbe
   }
 
   return dynamicTool({
-    description: mcpTool.description ?? "",
+    description: toolDescription(mcpTool.description, timeout),
     inputSchema: jsonSchema(inputSchema),
     execute: async (args: unknown, options) => {
       const result = await client.callTool(
@@ -57,13 +74,7 @@ export function convertTool(mcpTool: MCPToolDef, client: Client, timeout?: numbe
           arguments: (args || {}) as Record<string, unknown>,
         },
         CallToolResultSchema,
-        {
-          resetTimeoutOnProgress: true,
-          signal: options.abortSignal,
-          timeout,
-          // The MCP SDK only sends a progress token when this hook is present, enabling timeout resets.
-          onprogress: () => {},
-        },
+        toolCallOptions(options.abortSignal, timeout),
       )
       if (result.isError)
         throw new Error(
