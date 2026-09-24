@@ -12,20 +12,21 @@ export function rexdMutationNodes(
   targetID: string,
   directory: string,
 ) {
+  const root = path.posix.resolve(directory)
   const make = Effect.gen(function* () {
     const files = new RexdFiles(targetID, yield* RexdLocationSession)
     const locks = KeyedMutex.makeUnsafe<string>()
     const resolve = LocationMutation.Service.of({
       resolve: Effect.fn("RexdLocationMutation.resolve")(function* (input) {
         const relative = !path.posix.isAbsolute(input.path)
-        const absolute = path.posix.resolve(directory, input.path)
-        if (relative && !contains(directory, absolute))
+        const absolute = path.posix.resolve(root, input.path)
+        if (relative && !contains(root, absolute))
           return yield* new LocationMutation.PathError({ path: input.path, reason: "relative_escape" })
-        const canonical = files.resolve(absolute, directory)
-        const stat = yield* Effect.promise(() => files.stat(canonical, directory))
-        const external = !contains(directory, canonical)
+        const canonical = files.resolve(absolute, root)
+        const stat = yield* Effect.promise(() => files.stat(canonical, root))
+        const external = !contains(root, canonical)
         const boundary = input.kind === "directory" && stat.type === "dir" ? canonical : path.posix.dirname(canonical)
-        const resource = external ? canonical : path.posix.relative(directory, canonical) || "."
+        const resource = external ? canonical : path.posix.relative(root, canonical) || "."
         return {
           canonical,
           resource,
