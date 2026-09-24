@@ -430,6 +430,9 @@ test("V1 parent Task call admits a V2 child and first inbox input in the real Ap
         expect(task?.parent_session_id).toBe(chat.id)
         expect(inbox?.delivery).toBe("queue")
         expect([receipt.output, retry.output].some((output) => output.includes(task!.input_id))).toBe(true)
+        expect([receipt.output, retry.output].find((output) => output.includes(task!.input_id))).toContain(
+          'state="admitted"',
+        )
         expect(retry.metadata.sessionId).toBe(receipt.metadata.sessionId)
         expect(
           yield* database.db
@@ -536,9 +539,11 @@ test("V2 Task process promotes an active steer before two ordered queued follow-
           await Bun.sleep(25)
         }
         throw new Error("Task process did not admit steer and follow-ups")
-      })) as { steer: { state: string }; followups: string[] }
+      })) as { steer: { state: string }; followups: string[]; followupOutputs: string[] }
       expect(ready.steer.state).toBe("admitted")
       expect(ready.followups).toHaveLength(2)
+      expect(ready.followupOutputs).toHaveLength(2)
+      expect(ready.followupOutputs.every((output) => output.includes('state="queued"'))).toBe(true)
       release()
       const [stdout, stderr, code] = yield* Effect.promise(() =>
         Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),

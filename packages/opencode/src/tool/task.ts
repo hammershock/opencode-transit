@@ -125,7 +125,7 @@ function clipLocation(value: string): string {
 
 function renderOutput(input: {
   sessionID: SessionID
-  state: "running" | "completed" | "error"
+  state: "admitted" | "queued" | "running" | "unknown" | "completed" | "error"
   summary?: string
   text: string
   location?: { id: string; name: string; directory: string }
@@ -739,7 +739,16 @@ export const TaskTool = Tool.define(
           metadata,
           output: renderOutput({
             sessionID,
-            state: row.state !== "settled" ? "running" : row.outcome === "completed" ? "completed" : "error",
+            state:
+              row.state === "admitted"
+                ? "admitted"
+                : row.state === "queued"
+                  ? "queued"
+                  : row.state === "active"
+                    ? "unknown"
+                    : row.outcome === "completed"
+                      ? "completed"
+                      : "error",
             summary:
               row.state === "settled"
                 ? `Invocation already settled: ${row.outcome}; result message: ${row.result_message_id ?? "none"}`
@@ -878,8 +887,8 @@ export const TaskTool = Tool.define(
             metadata,
             output: renderOutput({
               sessionID: SessionID.make(childID),
-              state: "running",
-              summary: `Queued invocation ${admitted.inputID}; admission does not mean promotion`,
+              state: admitted.state === "queued" ? "queued" : admitted.state === "admitted" ? "admitted" : "unknown",
+              summary: `Invocation ${admitted.inputID} was ${admitted.state}; admission does not mean promotion`,
               text: "",
               location: { id: planned.targetID, name: planned.targetName, directory: planned.directory },
             }),
@@ -901,13 +910,17 @@ export const TaskTool = Tool.define(
               yield* execution.wake(childID)
               if ((yield* SessionTask.find(database.db, admitted.inputID))?.state !== "settled") {
                 const terminal = yield* Deferred.await(completed).pipe(Effect.timeoutOption(Duration.minutes(5)))
-                if (Option.isNone(terminal))
+                const pending = Option.isNone(terminal)
+                  ? yield* SessionTask.find(database.db, admitted.inputID)
+                  : undefined
+                if (Option.isNone(terminal) && pending?.state !== "settled")
                   return {
                     title: params.description,
                     metadata,
                     output: renderOutput({
                       sessionID: SessionID.make(childID),
-                      state: "running",
+                      state:
+                        pending?.state === "admitted" ? "admitted" : pending?.state === "queued" ? "queued" : "unknown",
                       summary: `Invocation ${admitted.inputID} is still pending or its owner is unknown; inspect task_status`,
                       text: "No terminal result was observed within five minutes.",
                       location: { id: planned.targetID, name: planned.targetName, directory: planned.directory },

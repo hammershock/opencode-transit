@@ -159,7 +159,11 @@ const result = await AppRuntime.runPromise(
         yield* Effect.promise(() =>
           Bun.write(
             `${directory}/task-v2-ready.json`,
-            JSON.stringify({ steer, followups: followups.map((item) => item.metadata.invocation.childMessageID) }),
+            JSON.stringify({
+              steer,
+              followups: followups.map((item) => item.metadata.invocation.childMessageID),
+              followupOutputs: followups.map((item) => item.output),
+            }),
           ),
         )
         yield* execution.wakeAndWait(child)
