@@ -390,6 +390,105 @@ describe("SessionTask admission", () => {
     )
   })
 
+  eventIt.effect("keeps archived invocation progress separate from a later run on the same child", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const events = yield* EventV2.Service
+      const root = SessionSchema.ID.create()
+      const child = SessionSchema.ID.create()
+      const info = {
+        id: root,
+        slug: "progress-root",
+        projectID: Project.ID.global,
+        directory: "/project",
+        title: "root",
+        version: "test",
+        time: { created: Date.now(), updated: Date.now() },
+      }
+      const first = {
+        inputID: "msg_progress_a",
+        rootSessionID: root,
+        parentSessionID: root,
+        parentMessageID: "msg_parent_progress_a",
+        callID: "call-progress-a",
+        promptDigest: "digest-a",
+        childSessionID: child,
+        description: "first run",
+        agentID: "build",
+        locationRevision: 0,
+        backend: "legacy" as const,
+      }
+      yield* events.publish(SessionV1.Event.Created, { sessionID: root, info })
+      yield* events.publish(
+        SessionV1.Event.Created,
+        { sessionID: child, info: { ...info, id: child, parentID: root, slug: "progress-child" }, task: first },
+        { commit: () => SessionTask.validate(db, first.inputID) },
+      )
+      const started = yield* SessionTask.promote(db, events, { inputID: first.inputID, childSessionID: child })
+      const second = {
+        ...first,
+        inputID: "msg_progress_b",
+        parentMessageID: "msg_parent_progress_b",
+        callID: "call-progress-b",
+        promptDigest: "digest-b",
+        description: "second run",
+        backend: "v2" as const,
+      }
+      yield* events.publish(SessionTaskEvent.Admitted, {
+        sessionID: child,
+        admission: second,
+        timestamp: Date.now(),
+      })
+      const queued = yield* SessionTask.find(db, second.inputID)
+      expect(queued?.state).toBe("queued")
+      yield* Effect.promise(() => Bun.sleep(5))
+      const firstProgress = Math.max(Date.now(), started.time_started! + 1, queued!.time_created + 1)
+      yield* db.run(sql`INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES ('msg_child_progress_a', ${child}, ${firstProgress}, ${firstProgress}, '{"role":"assistant","parentID":"msg_progress_a"}')`)
+      yield* db.run(sql`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+        VALUES ('prt_child_progress_a', 'msg_child_progress_a', ${child}, ${firstProgress}, ${firstProgress}, '{"type":"text","text":"A"}')`)
+      yield* SessionTask.archiveUnknown(database, events, {
+        inputID: first.inputID,
+        childSessionID: child,
+        operationID: "archive-progress-a",
+        actor: { kind: "user", id: "user-test" },
+      })
+      yield* Effect.promise(() => Bun.sleep(5))
+      const sameMillis = Math.max(Date.now() + 1, firstProgress + 1)
+      yield* db.run(sql`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+        VALUES ('prt_child_progress_a_boundary', 'msg_child_progress_a', ${child}, ${sameMillis}, ${sameMillis + 2}, '{"type":"text","text":"A late"}')`)
+      yield* events.publish(SessionTaskEvent.Promoted, {
+        sessionID: child,
+        inputID: second.inputID,
+        timestamp: sameMillis,
+      })
+      const running = yield* SessionTask.find(db, second.inputID)
+      expect(running?.state).toBe("active")
+      const secondProgress = sameMillis + 1
+      expect(firstProgress).toBeGreaterThan(queued!.time_created)
+      expect(running!.time_started).toBe(sameMillis)
+      yield* db.run(sql`INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES ('msg_child_progress_b', ${child}, ${sameMillis}, ${sameMillis}, '{"role":"assistant","parentID":"msg_progress_b"}')`)
+      yield* db.run(sql`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+        VALUES ('prt_child_progress_b', 'msg_child_progress_b', ${child}, ${sameMillis}, ${secondProgress}, '{"type":"text","text":"B"}')`)
+      const old = yield* SessionTaskView.read(database, {
+        parentSessionID: root,
+        childSessionID: child,
+        invocation: {
+          parent_session_id: root,
+          parent_message_id: first.parentMessageID,
+          call_id: first.callID,
+        },
+      })
+      const current = yield* SessionTaskView.read(database, { parentSessionID: root, childSessionID: child })
+      expect(old.abandoned_unknown).toBe(true)
+      expect(old.last_progress_at).toBe(sameMillis + 2)
+      expect(current.target.invocation?.call_id).toBe(second.callID)
+      expect(current.last_progress_at).toBe(secondProgress)
+    }),
+  )
+
   test("atomically rejects the ninth root invocation without leaving an empty child", async () => {
     await run(
       Effect.gen(function* () {

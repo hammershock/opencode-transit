@@ -1,11 +1,11 @@
 export * as SessionTaskView from "./task-view"
 
-import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm"
+import { and, asc, desc, eq, or, sql } from "drizzle-orm"
 import { Effect } from "effect"
 import type { Database } from "../database/database"
 import { SessionTask as TaskSchema } from "@opencode-ai/schema/session-task"
 import { SessionTaskOwner } from "./task-owner"
-import { PartTable, SessionTable, SessionTaskTable } from "./sql"
+import { MessageTable, PartTable, SessionTable, SessionTaskTable } from "./sql"
 import { SessionSchema } from "./schema"
 import { SessionV1 } from "../v1/session"
 
@@ -103,22 +103,30 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
       ? yield* Effect.promise(() => SessionTaskOwner.observe(database.filename!, child.id))
       : undefined
   const live = row.state === "active" && observed?.owner_generation === row.owner_generation
-  const partWindow = and(
+  const partOwner = and(
     eq(PartTable.session_id, child.id),
-    gte(PartTable.time_created, row.time_started ?? row.time_created),
-    row.time_settled ? lte(PartTable.time_created, row.time_settled) : undefined,
+    eq(MessageTable.session_id, child.id),
+    // A Task input is the child User message; V1 Assistant messages point to it through parentID.
+    or(
+      sql`${MessageTable.id} = ${row.input_id}`,
+      and(
+        sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`,
+        sql`json_extract(${MessageTable.data}, '$.parentID') = ${row.input_id}`,
+      ),
+    ),
   )
   const lastPart = yield* db
     .select({ updated: PartTable.time_updated })
     .from(PartTable)
-    .where(partWindow)
+    .innerJoin(MessageTable, eq(PartTable.message_id, MessageTable.id))
+    .where(partOwner)
     .orderBy(desc(PartTable.time_updated))
     .limit(1)
     .get()
     .pipe(Effect.orDie)
   const running = live
     ? and(
-        partWindow,
+        partOwner,
         sql`json_extract(${PartTable.data}, '$.type') = 'tool'`,
         sql`json_extract(${PartTable.data}, '$.state.status') = 'running'`,
       )
@@ -127,6 +135,7 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
     ? yield* db
         .select({ value: sql<number>`count(*)` })
         .from(PartTable)
+        .innerJoin(MessageTable, eq(PartTable.message_id, MessageTable.id))
         .where(running)
         .get()
         .pipe(Effect.orDie)
@@ -135,6 +144,7 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
     ? yield* db
         .select({ data: PartTable.data })
         .from(PartTable)
+        .innerJoin(MessageTable, eq(PartTable.message_id, MessageTable.id))
         .where(running)
         .orderBy(asc(PartTable.id))
         .limit(16)
