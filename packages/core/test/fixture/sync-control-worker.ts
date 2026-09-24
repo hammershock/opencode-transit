@@ -14,12 +14,16 @@ import { SessionProjector } from "@opencode-ai/core/session/projector"
 import {
   PartTable,
   SessionTable,
+  SessionInputTable,
   SessionTaskOperationTable,
+  SessionTaskResultTable,
+  SessionTaskWakeRevocationTable,
   SessionTaskSteerTable,
   SessionTaskStopTable,
   SessionTaskTable,
 } from "@opencode-ai/core/session/sql"
 import { SessionTask } from "@opencode-ai/core/session/task"
+import { SessionTaskResult } from "@opencode-ai/core/session/task-result"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { BaiduSyncProvider } from "@opencode-ai/core/sync/baidu-provider"
@@ -47,7 +51,7 @@ type Input = {
 }
 
 type Command =
-  | { readonly id: string; readonly op: "create"; readonly sessionID: string; readonly title: string }
+  | { readonly id: string; readonly op: "create"; readonly sessionID: string; readonly title: string; readonly parentID?: string }
   | { readonly id: string; readonly op: "update"; readonly sessionID: string; readonly title: string }
   | { readonly id: string; readonly op: "delete"; readonly sessionID: string }
   | { readonly id: string; readonly op: "query"; readonly sessionID: string }
@@ -60,6 +64,8 @@ type Command =
     }
   | { readonly id: string; readonly op: "admit-task"; readonly sessionID: string; readonly childID: string }
   | { readonly id: string; readonly op: "task-stop"; readonly sessionID: string; readonly childID: string; readonly holdStop?: boolean }
+  | { readonly id: string; readonly op: "task-result"; readonly sessionID: string; readonly rootID?: string; readonly childID: string; readonly holdResult?: boolean; readonly holdRecord?: boolean; readonly stop?: boolean }
+  | { readonly id: string; readonly op: "reconcile-result"; readonly sessionID: string }
   | {
       readonly id: string
       readonly op: "task-v2"
@@ -336,6 +342,7 @@ await Effect.runPromise(
                   info: {
                     id: sessionID,
                     slug: command.sessionID,
+                    ...(command.parentID ? { parentID: SessionV2.ID.make(command.parentID) } : {}),
                     projectID: ProjectV2.ID.make("global"),
                     directory: `/workspace/${input.deviceID}`,
                     syncSpaceID: spaceID,
@@ -385,6 +392,9 @@ await Effect.runPromise(
               const steers = await Effect.runPromise(database.select().from(SessionTaskSteerTable).all())
               const operations = await Effect.runPromise(database.select().from(SessionTaskOperationTable).all())
               const stopOperations = await Effect.runPromise(database.select().from(SessionTaskStopTable).all())
+              const results = await Effect.runPromise(database.select().from(SessionTaskResultTable).all())
+              const revocations = await Effect.runPromise(database.select().from(SessionTaskWakeRevocationTable).all())
+              const notifications = await Effect.runPromise(database.select().from(SessionInputTable).all())
               const durable = await Effect.runPromise(
                 database
                   .select({ seq: EventTable.seq, type: EventTable.type })
@@ -440,6 +450,12 @@ await Effect.runPromise(
                   stopOperations: stopOperations
                     .filter((operation) => operation.child_session_id === sessionID)
                     .map((operation) => ({ operationID: operation.operation_id, members: operation.members })),
+                  results: results.filter((row) => row.parent_session_id === sessionID)
+                    .map((row) => ({ inputID: row.invocation_input_id, terminalID: row.terminal_event_id, notificationID: row.notification_input_id, outcome: row.outcome })),
+                  revocations: revocations.filter((row) => row.parent_session_id === sessionID)
+                    .map((row) => row.invocation_input_id),
+                  notifications: notifications.filter((row) => row.session_id === sessionID && row.origin)
+                    .map((row) => ({ id: row.id, origin: row.origin })),
                   durable,
                   deletion: Boolean(deletion),
                   controlProjection: controlProjection?.generation,
@@ -447,6 +463,88 @@ await Effect.runPromise(
                   lease,
                 },
               })
+              continue
+            }
+            if (command.op === "task-result") {
+              const rootID = SessionV2.ID.make(command.rootID ?? command.sessionID)
+              const parentID = SessionV2.ID.make(command.sessionID)
+              const childID = SessionV2.ID.make(command.childID)
+              const root = await Effect.runPromise(database.select().from(SessionTable)
+                .where(eq(SessionTable.id, parentID)).get())
+              if (!root) throw new Error(`Parent Session not found: ${rootID}`)
+              const timestamp = Date.now()
+              const inputID = SessionMessage.ID.make(`msg_result_input_${command.childID}`)
+              const capture = async (event: Parameters<typeof SessionSync.capture>[1], hold = false) => {
+                if (hold) heldTaskEvents.set(command.childID, event)
+                else await Effect.runPromise(SessionSync.capture(store, event, Date.now()))
+              }
+              await capture(await Effect.runPromise(events.publish(SessionV1.Event.Created, {
+                sessionID: childID,
+                info: {
+                  id: childID,
+                  slug: command.childID,
+                  projectID: root.project_id,
+                  parentID,
+                  directory: root.directory,
+                  syncSpaceID: spaceID,
+                  title: "Result sync child",
+                  version: "test",
+                  time: { created: timestamp, updated: timestamp },
+                },
+                task: {
+                  inputID,
+                  rootSessionID: rootID,
+                  parentSessionID: parentID,
+                  parentMessageID: `msg_parent_result_${command.childID}`,
+                  callID: `call_result_${command.childID}`,
+                  promptDigest: "result",
+                  childSessionID: childID,
+                  description: "result sync work",
+                  agentID: "build",
+                  locationRevision: 0,
+                  backend: "v2",
+                  background: true,
+                },
+                taskInput: { messageID: inputID, prompt: Prompt.make({ text: "Work" }), delivery: "queue" },
+              })))
+              if (command.stop) {
+                const emitted: Parameters<typeof SessionSync.capture>[1][] = []
+                const unsubscribe = await Effect.runPromise(events.listen((event) =>
+                  Effect.sync(() => { if (event.type === SessionEvent.DelegationWakeRevoked.type && event.durable) emitted.push(event as Parameters<typeof SessionSync.capture>[1]) })))
+                await Effect.runPromise(SessionTaskResult.stop(Context.get(context, Database.Service), events, parentID))
+                await Effect.runPromise(unsubscribe)
+                for (const event of emitted) await capture(event)
+              }
+              await capture(await Effect.runPromise(events.publish(SessionTaskEvent.Settled, {
+                sessionID: childID,
+                inputID,
+                outcome: "completed",
+                resultMessageID: `msg_result_${command.childID}`,
+                timestamp: timestamp + 1,
+              })))
+              if (command.holdRecord) {
+                emit({ type: "response", id: command.id, ok: true })
+                continue
+              }
+              const emitted: Parameters<typeof SessionSync.capture>[1][] = []
+              const unsubscribe = await Effect.runPromise(events.listen((event) =>
+                Effect.sync(() => { if (event.type === SessionEvent.DelegationResultRecorded.type && event.durable) emitted.push(event as Parameters<typeof SessionSync.capture>[1]) })))
+              await Effect.runPromise(SessionTaskResult.record(database, events, inputID))
+              await Effect.runPromise(unsubscribe)
+              if (emitted.length !== 1) throw new Error(`Expected one parent result event, got ${emitted.length}`)
+              await capture(emitted[0]!, command.holdResult)
+              emit({ type: "response", id: command.id, ok: true })
+              continue
+            }
+            if (command.op === "reconcile-result") {
+              const rootID = SessionV2.ID.make(command.sessionID)
+              const emitted: Parameters<typeof SessionSync.capture>[1][] = []
+              const unsubscribe = await Effect.runPromise(events.listen((event) =>
+                Effect.sync(() => { if (event.type === SessionEvent.DelegationResultRecorded.type && event.durable) emitted.push(event as Parameters<typeof SessionSync.capture>[1]) })))
+              await Effect.runPromise(SessionTaskResult.reconcile(Context.get(context, Database.Service), events, rootID))
+              await Effect.runPromise(unsubscribe)
+              for (const event of emitted) await Effect.runPromise(SessionSync.capture(store, event, Date.now()))
+              emit({ type: "response", id: command.id, ok: true, count: emitted.length })
               continue
             }
             if (command.op === "task-stop") {

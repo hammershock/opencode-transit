@@ -162,6 +162,7 @@ export const SessionInputTable = sqliteTable(
       .references(() => SessionTable.id, { onDelete: "cascade" }),
     prompt: text({ mode: "json" }).notNull().$type<(typeof Prompt)["Encoded"]>(),
     delivery: text().$type<SessionInput.Delivery>().notNull(),
+    origin: text({ mode: "json" }).$type<{ kind: "delegation_result"; invocationInputID: string; terminalEventID: string; version: 1 }>(),
     admitted_seq: integer().notNull(),
     promoted_seq: integer(),
     time_created: integer()
@@ -203,8 +204,10 @@ export const SessionTaskTable = sqliteTable(
     disposition_actor_id: text(),
     disposition_time: integer(),
     backend: text().$type<"legacy" | "v2">().notNull(),
+    background: integer({ mode: "boolean" }).notNull().default(false),
     outcome: text().$type<"completed" | "failed" | "cancelled">(),
     result_message_id: text(),
+    terminal_event_id: text(),
     abandoned_unknown: integer({ mode: "boolean" }).notNull().default(false),
     archive_operation_id: text(),
     archive_actor_id: text(),
@@ -230,6 +233,28 @@ export const SessionTaskTable = sqliteTable(
 /** Local projection barrier for deleted Task roots and parents, including sync control tombstones. */
 export const SessionTaskDeletionTable = sqliteTable("session_task_deletion", {
   session_id: text().primaryKey(),
+})
+
+/** Parent-side projection of a child terminal; deleted with its parent Session. */
+export const SessionTaskResultTable = sqliteTable("session_task_result", {
+  invocation_input_id: text().primaryKey(),
+  root_session_id: text().notNull(),
+  parent_session_id: text().notNull().references(() => SessionTable.id, { onDelete: "cascade" }),
+  child_session_id: text().notNull(),
+  terminal_event_id: text().notNull(),
+  outcome: text().$type<"completed" | "failed" | "cancelled">().notNull(),
+  result_message_id: text(),
+  summary: text().notNull(),
+  notification_input_id: text().notNull().unique(),
+  notify: integer({ mode: "boolean" }).notNull(),
+  version: integer().notNull(),
+})
+
+export const SessionTaskWakeRevocationTable = sqliteTable("session_task_wake_revocation", {
+  invocation_input_id: text().primaryKey(),
+  root_session_id: text().notNull(),
+  parent_session_id: text().notNull().references(() => SessionTable.id, { onDelete: "cascade" }),
+  stop_event_id: text().notNull(),
 })
 
 /** Durable child-inbox receipt for one steer of one exact Task invocation. */

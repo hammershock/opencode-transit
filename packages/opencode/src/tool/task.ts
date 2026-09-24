@@ -21,6 +21,7 @@ import { SessionTask } from "@opencode-ai/core/session/task"
 import { SessionTaskOwner } from "@opencode-ai/core/session/task-owner"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { SessionTaskDelivery } from "@opencode-ai/core/session/task-delivery"
+import { SessionTaskResult } from "@opencode-ai/core/session/task-result"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionMessage } from "@opencode-ai/core/session/message"
@@ -716,8 +717,11 @@ export const TaskTool = Tool.define(
         row.description === params.description &&
         row.agent_id === childAgentID &&
         row.prompt_digest === promptDigest &&
+        (row.backend !== "v2" || row.background === runInBackground) &&
         (!resumed || row.child_session_id === resumed.id)
       const priorReceipt = Effect.fn("TaskTool.priorReceipt")(function* (row: NonNullable<typeof previous>) {
+        if (row.backend === "v2" && row.background && row.state === "settled")
+          yield* SessionTaskResult.reconcile(database, events, SessionV2.ID.make(ctx.sessionID))
         const sessionID = SessionID.make(row.child_session_id)
         const metadata = {
           parentSessionId: ctx.sessionID,
@@ -804,6 +808,8 @@ export const TaskTool = Tool.define(
               description: params.description,
               agentID: childAgentID,
               text: params.prompt,
+              background: runInBackground,
+              deferWake: true,
             }).pipe(
               Effect.provideService(EventV2.Service, events),
               Effect.provideService(Database.Service, database),
@@ -839,12 +845,13 @@ export const TaskTool = Tool.define(
                   agentID: childAgentID,
                   locationRevision: 0,
                   backend: "v2",
+                  background: runInBackground,
                 },
                 taskInput: { messageID: inputID, prompt: Prompt.make({ text: params.prompt }), delivery: "queue" },
               })
-              return { inputID, state: "admitted" as const }
+              return { inputID, state: "admitted" as const, fresh: true as const }
             })
-        const accepted = yield* admissionEffect.pipe(
+        const accepted = yield* SessionTaskResult.withParent(SessionV2.ID.make(ctx.sessionID))(admissionEffect.pipe(
           Effect.map((value) => ({ value }) as const),
           Effect.catchDefect((defect) => {
             if (defect instanceof SessionTask.AdmissionConflict)
@@ -862,9 +869,19 @@ export const TaskTool = Tool.define(
               return Effect.fail(new TaskPlacementError(defect.code, defect.message))
             return Effect.die(defect)
           }),
-        )
+          Effect.tap((receipt) =>
+            runInBackground && "value" in receipt && receipt.value.fresh
+              ? SessionTaskResult.authorizeWithin(database, SessionV2.ID.make(ctx.sessionID), receipt.value.inputID)
+              : Effect.void,
+          ),
+        ))
         if ("prior" in accepted) return yield* priorReceipt(accepted.prior)
         const admitted = accepted.value
+        if (!admitted.fresh) {
+          const row = yield* SessionTask.find(database.db, admitted.inputID)
+          if (!row) return yield* Effect.fail(new TaskPlacementError("task_unavailable", "Task receipt is unavailable"))
+          return yield* priorReceipt(row)
+        }
         const metadata = {
           parentSessionId: ctx.sessionID,
           invocation: {
@@ -881,6 +898,7 @@ export const TaskTool = Tool.define(
         }
         yield* ctx.metadata({ title: params.description, metadata })
         if (runInBackground) {
+          yield* SessionTaskResult.recordAndWake(database, events, execution.wake, admitted.inputID)
           yield* execution.wake(childID)
           return {
             title: params.description,

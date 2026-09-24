@@ -17,7 +17,12 @@ import {
   SessionTaskSteerTable,
   SessionTaskStopTable,
   SessionTaskTable,
+  SessionTaskResultTable,
+  SessionTaskWakeRevocationTable,
+  SessionInputTable,
+  SessionMessageTable,
 } from "./sql"
+import { SessionMessage } from "./message"
 
 type DB = Database.Interface["db"]
 
@@ -31,9 +36,24 @@ export function deletionPredicate(sessionID: string) {
 
 /** Both local Deleted projection and SyncControl tombstones clear Task facts identically. */
 export const deleteProjectionForSession = Effect.fn("SessionTask.deleteProjectionForSession")(function* (
-  db: Pick<DB, "delete">,
+  db: Pick<DB, "delete" | "select">,
   sessionID: string,
 ) {
+  const notifications = yield* db.select({ id: SessionTaskResultTable.notification_input_id })
+    .from(SessionTaskResultTable)
+    .where(or(eq(SessionTaskResultTable.root_session_id, sessionID), eq(SessionTaskResultTable.parent_session_id, sessionID)))
+    .all().pipe(Effect.orDie)
+  if (notifications.length) {
+    const ids = notifications.map((row) => SessionMessage.ID.make(row.id))
+    yield* db.delete(SessionMessageTable).where(inArray(SessionMessageTable.id, ids)).run().pipe(Effect.orDie)
+    yield* db.delete(SessionInputTable).where(inArray(SessionInputTable.id, ids)).run().pipe(Effect.orDie)
+  }
+  yield* db.delete(SessionTaskResultTable)
+    .where(or(eq(SessionTaskResultTable.root_session_id, sessionID), eq(SessionTaskResultTable.parent_session_id, sessionID)))
+    .run().pipe(Effect.orDie)
+  yield* db.delete(SessionTaskWakeRevocationTable)
+    .where(or(eq(SessionTaskWakeRevocationTable.root_session_id, sessionID), eq(SessionTaskWakeRevocationTable.parent_session_id, sessionID)))
+    .run().pipe(Effect.orDie)
   yield* db
     .delete(SessionTaskStopTable)
     .where(
@@ -92,6 +112,7 @@ export type Admission = {
   agentID: string
   locationRevision: number
   backend: "legacy" | "v2"
+  background?: boolean
   /** Legacy execution may queue only behind a currently observed local job. */
   liveLegacyOwner?: boolean
 }
@@ -152,7 +173,8 @@ export const admit = Effect.fn("SessionTask.admit")(function* (
       existing.description !== input.description ||
       existing.agent_id !== input.agentID ||
       existing.location_revision !== input.locationRevision ||
-      existing.backend !== input.backend
+      existing.backend !== input.backend ||
+      existing.background !== (input.background ?? false)
     )
       return yield* Effect.die(new AdmissionConflict())
     return existing
@@ -218,6 +240,7 @@ export const admit = Effect.fn("SessionTask.admit")(function* (
       agent_id: input.agentID,
       location_revision: input.locationRevision,
       backend: input.backend,
+      background: input.background ?? false,
       state,
       time_created: options?.timestamp ?? Date.now(),
     })
@@ -535,13 +558,15 @@ export const projectSettled = Effect.fn("SessionTask.projectSettled")(function* 
     outcome: "completed" | "failed" | "cancelled"
     resultMessageID?: string
     timestamp: number
+    terminalEventID?: string
   },
 ) {
   const previous = yield* find(db, input.inputID)
   if (!previous) return
   if (previous.child_session_id !== input.childSessionID) return yield* Effect.die(new AdmissionConflict())
   if (previous.state === "settled") {
-    if (previous.outcome !== input.outcome || previous.result_message_id !== (input.resultMessageID ?? null))
+    if (previous.outcome !== input.outcome || previous.result_message_id !== (input.resultMessageID ?? null) ||
+        (input.terminalEventID !== undefined && previous.terminal_event_id !== null && previous.terminal_event_id !== input.terminalEventID))
       return yield* Effect.die(new AdmissionConflict())
     return
   }
@@ -552,6 +577,7 @@ export const projectSettled = Effect.fn("SessionTask.projectSettled")(function* 
       outcome: input.outcome,
       result_message_id: input.resultMessageID,
       time_settled: input.timestamp,
+      terminal_event_id: input.terminalEventID ?? null,
     })
     .where(eq(SessionTaskTable.input_id, input.inputID))
     .run()
@@ -681,6 +707,7 @@ export const projectReconciled = Effect.fn("SessionTask.projectReconciled")(func
     disposition: "resume_pending" | "cancel_pending"
     capacityState: "available" | "capacity_unavailable" | "not_applicable"
     timestamp: number
+    terminalEventID: string
   },
 ) {
   const operation = yield* db
@@ -729,7 +756,7 @@ export const projectReconciled = Effect.fn("SessionTask.projectReconciled")(func
       disposition_actor_id: input.actorID,
       disposition_time: input.timestamp,
       ...(input.disposition === "cancel_pending"
-        ? { state: "settled", outcome: "cancelled", time_settled: input.timestamp }
+        ? { state: "settled", outcome: "cancelled", time_settled: input.timestamp, terminal_event_id: input.terminalEventID }
         : {}),
     })
     .where(eq(SessionTaskTable.input_id, input.inputID))
@@ -749,6 +776,7 @@ export const projectStopped = Effect.fn("SessionTask.projectStopped")(function* 
     actorID: string
     members: readonly { inputID: string; state: "active" | "pending" }[]
     timestamp: number
+    terminalEventID: string
   },
 ) {
   const previous = yield* db
@@ -817,6 +845,7 @@ export const projectStopped = Effect.fn("SessionTask.projectStopped")(function* 
         disposition_actor_id: input.actorID,
         disposition_time: input.timestamp,
         time_settled: input.timestamp,
+        terminal_event_id: input.terminalEventID,
       })
       .where(eq(SessionTaskTable.input_id, member.inputID))
       .run()

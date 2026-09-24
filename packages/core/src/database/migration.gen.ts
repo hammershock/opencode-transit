@@ -57,5 +57,6 @@ export const migrations = (
     import("./migration/20260924114233_task-delivery"),
     import("./migration/20260924120203_task-reconcile"),
     import("./migration/20260924150628_smooth_the_phantom"),
+    import("./migration/20260924164137_task_result_delivery"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

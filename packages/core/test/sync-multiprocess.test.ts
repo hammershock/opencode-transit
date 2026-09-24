@@ -13,6 +13,7 @@ type Message = {
   readonly id?: string
   readonly ok?: boolean
   readonly error?: string
+  readonly count?: number
   readonly result?: {
     readonly session?: { readonly id: string; readonly title: string }
     readonly tasks?: readonly {
@@ -39,6 +40,9 @@ type Message = {
       readonly operationID: string
       readonly members: readonly { readonly inputID: string; readonly state: string }[]
     }[]
+    readonly results?: readonly { readonly inputID: string; readonly terminalID: string; readonly notificationID: string; readonly outcome: string }[]
+    readonly revocations?: readonly string[]
+    readonly notifications?: readonly { readonly id: string; readonly origin: { readonly kind: string; readonly invocationInputID: string } }[]
     readonly durable?: readonly { readonly seq: number; readonly type: string }[]
     readonly deletion?: boolean
     readonly cursors: readonly { readonly device_id: string; readonly cursor: number }[]
@@ -643,6 +647,178 @@ test("syncs fixed Task stop scopes both ways and respects child and root tombsto
       const facts = (await worker.request({ op: "query", sessionID: deletedRootChild })).result
       expect(facts?.v2Tasks).toEqual([])
       expect(facts?.stopOperations).toEqual([])
+    }
+  } finally {
+    await Promise.all([a.stop(), b.stop()])
+  }
+}, 90_000)
+
+test("reconciles a terminal child after a real controller restart without a second parent event", async () => {
+  await using tmp = await tmpdir()
+  const cloudRoot = path.join(tmp.path, "cloud")
+  const source = { workerID: "result-restart-a", deviceID: "result-restart-device-a", deviceRoot: path.join(tmp.path, "a"), cloudRoot }
+  const a = spawnWorker(source)
+  const b = spawnWorker({ workerID: "result-restart-b", deviceID: "result-restart-device-b", deviceRoot: path.join(tmp.path, "b"), cloudRoot })
+  let restarted: Worker | undefined
+  try {
+    await Promise.all([a.ready(), b.ready()])
+    const root = "ses_sync_result_restart_root"
+    const child = "ses_sync_result_restart_child"
+    await a.request({ op: "create", sessionID: root, title: "Restart result root" })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: root })).result?.session?.id === root,
+      "restart root on second profile",
+    )
+    await a.request({ op: "task-result", sessionID: root, childID: child, holdRecord: true })
+    expect((await a.request({ op: "query", sessionID: root })).result?.results).toEqual([])
+    await a.crash()
+    restarted = spawnWorker(source)
+    await restarted.ready()
+    expect((await restarted.request({ op: "reconcile-result", sessionID: root })).count).toBe(1)
+    expect((await restarted.request({ op: "reconcile-result", sessionID: root })).count).toBe(0)
+    await waitUntilAsync(async () => {
+      const facts = (await b.request({ op: "query", sessionID: root })).result
+      return facts?.results?.length === 1 && facts.notifications?.length === 1
+    }, "record-only result after controller restart on second profile")
+    for (const worker of [restarted, b]) {
+      const facts = (await worker.request({ op: "query", sessionID: root })).result
+      expect(facts?.results).toHaveLength(1)
+      expect(facts?.notifications).toHaveLength(1)
+    }
+  } finally {
+    await Promise.all([a.stop(), b.stop(), restarted?.stop()])
+  }
+}, 90_000)
+
+test("syncs parent Task results and wake revocation both ways without reviving deleted Sessions", async () => {
+  await using tmp = await tmpdir()
+  const cloudRoot = path.join(tmp.path, "cloud")
+  const a = spawnWorker({
+    workerID: "result-a",
+    deviceID: "result-device-a",
+    deviceRoot: path.join(tmp.path, "a"),
+    cloudRoot,
+  })
+  const b = spawnWorker({
+    workerID: "result-b",
+    deviceID: "result-device-b",
+    deviceRoot: path.join(tmp.path, "b"),
+    cloudRoot,
+  })
+  try {
+    await Promise.all([a.ready(), b.ready()])
+    const root = "ses_sync_result_root"
+    const childA = "ses_sync_result_child_a"
+    const childB = "ses_sync_result_child_b"
+    const childC = "ses_sync_result_child_c"
+    const childD = "ses_sync_result_child_d"
+    await a.request({ op: "create", sessionID: root, title: "Task result root" })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: root })).result?.session?.id === root,
+      "result root on second profile",
+    )
+    await a.request({ op: "task-result", sessionID: root, childID: childA })
+    await waitUntilAsync(async () => {
+      const facts = (await b.request({ op: "query", sessionID: root })).result
+      return facts?.results?.some((row) => row.inputID === `msg_result_input_${childA}`) === true &&
+        facts.notifications?.some((row) => row.origin.invocationInputID === `msg_result_input_${childA}`) === true
+    }, "parent result from A on B")
+    await b.request({ op: "task-result", sessionID: root, childID: childB, stop: true })
+    await waitUntilAsync(async () => {
+      const facts = (await a.request({ op: "query", sessionID: root })).result
+      return facts?.results?.some((row) => row.inputID === `msg_result_input_${childB}`) === true &&
+        facts.revocations?.includes(`msg_result_input_${childB}`) === true
+    }, "parent result and stop revocation from B on A")
+    for (const worker of [a, b]) {
+      const facts = (await worker.request({ op: "query", sessionID: root })).result
+      expect(facts?.results).toHaveLength(2)
+      expect(facts?.notifications).toHaveLength(2)
+      expect(new Set(facts?.results?.map((row) => row.terminalID)).size).toBe(2)
+    }
+
+    await a.request({ op: "task-result", sessionID: root, childID: childC, holdResult: true })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: childC })).result?.tasks?.[0]?.state === "settled",
+      "child C terminal before its delayed parent result",
+    )
+    await b.request({ op: "delete", sessionID: childC })
+    await b.request({ op: "sync" })
+    await waitUntilAsync(
+      async () => (await a.request({ op: "query", sessionID: childC })).result?.deletion === true,
+      "child C tombstone on both profiles",
+    )
+    await a.request({ op: "flush-task", childID: childC })
+    await a.request({ op: "sync" })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: root })).result?.results?.length === 3,
+      "late parent result after child deletion",
+    )
+    for (const worker of [a, b]) {
+      expect((await worker.request({ op: "query", sessionID: childC })).result?.session).toBeUndefined()
+      expect((await worker.request({ op: "query", sessionID: root })).result?.results).toHaveLength(3)
+    }
+
+    await b.request({ op: "task-result", sessionID: root, childID: childD, holdResult: true })
+    await waitUntilAsync(
+      async () => (await a.request({ op: "query", sessionID: childD })).result?.tasks?.[0]?.state === "settled",
+      "child D terminal before root deletion",
+    )
+    await a.request({ op: "delete", sessionID: root })
+    await a.request({ op: "sync" })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: root })).result?.deletion === true,
+      "root tombstone on both profiles",
+    )
+    await b.request({ op: "flush-task", childID: childD })
+    await b.request({ op: "sync" })
+    for (const worker of [a, b]) {
+      const facts = (await worker.request({ op: "query", sessionID: root })).result
+      expect(facts?.session).toBeUndefined()
+      expect(facts?.results).toEqual([])
+      expect(facts?.notifications).toEqual([])
+      expect(facts?.revocations).toEqual([])
+    }
+  } finally {
+    await Promise.all([a.stop(), b.stop()])
+  }
+}, 90_000)
+
+test("a deleted Task root blocks a late result for a surviving nested parent", async () => {
+  await using tmp = await tmpdir()
+  const cloudRoot = path.join(tmp.path, "cloud")
+  const a = spawnWorker({ workerID: "nested-a", deviceID: "nested-device-a", deviceRoot: path.join(tmp.path, "a"), cloudRoot })
+  const b = spawnWorker({ workerID: "nested-b", deviceID: "nested-device-b", deviceRoot: path.join(tmp.path, "b"), cloudRoot })
+  try {
+    await Promise.all([a.ready(), b.ready()])
+    const root = "ses_sync_nested_root"
+    const parent = "ses_sync_nested_parent"
+    const child = "ses_sync_nested_child"
+    await a.request({ op: "create", sessionID: root, title: "Nested root" })
+    await a.request({ op: "create", sessionID: parent, parentID: root, title: "Nested parent" })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: parent })).result?.session?.id === parent,
+      "nested parent on second profile",
+    )
+    await a.request({ op: "task-result", sessionID: parent, rootID: root, childID: child, holdResult: true })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: child })).result?.tasks?.[0]?.state === "settled",
+      "nested child terminal on second profile",
+    )
+    await b.request({ op: "delete", sessionID: root })
+    await b.request({ op: "sync" })
+    await waitUntilAsync(
+      async () => (await a.request({ op: "query", sessionID: root })).result?.deletion === true,
+      "nested root deletion on source",
+    )
+    await a.request({ op: "flush-task", childID: child })
+    await a.request({ op: "sync" })
+    for (const worker of [a, b]) {
+      expect((await worker.request({ op: "query", sessionID: root })).result?.session).toBeUndefined()
+      const facts = (await worker.request({ op: "query", sessionID: parent })).result
+      expect(facts?.session?.id).toBe(parent)
+      expect(facts?.results).toEqual([])
+      expect(facts?.notifications).toEqual([])
+      expect((await worker.request({ op: "query", sessionID: child })).result?.tasks).toEqual([])
     }
   } finally {
     await Promise.all([a.stop(), b.stop()])

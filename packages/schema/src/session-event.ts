@@ -104,7 +104,15 @@ export type LocationRebound = typeof LocationRebound.Type
 export const Prompted = Event.define({
   type: "session.next.prompted",
   ...options,
-  schema: PromptFields,
+  schema: {
+    ...PromptFields,
+    origin: Schema.optional(Schema.Struct({
+      kind: Schema.Literal("delegation_result"),
+      invocationInputID: Schema.String,
+      terminalEventID: Schema.String,
+      version: Schema.Literal(1),
+    })),
+  },
 })
 export type Prompted = typeof Prompted.Type
 
@@ -127,6 +135,38 @@ export const PromptAdmitted = Event.define({
   },
 })
 export type PromptAdmitted = typeof PromptAdmitted.Type
+
+/** One parent aggregate event projects both the result and its optional inbox input. */
+export const DelegationResultRecorded = Event.define({
+  type: "session.next.delegation.result.recorded",
+  ...options,
+  schema: {
+    ...Base,
+    invocationInputID: Schema.String,
+    rootSessionID: SessionID,
+    childSessionID: SessionID,
+    terminalEventID: Schema.String,
+    outcome: Schema.Literals(["completed", "failed", "cancelled"]),
+    resultMessageID: Schema.optional(Schema.String),
+    summary: Schema.String,
+    notificationInputID: SessionMessage.ID,
+    notify: Schema.Boolean,
+    version: Schema.Literal(1),
+  },
+})
+export type DelegationResultRecorded = typeof DelegationResultRecorded.Type
+
+/** A parent stop revokes only the background invocations in this fixed scope. */
+export const DelegationWakeRevoked = Event.define({
+  type: "session.next.delegation.wake.revoked",
+  ...options,
+  schema: {
+    ...Base,
+    rootSessionID: SessionID,
+    invocationInputIDs: Schema.Array(Schema.String),
+  },
+})
+export type DelegationWakeRevoked = typeof DelegationWakeRevoked.Type
 
 export namespace Turn {
   export const Outcome = Schema.Literals(["completed", "failed", "cancelled"])
@@ -526,6 +566,8 @@ export const DurableDefinitions = Event.inventory(
   LocationRebound,
   Prompted,
   PromptAdmitted,
+  DelegationResultRecorded,
+  DelegationWakeRevoked,
   Turn.Settled,
   ContextUpdated,
   ContextGenerationEstablished,
@@ -561,6 +603,8 @@ export const Definitions = Event.inventory(
   LocationRebound,
   Prompted,
   PromptAdmitted,
+  DelegationResultRecorded,
+  DelegationWakeRevoked,
   Turn.Settled,
   ContextUpdated,
   ContextGenerationEstablished,

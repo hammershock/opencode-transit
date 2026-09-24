@@ -12,6 +12,8 @@ import { SessionTaskOwner } from "../task-owner"
 import { SessionTaskTable } from "../sql"
 import { SessionTask } from "../task"
 import { SessionTaskScheduler } from "../task-scheduler"
+import { SessionTaskResult } from "../task-result"
+import { EventV2 } from "../../event"
 import { asc, eq } from "drizzle-orm"
 
 /** Current-process routing for implicit-local Locations. Future remote placement belongs here. */
@@ -22,6 +24,7 @@ const layer = Layer.effect(
     const locations = yield* LocationServiceMap.Service
     const access = yield* SessionLocationAccess.Service
     const database = yield* Database.Service
+    const events = yield* EventV2.Service
     // The coordinator cannot schedule its successor until construction completes.
     let wake: (sessionID: SessionSchema.ID) => Effect.Effect<void> = () => Effect.void
     const exact: { bind?: SessionRunCoordinator.Coordinator<SessionSchema.ID, SessionRunner.RunError>["bindExact"] } =
@@ -77,6 +80,7 @@ const layer = Layer.effect(
           Effect.ensuring(
             Effect.gen(function* () {
               if ((yield* SessionTask.find(database.db, next.input_id))?.state !== "settled") return
+              yield* SessionTaskResult.recordAndWake(database, events, wake, next.input_id)
               yield* SessionTaskScheduler.reassess(database, SessionSchema.ID.make(next.root_session_id), {
                 wake: (child) => wake(child),
                 executable: (child) =>
@@ -108,7 +112,7 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: SessionExecution.Service,
   layer,
-  deps: [SessionStore.node, LocationServiceMap.node, SessionLocationAccess.node, Database.node],
+  deps: [SessionStore.node, LocationServiceMap.node, SessionLocationAccess.node, Database.node, EventV2.node],
 })
 
 export * as SessionExecutionLocal from "./local"

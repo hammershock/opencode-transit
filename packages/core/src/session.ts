@@ -34,6 +34,7 @@ import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
 import { SessionTask } from "./session/task"
 import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
+import { SessionTaskResult } from "./session/task-result"
 import { SessionTurn } from "./session/turn"
 import { Snapshot } from "./snapshot"
 import { SessionRevert } from "./session/revert"
@@ -612,6 +613,7 @@ const layer = Layer.effect(
                   invocation?.agent_id !== input.task.agentID ||
                   invocation?.location_revision !== input.task.locationRevision ||
                   invocation?.backend !== "v2" ||
+                  invocation?.background !== (input.task.background ?? false) ||
                   !inbox ||
                   !SessionInput.equivalent(inbox, {
                     sessionID,
@@ -1149,12 +1151,15 @@ const layer = Layer.effect(
             const activation = yield* activateCatalog(session, location, true)
             if (activation.status === "unavailable")
               return yield* new OperationUnavailableError({ operation: "modelContext" })
+            yield* SessionTaskResult.reconcile(database, events, sessionID)
             yield* execution.resume(sessionID)
           }),
         ),
       ),
       interrupt: Effect.fn("V2Session.interrupt")((sessionID) =>
-        Effect.uninterruptible(execution.interrupt(sessionID)),
+        Effect.uninterruptible(
+          SessionTaskResult.stop(database, events, sessionID).pipe(Effect.andThen(execution.interrupt(sessionID))),
+        ),
       ),
       revert: {
         stage: Effect.fn("V2Session.revert.stage")((input) =>

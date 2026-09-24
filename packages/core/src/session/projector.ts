@@ -21,6 +21,7 @@ import { AbsolutePath, type DeepMutable } from "../schema"
 import { SessionPolicy } from "@opencode-ai/schema/session-policy"
 import { SessionPolicyStore } from "./policy"
 import { SessionTask } from "./task"
+import { SessionTaskResult } from "./task-result"
 import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
 import { SessionTaskDeletionTable, SessionTaskTable } from "./sql"
 
@@ -310,6 +311,7 @@ const layer = Layer.effectDiscard(
         outcome: event.data.outcome,
         resultMessageID: event.data.resultMessageID,
         timestamp: event.data.timestamp,
+        terminalEventID: event.id,
       }),
     )
     yield* events.project(SessionTaskEvent.ArchivedUnknown, (event) =>
@@ -331,6 +333,7 @@ const layer = Layer.effectDiscard(
         disposition: event.data.disposition,
         capacityState: event.data.capacityState,
         timestamp: event.data.timestamp,
+        terminalEventID: event.id,
       }),
     )
     yield* events.project(SessionTaskEvent.Stopped, (event) =>
@@ -344,6 +347,7 @@ const layer = Layer.effectDiscard(
         actorID: event.data.actorID,
         members: event.data.members,
         timestamp: event.data.timestamp,
+        terminalEventID: event.id,
       }),
     )
     yield* events.project(SessionV1.Event.Updated, (event) => {
@@ -564,6 +568,7 @@ const layer = Layer.effectDiscard(
           delivery: event.data.delivery,
           timeCreated: event.data.timestamp,
           promotedSeq: event.durable.seq,
+          origin: event.data.origin,
         })
         yield* SessionTask.projectInboxPromoted(db, {
           inputID: event.data.messageID,
@@ -605,6 +610,8 @@ const layer = Layer.effectDiscard(
           })
       }),
     )
+    yield* events.project(SessionEvent.DelegationResultRecorded, (event) => SessionTaskResult.project(db, event))
+    yield* events.project(SessionEvent.DelegationWakeRevoked, (event) => SessionTaskResult.projectRevocation(db, event))
     yield* events.project(SessionEvent.Turn.Settled, () => Effect.void)
     yield* events.project(SessionEvent.ContextUpdated, (event) => run(db, event))
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))

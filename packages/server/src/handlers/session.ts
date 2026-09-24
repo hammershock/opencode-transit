@@ -24,6 +24,7 @@ import { SessionTaskDelivery } from "@opencode-ai/core/session/task-delivery"
 import { SessionTask } from "@opencode-ai/core/session/task"
 import { SessionTaskWait } from "@opencode-ai/core/session/task-wait"
 import { SessionTaskControl } from "@opencode-ai/core/session/task-control"
+import { SessionTaskResult } from "@opencode-ai/core/session/task-result"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
@@ -598,6 +599,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           yield* session
             .get(ctx.params.sessionID)
             .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.fail(unavailable())))
+          yield* SessionTaskResult.reconcile(database, events, ctx.params.sessionID)
           const read = SessionTaskView.read(database, {
             parentSessionID: ctx.params.sessionID,
             childSessionID: request.target?.task_id ?? ctx.params.sessionID,
