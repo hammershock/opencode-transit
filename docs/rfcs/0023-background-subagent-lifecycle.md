@@ -1,5 +1,5 @@
 ---
-id: 0022
+id: 0023
 title: Background Subagent Lifecycle and Coordination
 status: draft
 authors:
@@ -20,7 +20,7 @@ supersedes: []
 superseded-by: []
 ---
 
-# RFC-0022：后台 Subagent 的执行生命周期与协作
+# RFC-0023：后台 Subagent 的执行生命周期与协作
 
 ## 状态与决策范围
 
@@ -215,13 +215,13 @@ sequenceDiagram
 
 ## 8. 实施切分和依赖
 
-实施 issue 已先建档以便评审依赖；**RFC-0022 仍是 Draft，以下 feature issue 均明确 blocked、并非 Ready**。每项实施使用自己的 semantic branch、worktree 和 PR，issue 是任务状态的唯一实时来源。现有行为的两项 bug 可先独立处理，但不得借修 bug 偷偷启用本 RFC 的新控制语义。
+实施 issue 已先建档以便评审依赖；**RFC-0023 仍是 Draft，以下 feature issue 均明确 blocked、并非 Ready**。每项实施使用自己的 semantic branch、worktree 和 PR，issue 是任务状态的唯一实时来源。现有行为的两项 bug 可先独立处理，但不得借修 bug 偷偷启用本 RFC 的新控制语义。
 
 | 阶段 | Issue 与独立结果                                                                                                                                                                                                                                            | 前置条件                                                     |
 | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | 0    | [#561](https://github.com/hammershock/opencode-transit/issues/561)：后台 child 执行所有权与异常消失；[#562](https://github.com/hammershock/opencode-transit/issues/562)：已有 child 消息的空白视图                                                          | 可并行诊断和修复既有行为；不依赖 RFC 接受                    |
-| 1    | [#563](https://github.com/hammershock/opencode-transit/issues/563)：持久结算加当前 owner 观测的统一 Task 状态                                                                                                                                               | RFC-0022 接受；#561                                          |
-| 2    | [#564](https://github.com/hammershock/opencode-transit/issues/564)：父 Agent 的只读 `task_status`；[#565](https://github.com/hammershock/opencode-transit/issues/565)：active steer 与 queued follow-up                                                     | RFC-0022 接受；#563；两项可并行且需协调共享 contract         |
+| 1    | [#563](https://github.com/hammershock/opencode-transit/issues/563)：持久结算加当前 owner 观测的统一 Task 状态                                                                                                                                               | RFC-0023 接受；#561                                          |
+| 2    | [#564](https://github.com/hammershock/opencode-transit/issues/564)：父 Agent 的只读 `task_status`；[#565](https://github.com/hammershock/opencode-transit/issues/565)：active steer 与 queued follow-up                                                     | RFC-0023 接受；#563；两项可并行且需协调共享 contract         |
 | 3    | [#566](https://github.com/hammershock/opencode-transit/issues/566)：有界事件等待；[#567](https://github.com/hammershock/opencode-transit/issues/567)：精确中断；现有 [#431](https://github.com/hammershock/opencode-transit/issues/431)：当前与历史进度展示 | #566/#567 依赖 #563、#565；#431 依赖 #562，沿用已合并的 #430 |
 | 4    | [#568](https://github.com/hammershock/opencode-transit/issues/568)：幂等结果通知与删除屏障                                                                                                                                                                  | #563、#565、#566、#567                                       |
 | 5    | [#569](https://github.com/hammershock/opencode-transit/issues/569)：父 TUI 协作入口及 mini/run 验收                                                                                                                                                         | #562、#564–#568、#431；选址 UI 的实测另与现有 #547 衔接      |
