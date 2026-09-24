@@ -2772,6 +2772,171 @@ export type SessionsInterruptInput = { readonly sessionID: { readonly sessionID:
 
 export type SessionsInterruptOutput = void
 
+export type SessionsStatusInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly target?: {
+    readonly target?:
+      | {
+          readonly task_id: string
+          readonly invocation?:
+            | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+            | undefined
+        }
+      | undefined
+    readonly targets?:
+      | ReadonlyArray<{
+          readonly task_id: string
+          readonly invocation?:
+            | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+            | undefined
+        }>
+      | undefined
+    readonly cursor?: string | undefined
+    readonly limit?: number | undefined
+    readonly include_results?: boolean | undefined
+  }["target"]
+  readonly targets?: {
+    readonly target?:
+      | {
+          readonly task_id: string
+          readonly invocation?:
+            | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+            | undefined
+        }
+      | undefined
+    readonly targets?:
+      | ReadonlyArray<{
+          readonly task_id: string
+          readonly invocation?:
+            | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+            | undefined
+        }>
+      | undefined
+    readonly cursor?: string | undefined
+    readonly limit?: number | undefined
+    readonly include_results?: boolean | undefined
+  }["targets"]
+  readonly cursor?: {
+    readonly target?:
+      | {
+          readonly task_id: string
+          readonly invocation?:
+            | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+            | undefined
+        }
+      | undefined
+    readonly targets?:
+      | ReadonlyArray<{
+          readonly task_id: string
+          readonly invocation?:
+            | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+            | undefined
+        }>
+      | undefined
+    readonly cursor?: string | undefined
+    readonly limit?: number | undefined
+    readonly include_results?: boolean | undefined
+  }["cursor"]
+  readonly limit?: {
+    readonly target?:
+      | {
+          readonly task_id: string
+          readonly invocation?:
+            | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+            | undefined
+        }
+      | undefined
+    readonly targets?:
+      | ReadonlyArray<{
+          readonly task_id: string
+          readonly invocation?:
+            | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+            | undefined
+        }>
+      | undefined
+    readonly cursor?: string | undefined
+    readonly limit?: number | undefined
+    readonly include_results?: boolean | undefined
+  }["limit"]
+  readonly include_results?: {
+    readonly target?:
+      | {
+          readonly task_id: string
+          readonly invocation?:
+            | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+            | undefined
+        }
+      | undefined
+    readonly targets?:
+      | ReadonlyArray<{
+          readonly task_id: string
+          readonly invocation?:
+            | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+            | undefined
+        }>
+      | undefined
+    readonly cursor?: string | undefined
+    readonly limit?: number | undefined
+    readonly include_results?: boolean | undefined
+  }["include_results"]
+}
+
+export type SessionsStatusOutput = {
+  readonly data: ReadonlyArray<{
+    readonly target: {
+      readonly task_id: string
+      readonly invocation?:
+        | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+        | undefined
+    }
+    readonly description: string
+    readonly agent_id: string
+    readonly location: {
+      readonly target_id?: string | undefined
+      readonly target_name?: string | undefined
+      readonly directory?: string | undefined
+    }
+    readonly lifecycle: "admitted" | "active" | "settled" | "unscoped_legacy"
+    readonly outcome?: "completed" | "failed" | "cancelled" | undefined
+    readonly runtime: "observed" | "unknown" | "unavailable"
+    readonly phase: "queued" | "model" | "tool" | "permission" | "question" | "unknown"
+    readonly eligibility?: "eligible" | "frozen" | "none" | undefined
+    readonly cancellation: "none" | "requested" | "observed"
+    readonly lifecycle_source: "durable" | "legacy_projection"
+    readonly input_id?: string | undefined
+    readonly disposition?: "none" | "abandoned_unknown" | undefined
+    readonly owner_safety?: "confirmed_local_lease" | "unknown" | "not_required" | undefined
+    readonly root_quota?:
+      | {
+          readonly active_used: number
+          readonly active_limit: number
+          readonly pending_used: number
+          readonly pending_limit: number
+        }
+      | undefined
+    readonly runtime_observation?:
+      | { readonly source: "execution_owner"; readonly owner_generation: string; readonly observed_at: number }
+      | undefined
+    readonly read_at: number
+    readonly last_progress_at?: number | undefined
+    readonly active_tools: ReadonlyArray<{
+      readonly name: string
+      readonly call_id: string
+      readonly started_at?: number | undefined
+    }>
+    readonly active_tool_count: number
+    readonly active_invocation?:
+      | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+      | undefined
+    readonly queued_count: number
+    readonly abandoned_unknown?: boolean | undefined
+    readonly result?:
+      | { readonly message_id?: string | undefined; readonly summary?: string | undefined; readonly truncated: boolean }
+      | undefined
+  }>
+  readonly next?: string | undefined
+}
+
 export type SessionsMessageInput = {
   readonly sessionID: { readonly sessionID: string; readonly messageID: string }["sessionID"]
   readonly messageID: { readonly sessionID: string; readonly messageID: string }["messageID"]

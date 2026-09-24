@@ -310,6 +310,141 @@ describe("SessionTask durable projection", () => {
 })
 
 describe("SessionTask admission", () => {
+  test("paginates direct children and invocations behind fixed enumeration bounds", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db, root } = yield* fixture
+        const ids = Array.from({ length: 4 }, () => SessionSchema.ID.create())
+        for (const [index, id] of ids.slice(0, 3).entries()) {
+          yield* db
+            .insert(SessionTable)
+            .values({
+              id,
+              project_id: Project.ID.global,
+              parent_id: root,
+              slug: `child-${index}`,
+              directory: "/project/private",
+              title: `child-${index}`,
+              version: "test",
+              time_created: index + 1,
+            })
+            .run()
+            .pipe(Effect.orDie)
+        }
+        const database = { db, filename: ":memory:" }
+        const first = yield* SessionTaskView.children(database, { parentSessionID: root, limit: 2 })
+        expect(first.data.map((item) => item.target.task_id)).toEqual(ids.slice(0, 2))
+        expect(first.next).toBeDefined()
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: ids[3],
+            project_id: Project.ID.global,
+            parent_id: root,
+            slug: "child-3",
+            directory: "/project/private",
+            title: "child-3",
+            version: "test",
+            time_created: 4,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const second = yield* SessionTaskView.children(database, {
+          parentSessionID: root,
+          cursor: first.next,
+          limit: 2,
+        })
+        expect(second.data.map((item) => item.target.task_id)).toEqual([ids[2]])
+        expect(second.next).toBeUndefined()
+        const deletionPage = yield* SessionTaskView.children(database, { parentSessionID: root, limit: 1 })
+        yield* db.delete(SessionTable).where(eq(SessionTable.id, ids[3])).run().pipe(Effect.orDie)
+        const replacement = SessionSchema.ID.create()
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: replacement,
+            project_id: Project.ID.global,
+            parent_id: root,
+            slug: "replacement",
+            directory: "/project/private",
+            title: "replacement",
+            version: "test",
+            time_created: 5,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const afterDeletion = yield* SessionTaskView.children(database, {
+          parentSessionID: root,
+          cursor: deletionPage.next,
+          limit: 3,
+        })
+        expect(afterDeletion.data.map((item) => item.target.task_id)).toEqual(ids.slice(1, 3))
+        const foreign = yield* SessionTaskView.children(database, {
+          parentSessionID: ids[0],
+          cursor: first.next,
+        }).pipe(Effect.exit)
+        expect(Exit.isFailure(foreign)).toBe(true)
+
+        for (const index of [0, 1, 2])
+          yield* db
+            .insert(SessionTaskTable)
+            .values({
+              input_id: `msg_status_${index}`,
+              root_session_id: root,
+              parent_session_id: root,
+              parent_message_id: `msg_parent_status_${index}`,
+              call_id: `call-status-${index}`,
+              prompt_digest: "status",
+              child_session_id: ids[0],
+              description: "inspect",
+              agent_id: "build",
+              location_revision: 0,
+              state: "settled",
+              backend: "legacy",
+              outcome: "completed",
+              time_created: index + 1,
+            })
+            .run()
+            .pipe(Effect.orDie)
+        const history = yield* SessionTaskView.invocations(database, {
+          parentSessionID: root,
+          childSessionID: ids[0],
+          limit: 2,
+        })
+        expect(history.data.map((item) => item.target.invocation?.call_id)).toEqual(["call-status-0", "call-status-1"])
+        expect(history.next).toBeDefined()
+        yield* db
+          .insert(SessionTaskTable)
+          .values({
+            input_id: "msg_status_3",
+            root_session_id: root,
+            parent_session_id: root,
+            parent_message_id: "msg_parent_status_3",
+            call_id: "call-status-3",
+            prompt_digest: "status",
+            child_session_id: ids[0],
+            description: "inspect",
+            agent_id: "build",
+            location_revision: 0,
+            state: "settled",
+            backend: "legacy",
+            outcome: "completed",
+            time_created: 4,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const later = yield* SessionTaskView.invocations(database, {
+          parentSessionID: root,
+          childSessionID: ids[0],
+          cursor: history.next,
+          limit: 2,
+        })
+        expect(later.data.map((item) => item.target.invocation?.call_id)).toEqual(["call-status-2"])
+        expect(later.next).toBeUndefined()
+      }),
+    )
+  })
+
   test("legacy TaskPromptOps cannot advertise incomplete controls", async () => {
     const result = SessionTaskCapability.evaluate(SessionTaskCapability.legacyTaskPromptOps)
     expect(result.status).toBe("unsupported")
@@ -358,12 +493,36 @@ describe("SessionTask admission", () => {
         expect(admitted.runtime).toBe("unknown")
         expect(admitted.location.directory).toBeUndefined()
         expect(admitted.target.invocation?.call_id).toBe("call-view")
+        expect(admitted.input_id).toBe("msg_view")
+        expect(admitted.root_quota).toMatchObject({ active_used: 1, active_limit: 8, pending_used: 0 })
+        expect(admitted.owner_safety).toBe("unknown")
         const direct = yield* SessionTaskView.read(database, {
           parentSessionID: root,
           childSessionID: child,
           invocation: admitted.target.invocation,
         })
         expect(direct.location.directory).toBeUndefined()
+        yield* db.run(sql`INSERT INTO message (id, session_id, time_created, time_updated, data)
+          VALUES ('msg_status_assistant', ${child}, 1, 1, '{"role":"assistant","parentID":"msg_view"}')`)
+        yield* db.run(sql`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+          VALUES ('prt_status_tool', 'msg_status_assistant', ${child}, 1, 1,
+            '{"type":"tool","tool":"question","callID":"call-live","state":{"status":"running","time":{"start":1}}}')`)
+        const observed = { ...direct, lifecycle: "active" as const, runtime: "observed" as const }
+        const wrongCall = yield* SessionTaskView.withLivePhase(database, observed, {
+          permissions: [{ sessionID: child, source: { messageID: "msg_status_assistant", callID: "call-other" } }],
+          questions: [],
+        })
+        expect(wrongCall.phase).toBe(direct.phase)
+        const permission = yield* SessionTaskView.withLivePhase(database, observed, {
+          permissions: [{ sessionID: child, source: { messageID: "msg_status_assistant", callID: "call-live" } }],
+          questions: [],
+        })
+        expect(permission.phase).toBe("permission")
+        const question = yield* SessionTaskView.withLivePhase(database, observed, {
+          permissions: [],
+          questions: [{ sessionID: child, tool: { messageID: "msg_status_assistant", callID: "call-live" } }],
+        })
+        expect(question.phase).toBe("question")
         const historical = SessionSchema.ID.create()
         yield* db
           .insert(SessionTable)

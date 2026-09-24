@@ -6,6 +6,7 @@ import { Effect, Layer, Result, Schema } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
 import { ToolRegistry } from "@/tool/registry"
+import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { Tool } from "@/tool/tool"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -59,6 +60,35 @@ const replacements = [
 ] as const
 
 const it = testEffect(LayerNode.compile(root, replacements))
+const withBackground = testEffect(
+  LayerNode.compile(root, [
+    [Config.node, configLayer],
+    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalBackgroundSubagents: true })],
+    [LocationServiceMap.node, locationServiceMapLayer],
+  ]),
+)
+const withTaskBackend = testEffect(
+  LayerNode.compile(root, [
+    [Config.node, configLayer],
+    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalBackgroundSubagents: true })],
+    [LocationServiceMap.node, locationServiceMapLayer],
+  ]).pipe(
+    Layer.provideMerge(
+      Layer.succeed(SessionTaskCapability.Service, {
+        id: "session_v2",
+        features: new Set<SessionTaskCapability.Feature>([
+          "atomic_admission",
+          "exact_owner_guard",
+          "durable_queue",
+          "reconcile",
+          "exact_cancellation",
+          "exact_result",
+          "notification",
+        ]),
+      }),
+    ),
+  ),
+)
 const withCodeMode = testEffect(
   LayerNode.compile(root, [
     [Config.node, configLayer],
@@ -110,6 +140,20 @@ describe("tool.registry", () => {
       const ids = yield* registry.ids()
 
       expect(ids).not.toContain("task_status")
+    }),
+  )
+
+  withBackground.instance("does not advertise task_status from the incomplete legacy adapter", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      expect(yield* registry.ids()).not.toContain("task_status")
+    }),
+  )
+
+  withTaskBackend.instance("advertises task_status only with a complete enabled backend", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      expect(yield* registry.ids()).toContain("task_status")
     }),
   )
 

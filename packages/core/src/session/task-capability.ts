@@ -1,6 +1,6 @@
 export * as SessionTaskCapability from "./task-capability"
 
-import { Effect } from "effect"
+import { Context, Effect } from "effect"
 
 export type Feature =
   | "atomic_admission"
@@ -15,6 +15,9 @@ export type Backend = {
   readonly id: "legacy_task_prompt_ops" | "session_v2"
   readonly features: ReadonlySet<Feature>
 }
+
+/** The host advertises its actual Task execution adapter at the public boundary. */
+export class Service extends Context.Service<Service, Backend>()("@opencode/SessionTaskCapability") {}
 
 const required: readonly Feature[] = [
   "atomic_admission",

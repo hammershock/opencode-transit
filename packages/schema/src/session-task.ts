@@ -30,6 +30,17 @@ export const View = Schema.Struct({
   eligibility: Schema.optional(Schema.Literals(["eligible", "frozen", "none"])),
   cancellation: Schema.Literals(["none", "requested", "observed"]),
   lifecycle_source: Schema.Literals(["durable", "legacy_projection"]),
+  input_id: Schema.optional(Schema.String),
+  disposition: Schema.optional(Schema.Literals(["none", "abandoned_unknown"])),
+  owner_safety: Schema.optional(Schema.Literals(["confirmed_local_lease", "unknown", "not_required"])),
+  root_quota: Schema.optional(
+    Schema.Struct({
+      active_used: Schema.Int,
+      active_limit: Schema.Int,
+      pending_used: Schema.Int,
+      pending_limit: Schema.Int,
+    }),
+  ),
   runtime_observation: Schema.optional(
     Schema.Struct({
       source: Schema.Literal("execution_owner"),
@@ -57,3 +68,16 @@ export const View = Schema.Struct({
 
 export type Target = typeof Target.Type
 export type View = typeof View.Type
+
+export const StatusRequest = Schema.Struct({
+  target: Schema.optional(Target),
+  targets: Schema.optional(Schema.Array(Target)),
+  cursor: Schema.optional(Schema.String),
+  limit: Schema.optional(Schema.Int),
+  include_results: Schema.optional(Schema.Boolean),
+})
+
+export const StatusPage = Schema.Struct({
+  data: Schema.Array(View),
+  next: Schema.optional(Schema.String),
+})
