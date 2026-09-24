@@ -400,7 +400,7 @@ export const reconcile = Effect.fn("SessionTaskDelivery.reconcile")(function* (i
     return {
       inputID: previous.input_id,
       disposition: previous.disposition,
-      eligibility: task.eligibility,
+      eligibility: previous.disposition === "resume_pending" ? ("eligible" as const) : ("cancelled" as const),
       capacityState: previous.capacity_state,
     }
   }

@@ -181,6 +181,14 @@ describe("SessionTaskDelivery", () => {
             },
           })
           yield* SessionTask.settle(db, events, { inputID: second, childSessionID: child, outcome: "completed" })
+          expect(yield* SessionTaskDelivery.reconcile(operation)).toEqual(receipt)
+          // The operation receipt belongs to its admission event, even if a later projection changes.
+          yield* db
+            .update(SessionTaskTable)
+            .set({ eligibility: "cancelled" })
+            .where(eq(SessionTaskTable.input_id, second))
+            .run()
+          expect(yield* SessionTaskDelivery.reconcile(operation)).toEqual(receipt)
           expect((yield* SessionInput.promoteNextQueued(db, events, child))?.id).toBe(fourth)
         }).pipe(Effect.provide(layer), Effect.scoped),
       )
