@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import path from "path"
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Exit, Layer, Stream } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
@@ -31,7 +31,8 @@ import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionLocationRuntime } from "@opencode-ai/core/session/location-runtime"
-import { SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionInputTable, SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
+import { SessionTask } from "@opencode-ai/core/session/task"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
@@ -137,6 +138,108 @@ const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const id = SessionV2.ID.create()
 
 describe("SessionV2.create", () => {
+  it.effect("creates a Task child and its first queued inbox input in one transaction", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      const root = yield* session.create({ location })
+      const childID = SessionV2.ID.create()
+      const inputID = SessionMessage.ID.create()
+      const task = {
+        inputID,
+        rootSessionID: root.id,
+        parentSessionID: root.id,
+        parentMessageID: "msg_create_task_parent",
+        callID: "call-create-task",
+        promptDigest: "digest",
+        childSessionID: childID,
+        description: "first task",
+        agentID: "build",
+        locationRevision: 0,
+        backend: "v2" as const,
+      }
+      const created = yield* session.create({
+        id: childID,
+        parentID: root.id,
+        location,
+        task,
+        taskInput: { messageID: inputID, prompt: Prompt.make({ text: "work" }), delivery: "queue" },
+      })
+      expect(created.parentID).toBe(root.id)
+      expect((yield* SessionTask.find(db, inputID))?.state).toBe("admitted")
+      expect(
+        (yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, inputID)).get())?.delivery,
+      ).toBe("queue")
+      expect(
+        (yield* session.create({
+          id: childID,
+          parentID: root.id,
+          location,
+          task,
+          taskInput: { messageID: inputID, prompt: Prompt.make({ text: "work" }), delivery: "queue" },
+        })).id,
+      ).toBe(childID)
+      expect(
+        Exit.isFailure(
+          yield* session
+            .create({
+              id: childID,
+              parentID: root.id,
+              location,
+              task,
+              taskInput: { messageID: inputID, prompt: Prompt.make({ text: "different work" }), delivery: "queue" },
+            })
+            .pipe(Effect.exit),
+        ),
+      ).toBe(true)
+
+      yield* Effect.forEach(
+        Array.from({ length: 7 }, (_, index) => index),
+        (index) =>
+          db
+            .insert(SessionTaskTable)
+            .values({
+              input_id: `msg_occupied_${index}`,
+              root_session_id: root.id,
+              parent_session_id: root.id,
+              parent_message_id: `msg_occupied_parent_${index}`,
+              call_id: `call-occupied-${index}`,
+              prompt_digest: "digest",
+              child_session_id: childID,
+              description: "occupied",
+              agent_id: "build",
+              location_revision: 0,
+              state: "active",
+              backend: "v2",
+              time_created: Date.now(),
+            })
+            .run(),
+      )
+      const rejectedID = SessionV2.ID.create()
+      const rejectedInput = SessionMessage.ID.create()
+      const rejected = yield* session
+        .create({
+          id: rejectedID,
+          parentID: root.id,
+          location,
+          task: {
+            ...task,
+            inputID: rejectedInput,
+            childSessionID: rejectedID,
+            parentMessageID: "msg_rejected_task_parent",
+            callID: "call-rejected-task",
+          },
+          taskInput: { messageID: rejectedInput, prompt: Prompt.make({ text: "rejected" }), delivery: "queue" },
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(rejected)).toBe(true)
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, rejectedID)).get()).toBeUndefined()
+      expect(
+        yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, rejectedInput)).get(),
+      ).toBeUndefined()
+    }),
+  )
+
   it.effect("guards direct Core mutators when the Session Location is unresolved", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
@@ -452,10 +555,7 @@ describe("SessionV2.create", () => {
       const streamed = Array.from(
         yield* session.events({ sessionID: created.id }).pipe(Stream.take(2), Stream.runCollect),
       )
-      expect(streamed.map((event) => event.type)).toEqual([
-        "session.next.prompt.admitted",
-        "session.next.prompted",
-      ])
+      expect(streamed.map((event) => event.type)).toEqual(["session.next.prompt.admitted", "session.next.prompted"])
       expect(streamed.map((event) => event.type)).not.toContain("session.next.context.generation.established")
     }),
   )

@@ -197,6 +197,11 @@ export const SessionTaskTable = sqliteTable(
     agent_id: text().notNull(),
     location_revision: integer().notNull(),
     state: text().$type<"queued" | "admitted" | "active" | "settled">().notNull(),
+    /** Durable execution eligibility; a frozen pending input needs explicit disposition. */
+    eligibility: text().$type<"eligible" | "frozen" | "cancelled">().notNull().default("eligible"),
+    disposition_operation_id: text(),
+    disposition_actor_id: text(),
+    disposition_time: integer(),
     backend: text().$type<"legacy" | "v2">().notNull(),
     outcome: text().$type<"completed" | "failed" | "cancelled">(),
     result_message_id: text(),
@@ -216,6 +221,7 @@ export const SessionTaskTable = sqliteTable(
   (table) => [
     uniqueIndex("session_task_parent_call_idx").on(table.parent_message_id, table.call_id),
     uniqueIndex("session_task_archive_operation_idx").on(table.archive_operation_id),
+    uniqueIndex("session_task_disposition_operation_idx").on(table.disposition_operation_id),
     index("session_task_root_state_idx").on(table.root_session_id, table.state, table.time_created),
     index("session_task_child_state_idx").on(table.child_session_id, table.state, table.time_created),
   ],
@@ -225,6 +231,30 @@ export const SessionTaskTable = sqliteTable(
 export const SessionTaskDeletionTable = sqliteTable("session_task_deletion", {
   session_id: text().primaryKey(),
 })
+
+/** Durable child-inbox receipt for one steer of one exact Task invocation. */
+export const SessionTaskSteerTable = sqliteTable(
+  "session_task_steer",
+  {
+    input_id: text()
+      .primaryKey()
+      .references(() => SessionInputTable.id, { onDelete: "cascade" }),
+    invocation_input_id: text()
+      .notNull()
+      .references(() => SessionTaskTable.input_id, { onDelete: "cascade" }),
+    operation_id: text().notNull(),
+    prompt_digest: text().notNull(),
+    state: text().$type<"admitted" | "promoted" | "not_delivered">().notNull(),
+    reason: text().$type<"settled" | "owner_lost">(),
+    time_created: integer().notNull(),
+    time_promoted: integer(),
+    time_not_delivered: integer(),
+  },
+  (table) => [
+    uniqueIndex("session_task_steer_operation_idx").on(table.operation_id),
+    index("session_task_steer_invocation_idx").on(table.invocation_input_id, table.time_created),
+  ],
+)
 
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   session_id: text()

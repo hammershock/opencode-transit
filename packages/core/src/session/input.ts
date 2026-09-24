@@ -6,6 +6,8 @@ import { Admitted, Delivery } from "@opencode-ai/schema/session-input"
 import type { Database } from "../database/database"
 import { EventV2 } from "../event"
 import { SessionEvent } from "./event"
+import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
+import { SessionTask } from "./task"
 import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
@@ -83,19 +85,33 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly task?:
+      | { readonly kind: "invocation"; readonly admission: SessionTaskEvent.Admission }
+      | {
+          readonly kind: "steer"
+          readonly invocationInputID: string
+          readonly operationID: string
+          readonly promptDigest: string
+        }
+    readonly commit?: () => Effect.Effect<void>
   },
 ) {
   const existing = yield* find(db, input.id)
   if (existing !== undefined) return existing
   const timestamp = yield* DateTime.now
   return yield* events
-    .publish(SessionEvent.PromptAdmitted, {
-      messageID: input.id,
-      sessionID: input.sessionID,
-      timestamp,
-      prompt: input.prompt,
-      delivery: input.delivery,
-    })
+    .publish(
+      SessionEvent.PromptAdmitted,
+      {
+        messageID: input.id,
+        sessionID: input.sessionID,
+        timestamp,
+        prompt: input.prompt,
+        delivery: input.delivery,
+        ...(input.task ? { task: input.task } : {}),
+      },
+      input.commit ? { commit: input.commit } : undefined,
+    )
     .pipe(
       Effect.flatMap((event) =>
         event.durable === undefined
@@ -262,13 +278,17 @@ const publish = Effect.fn("SessionInput.publish")(function* (
     const id = SessionMessage.ID.make(row.id)
     if (yield* isSettled(db, sessionID, id)) continue
     yield* events
-      .publish(SessionEvent.Prompted, {
-        sessionID,
-        timestamp: DateTime.makeUnsafe(row.time_created),
-        messageID: id,
-        prompt: decodePrompt(row.prompt),
-        delivery: row.delivery,
-      })
+      .publish(
+        SessionEvent.Prompted,
+        {
+          sessionID,
+          timestamp: DateTime.makeUnsafe(row.time_created),
+          messageID: id,
+          prompt: decodePrompt(row.prompt),
+          delivery: row.delivery,
+        },
+        { commit: () => SessionTask.validateInboxPromotion(db, id) },
+      )
       .pipe(
         Effect.catchDefect((defect) =>
           defect instanceof LifecycleConflict

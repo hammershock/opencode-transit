@@ -15,6 +15,9 @@ import { PermissionV1 } from "./permission"
 import { ApprovalMode } from "../approval-mode"
 import { SessionPolicy } from "../session-policy"
 import { SessionTaskEvent } from "../session-task-event"
+import { SessionMessage } from "../session-message"
+import { Prompt } from "../prompt"
+import { Delivery } from "../session-delivery"
 
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
 
@@ -592,6 +595,7 @@ const events = {
       sessionID: SessionID,
       info: SessionInfo,
       task: optional(SessionTaskEvent.Admission),
+      taskInput: optional(Schema.Struct({ messageID: SessionMessage.ID, prompt: Prompt, delivery: Delivery })),
     },
   }),
   Updated: define({

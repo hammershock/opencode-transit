@@ -3,14 +3,14 @@ import path from "path"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
 import { eq, sql } from "drizzle-orm"
-import { Effect, Exit } from "effect"
+import { DateTime, Effect, Exit } from "effect"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import { Database } from "@opencode-ai/core/database/database"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
-import { SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
+import { SessionInputTable, SessionTable, SessionTaskSteerTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
 import { SessionTask } from "@opencode-ai/core/session/task"
 import { SessionTaskView } from "@opencode-ai/core/session/task-view"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
@@ -21,6 +21,9 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
+import { SessionEvent } from "@opencode-ai/schema/session-event"
+import { Prompt } from "@opencode-ai/schema/prompt"
+import { SessionMessage } from "@opencode-ai/core/session/message"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -58,6 +61,123 @@ const run = <A, E>(effect: Effect.Effect<A, E, import("effect/unstable/sql/SqlCl
 const eventIt = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProjector.node])))
 
 describe("SessionTask durable projection", () => {
+  eventIt.effect("projects one atomic V2 inbox invocation and an exact steer receipt", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const events = yield* EventV2.Service
+      const root = SessionSchema.ID.create()
+      const child = SessionSchema.ID.create()
+      const info = {
+        id: root,
+        slug: "task-inbox-root",
+        projectID: Project.ID.global,
+        directory: "/project",
+        title: "root",
+        version: "test",
+        time: { created: Date.now(), updated: Date.now() },
+      }
+      yield* events.publish(SessionV1.Event.Created, { sessionID: root, info })
+      yield* events.publish(SessionV1.Event.Created, {
+        sessionID: child,
+        info: { ...info, id: child, parentID: root, slug: "task-inbox-child" },
+      })
+      const inputID = SessionMessage.ID.create()
+      const initialTime = DateTime.makeUnsafe(Date.now())
+      const admission = {
+        inputID,
+        rootSessionID: root,
+        parentSessionID: root,
+        parentMessageID: "msg_task_inbox_parent",
+        callID: "call-task-inbox",
+        promptDigest: "first-digest",
+        childSessionID: child,
+        description: "inbox child",
+        agentID: "build",
+        locationRevision: 0,
+        backend: "v2" as const,
+      }
+      yield* events.publish(SessionEvent.PromptAdmitted, {
+        sessionID: child,
+        messageID: inputID,
+        timestamp: initialTime,
+        prompt: Prompt.make({ text: "first" }),
+        delivery: "queue",
+        task: { kind: "invocation", admission },
+      })
+      expect((yield* SessionTask.find(db, inputID))?.state).toBe("admitted")
+      expect(
+        (yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, inputID)).get())?.delivery,
+      ).toBe("queue")
+      yield* events.publish(SessionEvent.Prompted, {
+        sessionID: child,
+        messageID: inputID,
+        timestamp: initialTime,
+        prompt: Prompt.make({ text: "first" }),
+        delivery: "queue",
+      })
+      expect((yield* SessionTask.find(db, inputID))?.state).toBe("active")
+      const steerID = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.PromptAdmitted, {
+        sessionID: child,
+        messageID: steerID,
+        timestamp: DateTime.makeUnsafe(Date.now()),
+        prompt: Prompt.make({ text: "update" }),
+        delivery: "steer",
+        task: {
+          kind: "steer",
+          invocationInputID: inputID,
+          operationID: "steer-operation",
+          promptDigest: "update-digest",
+        },
+      })
+      expect(
+        (yield* db.select().from(SessionTaskSteerTable).where(eq(SessionTaskSteerTable.input_id, steerID)).get())
+          ?.state,
+      ).toBe("admitted")
+      const promotedSteerID = SessionMessage.ID.create()
+      const promotedTime = DateTime.makeUnsafe(Date.now())
+      yield* events.publish(SessionEvent.PromptAdmitted, {
+        sessionID: child,
+        messageID: promotedSteerID,
+        timestamp: promotedTime,
+        prompt: Prompt.make({ text: "second update" }),
+        delivery: "steer",
+        task: {
+          kind: "steer",
+          invocationInputID: inputID,
+          operationID: "second-steer-operation",
+          promptDigest: "second-update-digest",
+        },
+      })
+      yield* events.publish(SessionEvent.Prompted, {
+        sessionID: child,
+        messageID: promotedSteerID,
+        timestamp: promotedTime,
+        prompt: Prompt.make({ text: "second update" }),
+        delivery: "steer",
+      })
+      expect(
+        (yield* db
+          .select()
+          .from(SessionTaskSteerTable)
+          .where(eq(SessionTaskSteerTable.input_id, promotedSteerID))
+          .get())?.state,
+      ).toBe("promoted")
+      yield* SessionTask.settle(db, events, { inputID, childSessionID: child, outcome: "completed" })
+      expect(
+        (yield* db.select().from(SessionTaskSteerTable).where(eq(SessionTaskSteerTable.input_id, steerID)).get())
+          ?.state,
+      ).toBe("not_delivered")
+      expect(
+        (yield* db
+          .select()
+          .from(SessionTaskSteerTable)
+          .where(eq(SessionTaskSteerTable.input_id, promotedSteerID))
+          .get())?.state,
+      ).toBe("promoted")
+    }),
+  )
+
   eventIt.effect("serializes simultaneous promotion against the final root slot", () =>
     Effect.gen(function* () {
       const db = (yield* Database.Service).db

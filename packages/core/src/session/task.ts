@@ -10,7 +10,7 @@ import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
 import { SessionSchema } from "./schema"
 import { EventTable } from "../event/sql"
 import { SessionV1 } from "../v1/session"
-import { SessionTaskDeletionTable, SessionTaskTable } from "./sql"
+import { SessionTaskDeletionTable, SessionTaskSteerTable, SessionTaskTable } from "./sql"
 
 type DB = Database.Interface["db"]
 
@@ -314,6 +314,7 @@ export const projectPromoted = Effect.fn("SessionTask.projectPromoted")(function
   if (current.child_session_id !== input.childSessionID || current.state === "settled")
     return yield* Effect.die(new AdmissionConflict())
   if (current.state === "active") return
+  if (current.eligibility !== "eligible") return yield* Effect.die(new AdmissionConflict())
   if (current.state === "queued") {
     const head = yield* db
       .select({ id: SessionTaskTable.input_id })
@@ -333,9 +334,77 @@ export const projectPromoted = Effect.fn("SessionTask.projectPromoted")(function
     .pipe(Effect.orDie)
 })
 
+export const projectSteerAdmitted = Effect.fn("SessionTask.projectSteerAdmitted")(function* (
+  db: DB,
+  input: { inputID: string; invocationInputID: string; operationID: string; promptDigest: string; timestamp: number },
+) {
+  const existing = yield* db
+    .select()
+    .from(SessionTaskSteerTable)
+    .where(
+      or(eq(SessionTaskSteerTable.input_id, input.inputID), eq(SessionTaskSteerTable.operation_id, input.operationID)),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  if (existing) {
+    if (
+      existing.input_id !== input.inputID ||
+      existing.invocation_input_id !== input.invocationInputID ||
+      existing.operation_id !== input.operationID ||
+      existing.prompt_digest !== input.promptDigest
+    )
+      return yield* Effect.die(new AdmissionConflict())
+    return
+  }
+  const invocation = yield* find(db, input.invocationInputID)
+  if (!invocation || invocation.state !== "active") return yield* Effect.die(new AdmissionConflict())
+  yield* db
+    .insert(SessionTaskSteerTable)
+    .values({
+      input_id: input.inputID,
+      invocation_input_id: input.invocationInputID,
+      operation_id: input.operationID,
+      prompt_digest: input.promptDigest,
+      state: "admitted",
+      time_created: input.timestamp,
+    })
+    .run()
+    .pipe(Effect.orDie)
+})
+
+export const projectInboxPromoted = Effect.fn("SessionTask.projectInboxPromoted")(function* (
+  db: DB,
+  input: { inputID: string; childSessionID: string; timestamp: number },
+) {
+  const invocation = yield* find(db, input.inputID)
+  if (invocation) {
+    yield* projectPromoted(db, input)
+    return
+  }
+  const steer = yield* db
+    .select()
+    .from(SessionTaskSteerTable)
+    .where(eq(SessionTaskSteerTable.input_id, input.inputID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!steer) return
+  const owner = yield* find(db, steer.invocation_input_id)
+  if (!owner || owner.child_session_id !== input.childSessionID || steer.state === "not_delivered")
+    return yield* Effect.die(new AdmissionConflict())
+  if (steer.state === "promoted") return
+  if (owner.state !== "active") return yield* Effect.die(new AdmissionConflict())
+  yield* db
+    .update(SessionTaskSteerTable)
+    .set({ state: "promoted", time_promoted: input.timestamp })
+    .where(eq(SessionTaskSteerTable.input_id, input.inputID))
+    .run()
+    .pipe(Effect.orDie)
+})
+
 const validatePromotion = Effect.fn("SessionTask.validatePromotion")(function* (db: DB, inputID: string) {
   const row = yield* find(db, inputID)
-  if (!row || row.state !== "active") return yield* Effect.die(new AdmissionConflict())
+  if (!row || row.state !== "active" || row.eligibility !== "eligible")
+    return yield* Effect.die(new AdmissionConflict())
   const sameChild = yield* count(
     db,
     and(
@@ -354,6 +423,24 @@ const validatePromotion = Effect.fn("SessionTask.validatePromotion")(function* (
     ),
   )
   if (used > ACTIVE_LIMIT) return yield* Effect.die(new CapacityUnavailable())
+})
+
+/** The inbox event and Task transition share one short SQLite commit boundary. */
+export const validateInboxPromotion = Effect.fn("SessionTask.validateInboxPromotion")(function* (
+  db: DB,
+  inputID: string,
+) {
+  if (yield* find(db, inputID)) return yield* validatePromotion(db, inputID)
+  const steer = yield* db
+    .select()
+    .from(SessionTaskSteerTable)
+    .where(eq(SessionTaskSteerTable.input_id, inputID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!steer) return
+  const owner = yield* find(db, steer.invocation_input_id)
+  if (!owner || owner.state !== "active" || steer.state !== "promoted")
+    return yield* Effect.die(new AdmissionConflict())
 })
 
 export const settle = Effect.fn("SessionTask.settle")(function* (
@@ -415,6 +502,14 @@ export const projectSettled = Effect.fn("SessionTask.projectSettled")(function* 
       time_settled: input.timestamp,
     })
     .where(eq(SessionTaskTable.input_id, input.inputID))
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .update(SessionTaskSteerTable)
+    .set({ state: "not_delivered", reason: "settled", time_not_delivered: input.timestamp })
+    .where(
+      and(eq(SessionTaskSteerTable.invocation_input_id, input.inputID), eq(SessionTaskSteerTable.state, "admitted")),
+    )
     .run()
     .pipe(Effect.orDie)
 })
