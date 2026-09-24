@@ -167,6 +167,25 @@ describe("EventV2", () => {
     }),
   )
 
+  it.effect("delivers a publish to later listeners when an earlier listener unsubscribes", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const observed: string[] = []
+      let unsubscribeFirst: Effect.Effect<void> = Effect.void
+      unsubscribeFirst = yield* events.listen(() =>
+        unsubscribeFirst.pipe(Effect.tap(() => Effect.sync(() => observed.push("first")))),
+      )
+      const unsubscribeSecond = yield* events.listen(() =>
+        Effect.sync(() => {
+          observed.push("second")
+        }),
+      )
+      yield* events.publish(Message, { text: "one" })
+      yield* unsubscribeSecond
+      expect(observed).toEqual(["first", "second"])
+    }),
+  )
+
   it.effect("runs projectors inline", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service

@@ -692,6 +692,56 @@ export const withLivePhase = Effect.fn("SessionTaskView.withLivePhase")(function
       })),
   ]
   if (!sources.length) return view
+  const promoted = yield* database.db
+    .select({ seq: SessionInputTable.promoted_seq })
+    .from(SessionInputTable)
+    .where(eq(SessionInputTable.id, SessionMessage.ID.make(view.input_id)))
+    .get()
+    .pipe(Effect.orDie)
+  if (promoted?.seq !== null && promoted?.seq !== undefined) {
+    const next = yield* database.db
+      .select({ seq: SessionInputTable.promoted_seq })
+      .from(SessionTaskTable)
+      .innerJoin(SessionInputTable, eq(SessionTaskTable.input_id, SessionInputTable.id))
+      .where(
+        and(
+          eq(SessionTaskTable.child_session_id, view.target.task_id),
+          gt(SessionInputTable.promoted_seq, promoted.seq),
+        ),
+      )
+      .orderBy(asc(SessionInputTable.promoted_seq))
+      .limit(1)
+      .get()
+      .pipe(Effect.orDie)
+    const messages = yield* database.db
+      .select({ id: SessionMessageTable.id, data: SessionMessageTable.data })
+      .from(SessionMessageTable)
+      .where(
+        and(
+          eq(SessionMessageTable.session_id, view.target.task_id),
+          eq(SessionMessageTable.type, "assistant"),
+          inArray(
+            SessionMessageTable.id,
+            sources.map((source) => SessionMessage.ID.make(source.messageID)),
+          ),
+          gt(SessionMessageTable.seq, promoted.seq),
+          ...(next?.seq !== null && next?.seq !== undefined ? [lt(SessionMessageTable.seq, next.seq)] : []),
+        ),
+      )
+      .all()
+      .pipe(Effect.orDie)
+    const owned = new Set(
+      messages.flatMap((message) =>
+        "content" in message.data
+          ? (message.data.content as SessionMessage.Assistant["content"])
+              .filter((part) => part.type === "tool")
+              .map((part) => `${message.id}\u0000${part.id}`)
+          : [],
+      ),
+    )
+    const phase = sources.find((source) => owned.has(`${source.messageID}\u0000${source.callID}`))?.phase
+    return phase ? { ...view, phase } : view
+  }
   const tools = yield* database.db
     .select({ messageID: MessageTable.id, callID: sql<string>`json_extract(${PartTable.data}, '$.callID')` })
     .from(PartTable)
@@ -721,6 +771,7 @@ export const withObservedPhase = Effect.fn("SessionTaskView.withObservedPhase")(
   database: Database.Interface,
   view: TaskSchema.View,
   locations: LocationServiceMap.Interface,
+  options?: { readonly strict?: boolean },
 ) {
   if (view.runtime !== "observed") return view
   const child = yield* database.db
@@ -730,15 +781,13 @@ export const withObservedPhase = Effect.fn("SessionTaskView.withObservedPhase")(
     .get()
     .pipe(Effect.orDie)
   if (!child) return view
-  return yield* Effect.gen(function* () {
+  const phase = Effect.gen(function* () {
     const permission = yield* PermissionV2.Service
     const question = yield* QuestionV2.Service
     return yield* withLivePhase(database, view, {
       permissions: yield* permission.forSession(view.target.task_id),
       questions: yield* question.list(),
     })
-  }).pipe(
-    Effect.provide(locations.get(SessionPolicyStore.locationFromRow(child))),
-    Effect.catch(() => Effect.succeed(view)),
-  )
+  }).pipe(Effect.provide(locations.get(SessionPolicyStore.locationFromRow(child))))
+  return yield* options?.strict ? phase : phase.pipe(Effect.catch(() => Effect.succeed(view)))
 })
