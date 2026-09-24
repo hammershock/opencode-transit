@@ -213,7 +213,7 @@ realRexdTest("production V2 Task executes one harmless child tool on a real sele
         Effect.promise(() => tmpdir({ git: true, config: testProviderConfig(llm.url) })),
         (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
       )
-      const targetID = "3ee4a7a9-4829-4245-9b28-cda4eacff2e4"
+      const targetID = "00000000-0000-4000-8000-000000000001"
       const probe = Bun.spawn(
         ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=yes", realTarget!, "hostname"],
         { stdout: "pipe", stderr: "pipe" },
