@@ -17,6 +17,11 @@ import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
+import { SessionTask } from "@opencode-ai/core/session/task"
+import { SessionTaskOwner } from "@opencode-ai/core/session/task-owner"
+import { SessionTable } from "@opencode-ai/core/session/sql"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { eq } from "drizzle-orm"
 import path from "path"
 import { Location } from "@opencode-ai/core/location"
 import { TargetRegistry } from "@opencode-ai/core/target-registry"
@@ -463,6 +468,7 @@ export const TaskTool = Tool.define(
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    const events = yield* EventV2Bridge.Service
     const policies = yield* SessionPolicyAccess.Service
     const registry = yield* TargetRegistry.Service
     const fs = yield* FSUtil.Service
@@ -687,40 +693,127 @@ export const TaskTool = Tool.define(
         modelID: msg.info.modelID,
         providerID: msg.info.providerID,
       }
+      const previous = ctx.callID
+        ? yield* SessionTask.findInvocation(database.db, { parentMessageID: ctx.messageID, callID: ctx.callID })
+        : undefined
+      const promptDigest = new Bun.CryptoHasher("sha256").update(params.prompt).digest("hex")
+      const matchesPrior = (row: NonNullable<typeof previous>) =>
+        row.parent_session_id === ctx.sessionID &&
+        row.root_session_id === current.id &&
+        row.description === params.description &&
+        row.agent_id === childAgentID &&
+        row.prompt_digest === promptDigest &&
+        (!resumed || row.child_session_id === resumed.id)
+      const priorReceipt = Effect.fn("TaskTool.priorReceipt")(function* (row: NonNullable<typeof previous>) {
+        const sessionID = SessionID.make(row.child_session_id)
+        const metadata = {
+          parentSessionId: ctx.sessionID,
+          invocation: {
+            parentMessageID: ctx.messageID,
+            callID: ctx.callID,
+            childMessageID: MessageID.make(row.input_id),
+          },
+          sessionId: sessionID,
+          model,
+          target: planned.targetID,
+          targetName: planned.targetName,
+          directory: planned.directory,
+          ...(runInBackground ? { background: true } : {}),
+        }
+        yield* ctx.metadata({ title: params.description, metadata })
+        return {
+          title: params.description,
+          metadata,
+          output: renderOutput({
+            sessionID,
+            state: row.state !== "settled" ? "running" : row.outcome === "completed" ? "completed" : "error",
+            summary:
+              row.state === "settled"
+                ? `Invocation already settled: ${row.outcome}; result message: ${row.result_message_id ?? "none"}`
+                : "Invocation already admitted; check its status before sending another call",
+            text: "This exact Task invocation was already admitted. It was not started again.",
+            location: { id: planned.targetID, name: planned.targetName, directory: planned.directory },
+          }),
+        }
+      })
+      if (previous) {
+        if (!matchesPrior(previous)) return yield* Effect.fail(new SessionTask.AdmissionConflict())
+        return yield* priorReceipt(previous)
+      }
       const childMessageID = MessageID.ascending()
+      const childSessionID = resumed?.id ?? SessionID.descending()
+      const locationRevision = resumed
+        ? ((yield* database.db
+            .select({ revision: SessionTable.location_revision })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, resumed.id))
+            .get()
+            .pipe(Effect.orDie))?.revision ?? 0)
+        : 0
+      const admission = ctx.callID
+        ? {
+            inputID: childMessageID,
+            rootSessionID: current.id,
+            parentSessionID: ctx.sessionID,
+            parentMessageID: ctx.messageID,
+            callID: ctx.callID,
+            promptDigest,
+            childSessionID,
+            description: params.description,
+            agentID: childAgentID,
+            locationRevision,
+            backend: "legacy" as const,
+          }
+        : undefined
       // Admission must publish the resumable child identity before cancellation can interrupt this invocation.
       const admitted = yield* Effect.uninterruptible(
         Effect.gen(function* () {
           const nextSession =
             resumed ??
-            (yield* atChild(
-              sessions.create({
-                parentID: ctx.sessionID,
-                title: params.description + ` (@${destAgent.name} subagent)`,
-                agent: childAgentID,
-                permissionBoundary: childPolicy.boundary,
-                permission: [
-                  ...childPolicy.permission,
-                  ...childToolDenies.filter(
-                    (deny) =>
-                      !childPolicy.permission.some(
-                        (rule) =>
-                          rule.permission === deny.permission && rule.pattern === deny.pattern && rule.action === deny.action,
-                      ),
-                  ),
-                ],
-                ...(planned.changedPlacement ? { metadata: { targetAgent: true } } : {}),
-                ...(planned.changedPlacement
-                  ? {
-                      destination: {
-                        target: planned.target,
-                        directory: planned.directory,
-                        ...(planned.lastKnownTargetName ? { lastKnownTargetName: planned.lastKnownTargetName } : {}),
-                      },
-                    }
-                  : {}),
-              }),
+            (yield* SessionTask.withOwner(childSessionID)(
+              atChild(
+                sessions.create({
+                  id: childSessionID,
+                  ...(admission
+                    ? { task: admission, commit: () => SessionTask.validate(database.db, admission.inputID) }
+                    : {}),
+                  parentID: ctx.sessionID,
+                  title: params.description + ` (@${destAgent.name} subagent)`,
+                  agent: childAgentID,
+                  permissionBoundary: childPolicy.boundary,
+                  permission: [
+                    ...childPolicy.permission,
+                    ...childToolDenies.filter(
+                      (deny) =>
+                        !childPolicy.permission.some(
+                          (rule) =>
+                            rule.permission === deny.permission &&
+                            rule.pattern === deny.pattern &&
+                            rule.action === deny.action,
+                        ),
+                    ),
+                  ],
+                  ...(planned.changedPlacement ? { metadata: { targetAgent: true } } : {}),
+                  ...(planned.changedPlacement
+                    ? {
+                        destination: {
+                          target: planned.target,
+                          directory: planned.directory,
+                          ...(planned.lastKnownTargetName ? { lastKnownTargetName: planned.lastKnownTargetName } : {}),
+                        },
+                      }
+                    : {}),
+                }),
+              ),
             ))
+          if (resumed && admission) {
+            yield* SessionTask.admitExisting(
+              database.db,
+              events,
+              admission,
+              background.get(resumed.id).pipe(Effect.map((job) => job?.status === "running")),
+            )
+          }
           const metadata = {
             parentSessionId: ctx.sessionID,
             invocation: { parentMessageID: ctx.messageID, callID: ctx.callID, childMessageID },
@@ -733,8 +826,26 @@ export const TaskTool = Tool.define(
           }
           yield* ctx.metadata({ title: params.description, metadata })
           return { nextSession, metadata }
-        }),
+        }).pipe(
+          Effect.catchDefect((error) => {
+            if (error instanceof SessionTask.AdmissionConflict && ctx.callID)
+              return SessionTask.findInvocation(database.db, {
+                parentMessageID: ctx.messageID,
+                callID: ctx.callID,
+              }).pipe(
+                Effect.flatMap((row) =>
+                  row && matchesPrior(row)
+                    ? Effect.succeed({ prior: row })
+                    : Effect.fail(new TaskPlacementError(error.code, error.message)),
+                ),
+              )
+            if (error instanceof SessionTask.CapacityError || error instanceof SessionTask.OwnerUnknown)
+              return Effect.fail(new TaskPlacementError(error.code, error.message))
+            return Effect.die(error)
+          }),
+        ),
       )
+      if ("prior" in admitted) return yield* priorReceipt(admitted.prior)
       const nextSession = admitted.nextSession
       const metadata = admitted.metadata
 
@@ -749,8 +860,18 @@ export const TaskTool = Tool.define(
       }
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
-        return yield* atChild(
+        let promoted = false
+        let ownerLost = false
+        let resultMessageID: string | undefined
+        const execute = atChild(
           Effect.gen(function* () {
+            if (admission) {
+              yield* SessionTask.promote(database.db, events, {
+                inputID: childMessageID,
+                childSessionID: nextSession.id,
+              })
+              promoted = true
+            }
             const parts = yield* ops.resolvePromptParts(params.prompt, nextSession.id)
             const result = yield* ops.prompt({
               messageID: childMessageID,
@@ -763,6 +884,7 @@ export const TaskTool = Tool.define(
               agent: subagentID,
               parts,
             })
+            resultMessageID = result.info.id
             if (result.info.role === "assistant" && result.info.error) {
               const message =
                 "message" in result.info.error.data && typeof result.info.error.data.message === "string"
@@ -775,7 +897,24 @@ export const TaskTool = Tool.define(
               return yield* Effect.fail(taskFailure("error", failed.state.error))
             }
             return result.parts.findLast((item) => item.type === "text")?.text ?? ""
-          }),
+          }).pipe(
+            Effect.onExit((exit) =>
+              !admission || !promoted || ownerLost
+                ? Effect.void
+                : SessionTask.settle(database.db, events, {
+                    inputID: childMessageID,
+                    childSessionID: nextSession.id,
+                    outcome: Exit.isSuccess(exit) ? "completed" : Exit.hasInterrupts(exit) ? "cancelled" : "failed",
+                    resultMessageID,
+                  }).pipe(Effect.asVoid),
+            ),
+          ),
+        )
+        if (!admission || database.filename === ":memory:") return yield* execute
+        return yield* SessionTaskOwner.withLease(
+          database,
+          { childSessionID: nextSession.id, inputID: childMessageID, onLost: () => (ownerLost = true) },
+          execute,
         )
       })
 

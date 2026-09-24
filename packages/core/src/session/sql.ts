@@ -180,6 +180,52 @@ export const SessionInputTable = sqliteTable(
   ],
 )
 
+/** Task invocation facts; execution-owner observations are deliberately not stored here. */
+export const SessionTaskTable = sqliteTable(
+  "session_task",
+  {
+    input_id: text().primaryKey(),
+    root_session_id: text().notNull(),
+    parent_session_id: text().notNull(),
+    parent_message_id: text().notNull(),
+    call_id: text().notNull(),
+    prompt_digest: text().notNull(),
+    child_session_id: text()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    description: text().notNull(),
+    agent_id: text().notNull(),
+    location_revision: integer().notNull(),
+    state: text().$type<"queued" | "admitted" | "active" | "settled">().notNull(),
+    backend: text().$type<"legacy" | "v2">().notNull(),
+    outcome: text().$type<"completed" | "failed" | "cancelled">(),
+    result_message_id: text(),
+    abandoned_unknown: integer({ mode: "boolean" }).notNull().default(false),
+    archive_operation_id: text(),
+    archive_actor_id: text(),
+    archive_time: integer(),
+    time_created: integer().notNull(),
+    time_started: integer(),
+    time_settled: integer(),
+    /** Local observation only; never copied into a durable sync event. */
+    owner_pid: integer(),
+    owner_start: text(),
+    owner_generation: text(),
+    owner_observed_at: integer(),
+  },
+  (table) => [
+    uniqueIndex("session_task_parent_call_idx").on(table.parent_message_id, table.call_id),
+    uniqueIndex("session_task_archive_operation_idx").on(table.archive_operation_id),
+    index("session_task_root_state_idx").on(table.root_session_id, table.state, table.time_created),
+    index("session_task_child_state_idx").on(table.child_session_id, table.state, table.time_created),
+  ],
+)
+
+/** Local projection barrier for deleted Task roots and parents, including sync control tombstones. */
+export const SessionTaskDeletionTable = sqliteTable("session_task_deletion", {
+  session_id: text().primaryKey(),
+})
+
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   session_id: text()
     .$type<SessionSchema.ID>()

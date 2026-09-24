@@ -48,6 +48,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { ApprovalMode } from "@opencode-ai/schema/approval-mode"
 import { SyncSetup } from "@opencode-ai/core/sync/setup"
+import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
 
 const parentTitlePrefix = "New session - "
 const childTitlePrefix = "Child session - "
@@ -451,6 +452,10 @@ export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<Info[]>
   readonly listGlobal: (input?: GlobalListInput) => Effect.Effect<GlobalInfo[]>
   readonly create: (input?: {
+    id?: SessionID
+    /** Local projection committed with the durable Created event. */
+    commit?: () => Effect.Effect<void>
+    task?: SessionTaskEvent.Admission
     parentID?: SessionID
     title?: string
     agent?: string
@@ -551,6 +556,8 @@ const layer: Layer.Layer<
 
     const createNext = Effect.fn("Session.createNext")(function* (input: {
       id?: SessionID
+      commit?: () => Effect.Effect<void>
+      task?: SessionTaskEvent.Admission
       title?: string
       agent?: string
       model?: Schema.Schema.Type<typeof Model>
@@ -601,7 +608,11 @@ const layer: Layer.Layer<
       }
       yield* Effect.logInfo("created", result)
 
-      yield* events.publish(SessionV1.Event.Created, { sessionID: result.id, info: result })
+      yield* events.publish(
+        SessionV1.Event.Created,
+        { sessionID: result.id, info: result, ...(input.task ? { task: input.task } : {}) },
+        { commit: input.commit },
+      )
 
       return result
     })
@@ -736,6 +747,9 @@ const layer: Layer.Layer<
     })
 
     const create = Effect.fn("Session.create")(function* (input?: {
+      id?: SessionID
+      commit?: () => Effect.Effect<void>
+      task?: SessionTaskEvent.Admission
       parentID?: SessionID
       title?: string
       agent?: string
@@ -755,6 +769,9 @@ const layer: Layer.Layer<
       const parent = input?.parentID ? yield* get(input.parentID).pipe(Effect.orDie) : undefined
       const destination = input?.destination
       return yield* createNext({
+        id: input?.id,
+        commit: input?.commit,
+        task: input?.task,
         parentID: input?.parentID,
         directory: destination ? destination.directory : (parent?.directory ?? ctx.directory),
         target: destination ? destination.target : parent ? parent.target : (input?.target ?? location?.target),

@@ -5,7 +5,8 @@ import { and, eq, sql } from "drizzle-orm"
 import { Auth } from "../auth"
 import { makeGlobalNode } from "../effect/app-node"
 import { Database } from "../database/database"
-import { SessionTable } from "../session/sql"
+import { SessionTable, SessionTaskDeletionTable, SessionTaskTable } from "../session/sql"
+import { SessionTask } from "../session/task"
 import { SessionV2 } from "../session"
 import { EventV2 } from "../event"
 import { BaiduSyncProvider } from "./baidu-provider"
@@ -360,9 +361,20 @@ const make = (input: LayerOptions) =>
           attachment,
           (sessionID) =>
             sessionDB
-              .delete(SessionTable)
-              .where(eq(SessionTable.id, SessionV2.ID.make(sessionID)))
-              .run()
+              .transaction((tx) =>
+                Effect.gen(function* () {
+                  yield* tx
+                    .insert(SessionTaskDeletionTable)
+                    .values({ session_id: sessionID })
+                    .onConflictDoNothing()
+                    .run()
+                  yield* tx.delete(SessionTaskTable).where(SessionTask.deletionPredicate(sessionID)).run()
+                  yield* tx
+                    .delete(SessionTable)
+                    .where(eq(SessionTable.id, SessionV2.ID.make(sessionID)))
+                    .run()
+                }),
+              )
               .pipe(Effect.andThen(metadata.remove(sessionID)), Effect.asVoid),
           config.namespaceID,
           (sessionID, spaceID) => ownership.assign(sessionID, spaceID),

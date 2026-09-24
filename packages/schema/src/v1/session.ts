@@ -14,6 +14,7 @@ import { Location } from "../location"
 import { PermissionV1 } from "./permission"
 import { ApprovalMode } from "../approval-mode"
 import { SessionPolicy } from "../session-policy"
+import { SessionTaskEvent } from "../session-task-event"
 
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
 
@@ -590,6 +591,7 @@ const events = {
     schema: {
       sessionID: SessionID,
       info: SessionInfo,
+      task: optional(SessionTaskEvent.Admission),
     },
   }),
   Updated: define({

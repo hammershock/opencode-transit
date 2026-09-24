@@ -45,7 +45,7 @@ import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/schema/schema"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
-import { SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
 import { eq } from "drizzle-orm"
 import { Global } from "@opencode-ai/core/global"
 import { TargetRegistry } from "@opencode-ai/core/target-registry"
@@ -1613,6 +1613,81 @@ describe("tool.task", () => {
     }),
   )
 
+  background.instance("concurrent exact retries reuse one child and input identity", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const def = yield* (yield* TaskTool).init()
+      let prompts = 0
+      const promptOps: TaskPromptOps = {
+        ...stubOps(),
+        prompt: () =>
+          Effect.sync(() => {
+            prompts++
+          }).pipe(Effect.andThen(Effect.never)),
+      }
+      const call = () =>
+        def.execute(
+          { description: "inspect bug", prompt: "check cache", subagent_type: "general", background: true },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID: "call-exact-retry",
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+      const results = yield* Effect.all([call(), call()], { concurrency: "unbounded" })
+      expect(results[0].metadata.sessionId).toBe(results[1].metadata.sessionId)
+      expect(results[0].metadata.invocation).toEqual(results[1].metadata.invocation)
+      const db = (yield* Database.Service).db
+      expect((yield* db.select().from(SessionTable).where(eq(SessionTable.parent_id, chat.id)).all()).length).toBe(1)
+      expect((yield* db.select().from(SessionTaskTable).all()).length).toBe(1)
+      expect(prompts).toBe(1)
+    }),
+  )
+
+  background.instance("root capacity rejects a ninth Task before creating a child", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const def = yield* (yield* TaskTool).init()
+      const promptOps: TaskPromptOps = { ...stubOps(), prompt: () => Effect.never }
+      const call = (index: number) =>
+        def.execute(
+          { description: `inspect task ${index}`, prompt: "check cache", subagent_type: "general", background: true },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID: `call-capacity-${index}`,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+      yield* Effect.forEach(
+        Array.from({ length: 8 }, (_, index) => index),
+        call,
+      )
+      const ninth = yield* call(8).pipe(Effect.exit)
+      expect(Exit.isFailure(ninth)).toBe(true)
+      if (Exit.isSuccess(ninth)) throw new Error("ninth Task unexpectedly admitted")
+      const error = Cause.squash(ninth.cause)
+      expect(error).toBeInstanceOf(TaskPlacementError)
+      expect((error as TaskPlacementError).code).toBe("capacity_exceeded")
+      if (!(error instanceof Error)) throw new Error("expected Task placement error")
+      expect(error.message).toContain("8/8")
+      const db = (yield* Database.Service).db
+      expect((yield* db.select().from(SessionTable).where(eq(SessionTable.parent_id, chat.id)).all()).length).toBe(8)
+      expect((yield* db.select().from(SessionTaskTable).all()).length).toBe(8)
+    }),
+  )
+
   background.instance("background task completion waits for running updates", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
@@ -2078,7 +2153,13 @@ describe("tool.task.destination", () => {
       // not a fresh `yield* TaskTool` whose init runs inside the instance context.
       const { task } = yield* registry.named()
       const result = yield* task.execute(
-        { description: "inspect remote", prompt: "inspect", subagent_type: "general", target: destID, directory: destDirectory },
+        {
+          description: "inspect remote",
+          prompt: "inspect",
+          subagent_type: "general",
+          target: destID,
+          directory: destDirectory,
+        },
         {
           sessionID: chat.id,
           messageID: assistant.id,

@@ -20,6 +20,9 @@ import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, Sessio
 import { AbsolutePath, type DeepMutable } from "../schema"
 import { SessionPolicy } from "@opencode-ai/schema/session-policy"
 import { SessionPolicyStore } from "./policy"
+import { SessionTask } from "./task"
+import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
+import { SessionTaskDeletionTable, SessionTaskTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -249,6 +252,11 @@ const layer = Layer.effectDiscard(
           .get()
           .pipe(Effect.orDie)
         if (!stored) return yield* Effect.die(new SessionAlreadyProjected())
+        if (event.data.task)
+          yield* SessionTask.admit(db, event.data.task, {
+            validate: false,
+            timestamp: event.data.info.time.created,
+          })
         if (event.data.info.workspaceID) {
           yield* db
             .update(WorkspaceTable)
@@ -257,6 +265,46 @@ const layer = Layer.effectDiscard(
             .run()
             .pipe(Effect.orDie)
         }
+      }),
+    )
+    yield* events.project(SessionTaskEvent.Admitted, (event) =>
+      Effect.gen(function* () {
+        const child = yield* db
+          .select({ id: SessionTable.id })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!child) return
+        yield* SessionTask.admit(db, event.data.admission, {
+          validate: false,
+          timestamp: event.data.timestamp,
+        })
+      }),
+    )
+    yield* events.project(SessionTaskEvent.Promoted, (event) =>
+      SessionTask.projectPromoted(db, {
+        inputID: event.data.inputID,
+        childSessionID: event.data.sessionID,
+        timestamp: event.data.timestamp,
+      }),
+    )
+    yield* events.project(SessionTaskEvent.Settled, (event) =>
+      SessionTask.projectSettled(db, {
+        inputID: event.data.inputID,
+        childSessionID: event.data.sessionID,
+        outcome: event.data.outcome,
+        resultMessageID: event.data.resultMessageID,
+        timestamp: event.data.timestamp,
+      }),
+    )
+    yield* events.project(SessionTaskEvent.ArchivedUnknown, (event) =>
+      SessionTask.projectArchivedUnknown(db, {
+        inputID: event.data.inputID,
+        childSessionID: event.data.sessionID,
+        operationID: event.data.operationID,
+        actorID: event.data.actorID,
+        timestamp: event.data.timestamp,
       }),
     )
     yield* events.project(SessionV1.Event.Updated, (event) => {
@@ -368,7 +416,20 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionV1.Event.Deleted, (event) =>
-      db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie),
+      Effect.gen(function* () {
+        yield* db
+          .insert(SessionTaskDeletionTable)
+          .values({ session_id: event.data.sessionID })
+          .onConflictDoNothing()
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .delete(SessionTaskTable)
+          .where(SessionTask.deletionPredicate(event.data.sessionID))
+          .run()
+          .pipe(Effect.orDie)
+        yield* db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie)
+      }),
     )
     yield* events.project(SessionV1.Event.MessageUpdated, (event) =>
       Effect.gen(function* () {
