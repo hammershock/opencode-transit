@@ -47,13 +47,6 @@ export class OwnerUnknown extends Error {
   }
 }
 
-export class OwnerStillLive extends Error {
-  readonly code = "task_owner_still_live"
-  constructor() {
-    super("task_owner_still_live: the invocation has a currently observed local owner")
-  }
-}
-
 export class CapacityUnavailable extends Error {
   readonly code = "capacity_unavailable"
   constructor() {
@@ -422,15 +415,7 @@ export const archiveUnknown = Effect.fn("SessionTask.archiveUnknown")(function* 
       return yield* Effect.die(new AdmissionConflict())
     return snapshot
   }
-  const observed =
-    database.filename && database.filename !== ":memory:"
-      ? yield* Effect.promise(async () => {
-          const { SessionTaskOwner } = await import("./task-owner")
-          return SessionTaskOwner.observe(database.filename!, input.childSessionID)
-        })
-      : undefined
-  if (observed?.owner_generation === snapshot.owner_generation) return yield* Effect.fail(new OwnerStillLive())
-  return yield* withOwner(input.childSessionID)(
+  const commit = withOwner(input.childSessionID)(
     Effect.gen(function* () {
       const other = yield* db
         .select()
@@ -458,6 +443,19 @@ export const archiveUnknown = Effect.fn("SessionTask.archiveUnknown")(function* 
       })
       return yield* find(db, input.inputID)
     }),
+  )
+  if (!database.filename || database.filename === ":memory:") return yield* commit
+  const { SessionTaskOwner } = yield* Effect.promise(() => import("./task-owner"))
+  return yield* Effect.acquireUseRelease(
+    Effect.tryPromise({
+      try: () => SessionTaskOwner.acquireLocalLease(database.filename!, input.childSessionID),
+      catch: (error) =>
+        error instanceof SessionTaskOwner.OwnerUnavailable
+          ? error
+          : new SessionTaskOwner.OwnerUnavailable(String(error)),
+    }),
+    () => commit,
+    (lease) => Effect.tryPromise(() => lease.close()).pipe(Effect.orDie),
   )
 })
 

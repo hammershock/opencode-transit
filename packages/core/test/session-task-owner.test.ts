@@ -9,6 +9,12 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
 import { SessionTaskView } from "@opencode-ai/core/session/task-view"
+import { SessionTask } from "@opencode-ai/core/session/task"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { EventV2 } from "@opencode-ai/core/event"
+import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { SessionTaskOwner } from "@opencode-ai/core/session/task-owner"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -281,5 +287,89 @@ describe("SessionTask local owner lease", () => {
       if (controller.exitCode === null) controller.kill()
       await controller.exited
     }
+  })
+
+  test("a second controller cannot archive unknown while the first still holds the child", async () => {
+    await using temp = await tmpdir()
+    const filename = path.join(temp.path, "tasks.sqlite")
+    const root = SessionSchema.ID.create()
+    const child = SessionSchema.ID.create()
+    const script = `
+      import { SessionTaskOwner } from ${JSON.stringify(path.join(import.meta.dir, "../src/session/task-owner.ts"))};
+      const lease = await SessionTaskOwner.acquireLocalLease(${JSON.stringify(filename)}, ${JSON.stringify(child)});
+      console.log("READY");
+      await Bun.sleep(5000);
+      await lease.close();
+    `
+    const layer = AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProjector.node]), [
+      [Database.node, Database.layerFromPath(filename)],
+    ])
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const database = yield* Database.Service
+        const events = yield* EventV2.Service
+        const info = {
+          id: root,
+          slug: "root",
+          projectID: Project.ID.global,
+          directory: temp.path,
+          title: "root",
+          version: "test",
+          time: { created: Date.now(), updated: Date.now() },
+        }
+        const admission = {
+          inputID: "msg_archive_lock",
+          rootSessionID: root,
+          parentSessionID: root,
+          parentMessageID: "msg_parent_archive",
+          callID: "call-archive",
+          promptDigest: "digest",
+          childSessionID: child,
+          description: "task",
+          agentID: "build",
+          locationRevision: 0,
+          backend: "legacy" as const,
+        }
+        yield* events.publish(SessionV1.Event.Created, { sessionID: root, info })
+        yield* events.publish(
+          SessionV1.Event.Created,
+          {
+            sessionID: child,
+            info: { ...info, id: child, parentID: root, slug: "child" },
+            task: admission,
+          },
+          { commit: () => SessionTask.validate(database.db, admission.inputID) },
+        )
+        yield* SessionTask.promote(database.db, events, { inputID: admission.inputID, childSessionID: child })
+        const controller = Bun.spawn([process.execPath, "-e", script], {
+          cwd: import.meta.dir,
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        try {
+          const reader = controller.stdout.getReader()
+          const ready = yield* Effect.promise(() => reader.read())
+          reader.releaseLock()
+          expect(new TextDecoder().decode(ready.value)).toContain("READY")
+          const input = {
+            inputID: admission.inputID,
+            childSessionID: child,
+            operationID: "archive-concurrent",
+            actor: { kind: "user" as const, id: "user-test" },
+          }
+          const denied = yield* SessionTask.archiveUnknown(database, events, input).pipe(Effect.exit)
+          expect(Exit.isFailure(denied)).toBe(true)
+          expect((yield* SessionTask.find(database.db, admission.inputID))?.abandoned_unknown).toBe(false)
+          controller.kill("SIGKILL")
+          yield* Effect.promise(() => controller.exited)
+          const archived = yield* SessionTask.archiveUnknown(database, events, input)
+          expect(archived?.abandoned_unknown).toBe(true)
+          expect(archived?.outcome).toBeNull()
+        } finally {
+          if (controller.exitCode === null) controller.kill()
+          yield* Effect.promise(() => controller.exited)
+        }
+      }).pipe(Effect.provide(layer), Effect.scoped),
+    )
   })
 })
