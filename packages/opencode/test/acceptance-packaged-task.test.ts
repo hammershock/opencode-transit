@@ -18,7 +18,7 @@ const waitFor = async <T>(read: () => Promise<T | undefined>, label: string, att
   throw new Error(`Timed out waiting for ${label}`)
 }
 
-packagedTest("packaged server admits six real provider Task calls and steers 1/3 while active", async () => {
+packagedTest("packaged Task controls steer active children and interrupt a running shell", async () => {
   await Effect.runPromise(Effect.gen(function* () {
     const llm = yield* TestLLMServer
     return yield* Effect.promise(async () => {
@@ -61,6 +61,12 @@ packagedTest("packaged server admits six real provider Task calls and steers 1/3
           const text = JSON.stringify(hit.body)
           return text.includes(`CHILD_${index}_MARKER`) && !text.includes("PARENT_SIX_MARKER")
         }
+        if (index === 2) {
+          await Effect.runPromise(llm.toolMatch(child, "bash", {
+            command: "echo $$ > interrupt-pid; sleep 60 & echo $! > interrupt-child-pid; echo started > interrupt-started; wait; echo finished > interrupt-finished",
+            workdir: temp.path,
+          }))
+        }
         if (index === 1 || index === 3) {
           await Effect.runPromise(llm.pushMatch(child, reply().wait(releases[index - 1]!.waiting).text(`child ${index} done`).stop().item()))
           await Effect.runPromise(llm.textMatch(child, `child ${index} steer consumed`))
@@ -85,6 +91,9 @@ packagedTest("packaged server admits six real provider Task calls and steers 1/3
         stdout: "pipe",
         stderr: "pipe",
       })
+      // Drain logs while the server runs so pipe backpressure cannot stall it.
+      const stdout = new Response(child.stdout).text()
+      const stderr = new Response(child.stderr).text()
       const base = `http://127.0.0.1:${port}`
       const request = async (path: string, body: unknown) => {
         const response = await fetch(base + path, {
@@ -232,6 +241,25 @@ packagedTest("packaged server admits six real provider Task calls and steers 1/3
             terminal.close()
           }
         }
+        await waitFor(async () => (await Bun.file(`${temp.path}/interrupt-started`).exists()) ? true : undefined, "long shell started")
+        const blocked = six.find((row) => row.description === "packaged task 2")!
+        const interruptStarted = Date.now()
+        const interrupted = await request(`/api/session/${parent}/task/interrupt`, {
+          target: { task_id: blocked.target.task_id, input_id: blocked.input_id, invocation: blocked.active_invocation },
+        })
+        expect((interrupted as unknown as { state: string }).state).toBe("requested")
+        const cancelled = await waitFor(async () => {
+          const row = database.query("SELECT outcome FROM session_task WHERE input_id = ?").get(blocked.input_id!) as { outcome: string } | null
+          return row?.outcome === "cancelled" ? row : undefined
+        }, "blocked shell invocation cancelled", 100)
+        expect(cancelled.outcome).toBe("cancelled")
+        const shellPID = Number(await Bun.file(`${temp.path}/interrupt-pid`).text())
+        const childPID = Number(await Bun.file(`${temp.path}/interrupt-child-pid`).text())
+        expect(() => process.kill(shellPID, 0)).toThrow()
+        expect(() => process.kill(childPID, 0)).toThrow()
+        expect(Date.now() - interruptStarted).toBeLessThan(10000)
+        expect(await Bun.file(`${temp.path}/interrupt-finished`).exists()).toBe(false)
+        process.stdout.write(`PACKAGED_INTERRUPT:${JSON.stringify({ receipt: interrupted, elapsedMs: Date.now() - interruptStarted, outcome: cancelled.outcome })}\n`)
         releases.forEach((item) => item.release())
         const promoted = await waitFor(async () => {
           const steers = database.query("SELECT operation_id, state, time_created, time_promoted FROM session_task_steer WHERE operation_id IN ('packaged-steer-1', 'packaged-steer-3') ORDER BY operation_id").all() as Array<{ operation_id: string; state: string; time_created: number; time_promoted: number | null }>
@@ -267,9 +295,9 @@ packagedTest("packaged server admits six real provider Task calls and steers 1/3
       } finally {
         releases.forEach((item) => item.release())
         releaseParent()
-        child.kill()
+        child.kill("SIGKILL")
         await child.exited
-        await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
+        await Promise.all([stdout, stderr])
       }
     })
   }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped))

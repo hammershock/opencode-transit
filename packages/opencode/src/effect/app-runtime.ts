@@ -57,7 +57,7 @@ import { AppNodeBuilderV1 } from "./app-node-builder-v1"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
-import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
+import { sessionExecutionLayer } from "./session-execution"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { TargetRegistry } from "@opencode-ai/core/target-registry"
@@ -146,7 +146,7 @@ export const AppLayer = AppNodeBuilderV1.build(
     [LocationServiceMap.node, localLocationServiceMapNode],
     [TargetRegistry.node, rexdTargetRegistryNode],
     [taskBackendNode, Layer.succeed(SessionTaskCapability.Service, SessionTaskCapability.sessionV2)],
-    [SessionExecution.node, SessionExecutionLocal.node],
+    [SessionExecution.node, sessionExecutionLayer],
   ],
 ).pipe(Layer.provideMerge(AppNodeBuilderV1.build(Ripgrep.node)), Layer.provideMerge(Observability.layer))
 

@@ -77,7 +77,7 @@ import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
-import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/local"
+import { sessionExecutionLayer } from "@/effect/session-execution"
 import { lazy } from "@/util/lazy"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@opencode-ai/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
@@ -340,14 +340,14 @@ export function createRoutes(
     Layer.provide(
       AppNodeBuilderV1.build(LayerNode.group([SessionV2.node, SessionExecution.node, SessionLocationAccess.node]), [
         [LocationServiceMap.node, locationServiceMapV2],
-        [SessionExecution.node, SessionExecutionLocal.node],
+        [SessionExecution.node, sessionExecutionLayer],
       ]),
     ),
     Layer.provide(
       AppNodeBuilderV1.build(app, [
         [TargetRegistry.node, rexdTargetRegistryNode],
         [LocationServiceMap.node, locationServiceMapV2],
-        [SessionExecution.node, SessionExecutionLocal.node],
+        [SessionExecution.node, sessionExecutionLayer],
       ]),
     ),
     // Must stay last: layers provided later in this pipe build beneath earlier ones,
