@@ -297,7 +297,29 @@ describe("SessionTaskDelivery", () => {
               text: "next",
             })
             expect(followup.state).toBe("queued")
+            expect(followup.fresh).toBe(true)
+            const retry = yield* SessionTaskDelivery.followup({
+              childSessionID: child,
+              invocation: { parentSessionID: root, parentMessageID: "msg_delivery_next", callID: "call-delivery-next" },
+              description: "next work",
+              agentID: "build",
+              text: "next",
+            })
+            expect(retry).toMatchObject({ inputID: followup.inputID, fresh: false, state: "queued" })
             expect((yield* SessionTask.find(db, followup.inputID))?.state).toBe("queued")
+            yield* SessionTask.settle(db, events, {
+              inputID: followup.inputID,
+              childSessionID: child,
+              outcome: "cancelled",
+            })
+            const afterSettlement = yield* SessionTaskDelivery.followup({
+              childSessionID: child,
+              invocation: { parentSessionID: root, parentMessageID: "msg_delivery_next", callID: "call-delivery-next" },
+              description: "next work",
+              agentID: "build",
+              text: "next",
+            })
+            expect(afterSettlement).toMatchObject({ inputID: followup.inputID, fresh: false, state: "settled" })
             yield* db.update(SessionTable).set({ location_revision: 1 }).where(eq(SessionTable.id, child)).run()
             const stale = yield* SessionTaskDelivery.send({
               childSessionID: child,

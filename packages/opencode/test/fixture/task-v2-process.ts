@@ -4,7 +4,7 @@ import { InstanceRef } from "@/effect/instance-ref"
 import { Session } from "@/session/session"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
-import { SessionTaskTable } from "@opencode-ai/core/session/sql"
+import { SessionTaskResultTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionTaskDelivery } from "@opencode-ai/core/session/task-delivery"
@@ -319,10 +319,17 @@ const result = await AppRuntime.runPromise(
             .where(eq(SessionTaskTable.child_session_id, child))
             .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.input_id))
             .all()
-          if (rows.length === 4 && rows.every((row) => row.state === "settled"))
+          const parentResults = yield* database.db.select().from(SessionTaskResultTable)
+            .where(eq(SessionTaskResultTable.child_session_id, child)).all()
+          if (rows.length === 4 && rows.every((row) => row.state === "settled") && parentResults.length === 4)
             return {
               child,
               rows: rows.map((row) => ({ input: row.input_id, state: row.state, outcome: row.outcome })),
+              parentResults: parentResults.map((item) => ({
+                input: item.invocation_input_id,
+                outcome: item.outcome,
+                notification: item.notification_input_id,
+              })),
               retry: yield* SessionTaskControl.stop({
                 parentSessionID: SessionV2.ID.make(chat.id),
                 childSessionID: child,
@@ -340,6 +347,19 @@ const result = await AppRuntime.runPromise(
       }
       if (process.env.TASK_V2_TEST_SEQUENCE === "1") {
         const child = SessionV2.ID.make(receipt.metadata.sessionId)
+        const initialRetry = yield* def.execute(
+          { description: "inspect cache", prompt: "check cache", subagent_type: "general", background: true },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID: "call-v2-consume",
+            agent: "build",
+            abort: new AbortController().signal,
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
         const active = yield* Effect.gen(function* () {
           for (let attempt = 0; attempt < 200; attempt++) {
             const row = yield* database.db
@@ -368,7 +388,7 @@ const result = await AppRuntime.runPromise(
           Effect.provideService(Database.Service, database),
           Effect.provideService(SessionExecution.Service, execution),
         )
-        const followups = yield* Effect.forEach(["B", "C"], (letter) =>
+        const executeFollowup = (letter: "B" | "C") =>
           def.execute(
             {
               description: `follow-up ${letter}`,
@@ -387,13 +407,26 @@ const result = await AppRuntime.runPromise(
               metadata: () => Effect.void,
               ask: () => Effect.void,
             },
-          ),
-        )
+          )
+        const [firstB, duplicateB] = yield* Effect.all([executeFollowup("B"), executeFollowup("B")], {
+          concurrency: "unbounded",
+        })
+        const newB = firstB.output.includes("already admitted") ? duplicateB : firstB
+        const retriedB = firstB.output.includes("already admitted") ? firstB : duplicateB
+        const followups = [newB, yield* executeFollowup("C")]
         yield* Effect.promise(() =>
           Bun.write(
             `${directory}/task-v2-ready.json`,
             JSON.stringify({
               steer,
+              initialRetry: {
+                input: initialRetry.metadata.invocation.childMessageID,
+                output: initialRetry.output,
+              },
+              duplicateB: {
+                input: retriedB.metadata.invocation.childMessageID,
+                output: retriedB.output,
+              },
               followups: followups.map((item) => item.metadata.invocation.childMessageID),
               followupOutputs: followups.map((item) => item.output),
             }),
@@ -408,6 +441,7 @@ const result = await AppRuntime.runPromise(
             .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.input_id))
             .all()
           if (rows.length === 3 && rows.every((row) => row.state === "settled")) {
+            const settledRetry = yield* executeFollowup("B")
             const steerRow = yield* database.db
               .select()
               .from(SessionTaskSteerTable)
@@ -423,6 +457,10 @@ const result = await AppRuntime.runPromise(
                 result: row.result_message_id,
               })),
               steer: { admitted: steer.state, state: steerRow?.state },
+              settledRetry: {
+                input: settledRetry.metadata.invocation.childMessageID,
+                output: settledRetry.output,
+              },
             }
           }
           yield* Effect.sleep(Duration.millis(25))
@@ -443,6 +481,10 @@ const result = await AppRuntime.runPromise(
         state: row?.state,
         outcome: row?.outcome,
         result: row?.result_message_id,
+        parentResult: row
+          ? yield* database.db.select().from(SessionTaskResultTable)
+              .where(eq(SessionTaskResultTable.invocation_input_id, row.input_id)).get()
+          : undefined,
       }
     }).pipe(Effect.provideService(InstanceRef, instance))
   }).pipe(Effect.scoped),

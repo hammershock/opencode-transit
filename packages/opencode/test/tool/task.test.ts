@@ -486,14 +486,64 @@ test("V2 Task adapter promotes its first inbox input into a real provider turn",
         state: string
         outcome: string
         result?: string
+        parentResult?: { outcome: string; result_message_id: string | null; notification_input_id: string }
       }
       expect(result.database).toBe(temp.path + "/task-v2.sqlite")
       expect(result.state).toBe("settled")
       expect(result.outcome).toBe("completed")
       expect(result.result).toBeDefined()
+      expect(result.parentResult).toMatchObject({
+        outcome: "completed",
+        result_message_id: result.result,
+      })
+      expect(result.parentResult?.notification_input_id).toStartWith("msg_")
       const hits = yield* llm.inputs
       expect(hits).toHaveLength(1)
       expect(JSON.stringify(hits[0])).toContain("check cache")
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
+  )
+}, 60_000)
+
+test("V2 background Task failure records a parent result without replaying child work", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const temp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true, config: { experimental: { background_subagents: true } } })),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      yield* llm.error(400, { error: { message: "child provider failed", type: "invalid_request_error" } })
+      const child = Bun.spawn([process.execPath, "test/fixture/task-v2-process.ts"], {
+        cwd: import.meta.dir + "/../..",
+        env: {
+          ...process.env,
+          OPENCODE_DB: temp.path + "/task-v2.sqlite",
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            experimental: { background_subagents: true },
+          }),
+          TASK_V2_TEST_DIRECTORY: temp.path,
+          TASK_V2_TEST_LLM_URL: llm.url,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const [stdout, stderr, code] = yield* Effect.promise(() =>
+        Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
+      )
+      expect(code, stderr).toBe(0)
+      const line = stdout.split("\n").find((item) => item.startsWith("TASK_V2_RESULT:"))
+      expect(line, stderr).toBeDefined()
+      const result = JSON.parse(line!.slice("TASK_V2_RESULT:".length)) as {
+        state: string
+        outcome: string
+        parentResult?: { outcome: string; result_message_id: string | null; notification_input_id: string }
+      }
+      expect(result.state).toBe("settled")
+      expect(result.outcome).toBe("failed")
+      expect(result.parentResult).toMatchObject({ outcome: "failed", result_message_id: null })
+      expect(result.parentResult?.notification_input_id).toStartWith("msg_")
+      expect(yield* llm.calls).toBe(1)
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
   )
 }, 60_000)
@@ -539,9 +589,19 @@ test("V2 Task process promotes an active steer before two ordered queued follow-
           await Bun.sleep(25)
         }
         throw new Error("Task process did not admit steer and follow-ups")
-      })) as { steer: { state: string }; followups: string[]; followupOutputs: string[] }
+      })) as {
+        steer: { state: string }
+        initialRetry: { input: string; output: string }
+        duplicateB: { input: string; output: string }
+        followups: string[]
+        followupOutputs: string[]
+      }
       expect(ready.steer.state).toBe("admitted")
       expect(ready.followups).toHaveLength(2)
+      expect(ready.initialRetry.input).toBeDefined()
+      expect(ready.initialRetry.output).toContain("already admitted")
+      expect(ready.duplicateB.input).toBe(ready.followups[0])
+      expect(ready.duplicateB.output).toContain("already admitted")
       expect(ready.followupOutputs).toHaveLength(2)
       expect(ready.followupOutputs.every((output) => output.includes('state="queued"'))).toBe(true)
       release()
@@ -554,12 +614,15 @@ test("V2 Task process promotes an active steer before two ordered queued follow-
       const result = JSON.parse(line!.slice("TASK_V2_RESULT:".length)) as {
         rows: { input: string; state: string; outcome: string; result: string }[]
         steer: { admitted: string; state: string }
+        settledRetry: { input: string; output: string }
       }
       expect(result.rows).toHaveLength(3)
       expect(result.rows.map((row) => row.state)).toEqual(["settled", "settled", "settled"])
       expect(result.rows.map((row) => row.outcome)).toEqual(["completed", "completed", "completed"])
       expect(new Set(result.rows.map((row) => row.result)).size).toBe(3)
       expect(result.rows.slice(1).map((row) => row.input)).toEqual(ready.followups)
+      expect(result.settledRetry.input).toBe(ready.followups[0])
+      expect(result.settledRetry.output).toContain("already admitted")
       expect(result.steer).toEqual({ admitted: "admitted", state: "promoted" })
       const inputs = yield* llm.inputs
       expect(inputs).toHaveLength(4)
@@ -647,9 +710,15 @@ test("V2 Task stop interrupts active A and cancels queued B/C without a provider
         expect(line, stderr).toBeDefined()
         const result = JSON.parse(line!.slice("TASK_V2_RESULT:".length)) as {
           rows: { input: string; state: string; outcome: string }[]
+          parentResults: { input: string; outcome: string; notification: string }[]
           retry: { data: { inputID: string; state: string }[] }
         }
         expect(result.rows.map((row) => row.outcome)).toEqual(["cancelled", "cancelled", "cancelled", "completed"])
+        expect(result.parentResults).toHaveLength(4)
+        expect(result.parentResults.map((item) => item.outcome).sort()).toEqual([
+          "cancelled", "cancelled", "cancelled", "completed",
+        ])
+        expect(new Set(result.parentResults.map((item) => item.notification)).size).toBe(4)
         expect(result.rows[3]?.input).toBe(ready.later)
         expect(result.retry.data.map((item) => item.state)).toEqual([
           "already_settled",

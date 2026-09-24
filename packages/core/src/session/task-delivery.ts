@@ -184,6 +184,7 @@ export const followup = Effect.fn("SessionTaskDelivery.followup")(function* (inp
   agentID: string
   text: string
   background?: boolean
+  deferWake?: boolean
 }) {
   const database = yield* Database.Service
   const db = database.db
@@ -202,7 +203,7 @@ export const followup = Effect.fn("SessionTaskDelivery.followup")(function* (inp
       prior.background !== (input.background ?? false)
     )
       return yield* Effect.fail(new SessionTask.AdmissionConflict())
-    return { inputID: prior.input_id, state: prior.state }
+    return { inputID: prior.input_id, state: prior.state, fresh: false as const }
   }
   const child = yield* db
     .select({ parentID: SessionTable.parent_id, revision: SessionTable.location_revision })
@@ -362,8 +363,8 @@ export const followup = Effect.fn("SessionTaskDelivery.followup")(function* (inp
       () => record,
       (lease) => Effect.tryPromise(() => lease.close()).pipe(Effect.orDie),
     )
-  yield* execution.wake(input.childSessionID)
-  return { inputID: id, state: (yield* SessionTask.find(db, id))!.state }
+  if (!input.deferWake) yield* execution.wake(input.childSessionID)
+  return { inputID: id, state: (yield* SessionTask.find(db, id))!.state, fresh: true as const }
 })
 
 /** Reconcile one exact frozen or pending input without changing its identity. */

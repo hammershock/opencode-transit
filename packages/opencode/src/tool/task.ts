@@ -809,6 +809,7 @@ export const TaskTool = Tool.define(
               agentID: childAgentID,
               text: params.prompt,
               background: runInBackground,
+              deferWake: true,
             }).pipe(
               Effect.provideService(EventV2.Service, events),
               Effect.provideService(Database.Service, database),
@@ -848,7 +849,7 @@ export const TaskTool = Tool.define(
                 },
                 taskInput: { messageID: inputID, prompt: Prompt.make({ text: params.prompt }), delivery: "queue" },
               })
-              return { inputID, state: "admitted" as const }
+              return { inputID, state: "admitted" as const, fresh: true as const }
             })
         const accepted = yield* SessionTaskResult.withParent(SessionV2.ID.make(ctx.sessionID))(admissionEffect.pipe(
           Effect.map((value) => ({ value }) as const),
@@ -869,13 +870,18 @@ export const TaskTool = Tool.define(
             return Effect.die(defect)
           }),
           Effect.tap((receipt) =>
-            runInBackground && "value" in receipt
+            runInBackground && "value" in receipt && receipt.value.fresh
               ? SessionTaskResult.authorizeWithin(database, SessionV2.ID.make(ctx.sessionID), receipt.value.inputID)
               : Effect.void,
           ),
         ))
         if ("prior" in accepted) return yield* priorReceipt(accepted.prior)
         const admitted = accepted.value
+        if (!admitted.fresh) {
+          const row = yield* SessionTask.find(database.db, admitted.inputID)
+          if (!row) return yield* Effect.fail(new TaskPlacementError("task_unavailable", "Task receipt is unavailable"))
+          return yield* priorReceipt(row)
+        }
         const metadata = {
           parentSessionId: ctx.sessionID,
           invocation: {
