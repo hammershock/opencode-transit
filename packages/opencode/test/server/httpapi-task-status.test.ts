@@ -12,6 +12,41 @@ afterEach(async () => {
 })
 
 describe("Task status HttpApi capability boundary", () => {
+  test("complete HTTP control cancels pending input and retries a fixed stop scope", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const child = Bun.spawn([process.execPath, "test/fixture/task-control-http.ts"], {
+      cwd: import.meta.dir + "/../..",
+      env: {
+        ...process.env,
+        OPENCODE_DB: tmp.path + "/task-control-http.sqlite",
+        TASK_CONTROL_HTTP_DIRECTORY: tmp.path,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ])
+    expect(code, stderr).toBe(0)
+    const result = JSON.parse(
+      stdout
+        .split("\n")
+        .find((line) => line.startsWith("TASK_CONTROL_HTTP:"))!
+        .slice("TASK_CONTROL_HTTP:".length),
+    ) as {
+      stopped: { data: { input_id: string; state: string }[] }
+      retry: { data: { input_id: string; state: string }[] }
+      interrupted: { input_id: string; state: string }
+      first: string
+      later: string
+    }
+    expect(result.stopped.data).toEqual([{ input_id: result.first, state: "cancelled_pending" }])
+    expect(result.retry).toEqual(result.stopped)
+    expect(result.interrupted).toEqual({ input_id: result.later, state: "cancelled_pending" })
+  }, 45_000)
+
   test("legacy adapter returns explicit unsupported without resolving a target", async () => {
     await using tmp = await tmpdir({ git: true })
     for (const [route, body] of [
