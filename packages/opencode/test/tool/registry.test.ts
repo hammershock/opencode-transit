@@ -6,6 +6,9 @@ import { Effect, Layer, Result, Schema } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
 import { ToolRegistry } from "@/tool/registry"
+import { protectStatus } from "@/tool/task-status"
+import { SessionTaskView } from "@opencode-ai/core/session/task-view"
+import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { Tool } from "@/tool/tool"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -59,6 +62,35 @@ const replacements = [
 ] as const
 
 const it = testEffect(LayerNode.compile(root, replacements))
+const withBackground = testEffect(
+  LayerNode.compile(root, [
+    [Config.node, configLayer],
+    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalBackgroundSubagents: true })],
+    [LocationServiceMap.node, locationServiceMapLayer],
+  ]),
+)
+const withTaskBackend = testEffect(
+  LayerNode.compile(root, [
+    [Config.node, configLayer],
+    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalBackgroundSubagents: true })],
+    [LocationServiceMap.node, locationServiceMapLayer],
+  ]).pipe(
+    Layer.provideMerge(
+      Layer.succeed(SessionTaskCapability.Service, {
+        id: "session_v2",
+        features: new Set<SessionTaskCapability.Feature>([
+          "atomic_admission",
+          "exact_owner_guard",
+          "durable_queue",
+          "reconcile",
+          "exact_cancellation",
+          "exact_result",
+          "notification",
+        ]),
+      }),
+    ),
+  ),
+)
 const withCodeMode = testEffect(
   LayerNode.compile(root, [
     [Config.node, configLayer],
@@ -110,6 +142,52 @@ describe("tool.registry", () => {
       const ids = yield* registry.ids()
 
       expect(ids).not.toContain("task_status")
+    }),
+  )
+
+  withBackground.instance("does not advertise task_status from the incomplete legacy adapter", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      expect(yield* registry.ids()).not.toContain("task_status")
+    }),
+  )
+
+  withTaskBackend.instance("advertises task_status only with a complete enabled backend", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      expect(yield* registry.ids()).toContain("task_status")
+    }),
+  )
+
+  withTaskBackend.instance("returns one bounded error for missing and foreign status targets", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const status = (yield* registry.all()).find((item) => item.id === "task_status")
+      expect(status).toBeDefined()
+      const ctx: Tool.Context = {
+        sessionID: SessionID.make("ses_status_parent"),
+        messageID: MessageID.make("msg_status_parent"),
+        agent: "build",
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+      const first = yield* status!.execute({ target: { task_id: SessionID.make("ses_missing_a") } }, ctx)
+      const second = yield* status!.execute({ target: { task_id: SessionID.make("ses_missing_b") } }, ctx)
+      expect(first.output).toBe("task_target_unavailable")
+      expect(second.output).toBe(first.output)
+    }),
+  )
+
+  withTaskBackend.instance("does not disguise a storage defect as an unknown target", () =>
+    Effect.gen(function* () {
+      expect((yield* protectStatus(Effect.fail(new SessionTaskView.TargetUnavailable()))).output).toBe(
+        "task_target_unavailable",
+      )
+      const broken = yield* protectStatus(Effect.die(new Error("database is closed: private path")))
+      expect(broken.output).toBe("task_status_unavailable")
+      expect(JSON.stringify(broken)).not.toContain("private path")
     }),
   )
 

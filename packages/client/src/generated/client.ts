@@ -39,6 +39,8 @@ import type {
   SessionsEventsOutput,
   SessionsInterruptInput,
   SessionsInterruptOutput,
+  SessionsStatusInput,
+  SessionsStatusOutput,
   SessionsMessageInput,
   SessionsMessageOutput,
   MessagesListInput,
@@ -590,6 +592,24 @@ export function make(options: ClientOptions) {
             successStatus: 204,
             declaredStatuses: [404, 400, 401],
             empty: true,
+          },
+          requestOptions,
+        ),
+      status: (input: SessionsStatusInput, requestOptions?: RequestOptions) =>
+        request<SessionsStatusOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/task/status`,
+            body: {
+              target: input["target"],
+              targets: input["targets"],
+              cursor: input["cursor"],
+              limit: input["limit"],
+              include_results: input["include_results"],
+            },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 503, 401],
+            empty: false,
           },
           requestOptions,
         ),

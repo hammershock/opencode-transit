@@ -17,6 +17,10 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Location } from "@opencode-ai/core/location"
 import { SessionContextExtension } from "../session-context-extension"
 import { HttpServerRequest } from "effect/unstable/http"
+import { Database } from "@opencode-ai/core/database/database"
+import { SessionTaskView } from "@opencode-ai/core/session/task-view"
+import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
+import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 
 const DefaultSessionsLimit = 50
 const DefaultSessionHistoryLimit = 50
@@ -24,6 +28,12 @@ const DefaultSessionHistoryLimit = 50
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* SessionV2.Service
+    const database = yield* Database.Service
+    const locations = yield* LocationServiceMap.Service
+    const taskBackend = Option.getOrElse(
+      yield* Effect.serviceOption(SessionTaskCapability.Service),
+      () => SessionTaskCapability.legacyTaskPromptOps,
+    )
     const contextExtension = yield* Effect.serviceOption(SessionContextExtension.Service)
 
     return handlers
@@ -559,6 +569,73 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           yield* session.interrupt(ctx.params.sessionID)
           return HttpApiSchema.NoContent.make()
         }),
+      )
+      .handle("session.task.status", (ctx) =>
+        Effect.gen(function* () {
+          const capability = SessionTaskCapability.evaluate(taskBackend)
+          if (capability.status === "unsupported")
+            return yield* new ServiceUnavailableError({
+              service: "task_control_unsupported",
+              message: `Task control unsupported: ${capability.missing.join(", ")}`,
+            })
+          const unavailable = () => new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })
+          const request = ctx.payload
+          if (
+            (request.target && request.targets) ||
+            (request.targets && (request.targets.length === 0 || request.targets.length > 32 || request.cursor)) ||
+            (request.limit !== undefined && (request.limit < 1 || request.limit > 32)) ||
+            (request.target?.invocation && request.cursor)
+          )
+            return yield* new InvalidRequestError({ message: "Invalid Task status request" })
+          yield* session
+            .get(ctx.params.sessionID)
+            .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.fail(unavailable())))
+          const read = SessionTaskView.read(database, {
+            parentSessionID: ctx.params.sessionID,
+            childSessionID: request.target?.task_id ?? ctx.params.sessionID,
+            invocation: request.target?.invocation,
+            includeResults: request.include_results,
+          })
+          const page = request.targets
+            ? {
+                data: yield* Effect.forEach(request.targets, (target) =>
+                  SessionTaskView.read(database, {
+                    parentSessionID: ctx.params.sessionID,
+                    childSessionID: target.task_id,
+                    invocation: target.invocation,
+                    includeResults: request.include_results,
+                  }),
+                ),
+              }
+            : request.target?.invocation
+              ? { data: [yield* read] }
+              : request.target
+                ? yield* SessionTaskView.invocations(database, {
+                    parentSessionID: ctx.params.sessionID,
+                    childSessionID: request.target.task_id,
+                    cursor: request.cursor,
+                    limit: request.limit,
+                    includeResults: request.include_results,
+                  })
+                : yield* SessionTaskView.children(database, {
+                    parentSessionID: ctx.params.sessionID,
+                    cursor: request.cursor,
+                    limit: request.limit,
+                    includeResults: request.include_results,
+                  })
+          const data = yield* Effect.forEach(page.data, (view) =>
+            SessionTaskView.withObservedPhase(database, view, locations),
+          )
+          return { ...page, data }
+        }).pipe(
+          Effect.mapError((error) =>
+            error instanceof SessionTaskView.InvalidCursor
+              ? new InvalidCursorError({ message: "Invalid cursor" })
+              : error instanceof SessionTaskView.TargetUnavailable
+                ? new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })
+                : error,
+          ),
+        ),
       )
       .handle(
         "session.message",

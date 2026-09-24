@@ -16,6 +16,9 @@ import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
 import { ReadTool } from "./read"
 import { TaskTool } from "./task"
+import { TaskStatusTool } from "./task-status"
+import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
+import { ConfigExperimental } from "@opencode-ai/core/config/experimental"
 import { Database } from "@opencode-ai/core/database/database"
 import { TodoWriteTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
@@ -107,9 +110,14 @@ const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const mcp = yield* MCP.Service
     const session = yield* Session.Service
+    const taskBackend = Option.getOrElse(
+      yield* Effect.serviceOption(SessionTaskCapability.Service),
+      () => SessionTaskCapability.legacyTaskPromptOps,
+    )
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
+    const taskStatus = yield* TaskStatusTool
     const read = yield* ReadTool
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
@@ -213,8 +221,11 @@ const layer = Layer.effect(
           }
         }
 
-        yield* config.get()
+        const cfg = yield* config.get()
         const questionEnabled = ["app", "cli", "desktop"].includes(flags.client) || flags.enableQuestionTool
+        const taskStatusEnabled =
+          ConfigExperimental.backgroundSubagents(cfg, flags.experimentalBackgroundSubagents) &&
+          SessionTaskCapability.evaluate(taskBackend).status === "supported"
 
         const tool = yield* Effect.all({
           invalid: Tool.init(invalid),
@@ -225,6 +236,7 @@ const layer = Layer.effect(
           edit: Tool.init(edit),
           write: Tool.init(writetool),
           task: Tool.init(task),
+          taskStatus: Tool.init(taskStatus),
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
           search: Tool.init(websearch),
@@ -248,6 +260,7 @@ const layer = Layer.effect(
             tool.edit,
             tool.write,
             tool.task,
+            ...(taskStatusEnabled ? [tool.taskStatus] : []),
             tool.fetch,
             tool.todo,
             tool.search,

@@ -24,6 +24,7 @@ import { Revert } from "@opencode-ai/schema/revert"
 import { SessionEvent } from "@opencode-ai/schema/session-event"
 import { ModelContext } from "@opencode-ai/schema/model-context"
 import { Skill } from "@opencode-ai/schema/skill"
+import { SessionTask } from "@opencode-ai/schema/session-task"
 
 export const SubagentEconomicsPricing = Schema.Struct({
   status: Schema.Literals(["available", "unavailable"]),
@@ -474,6 +475,21 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             description: "Interrupt active execution owned by this OpenCode process. Idle interruption is a no-op.",
           }),
         ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.task.status", "/api/session/:sessionID/task/status", {
+        params: { sessionID: Session.ID },
+        payload: SessionTask.StatusRequest,
+        success: SessionTask.StatusPage,
+        error: [SessionNotFoundError, InvalidCursorError, InvalidRequestError, ServiceUnavailableError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.task.status",
+          summary: "Read direct child Task status",
+          description:
+            "Read bounded Task status under one parent Session. Cursor enumeration never wakes child execution.",
+        }),
+      ),
     )
     .add(
       HttpApiEndpoint.get("session.message", "/api/session/:sessionID/message/:messageID", {

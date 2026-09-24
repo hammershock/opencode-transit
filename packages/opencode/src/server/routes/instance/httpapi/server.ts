@@ -75,6 +75,7 @@ import { SessionSync } from "@opencode-ai/core/sync/session"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/local"
@@ -309,6 +310,7 @@ export const app = LayerNode.group([
 
 export function createRoutes(
   corsOptions?: CorsOptions,
+  taskBackend?: SessionTaskCapability.Backend,
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
   const locationServiceMapV2 = buildLocationServiceMap(
     [
@@ -323,7 +325,9 @@ export function createRoutes(
     eventApiRoutes,
     ptyConnectApiRoutes,
     instanceRoutes,
-    serverRoutes,
+    taskBackend
+      ? serverRoutes.pipe(Layer.provide(Layer.succeed(SessionTaskCapability.Service, taskBackend)))
+      : serverRoutes,
     docRoute,
     uiRoute,
   ).pipe(

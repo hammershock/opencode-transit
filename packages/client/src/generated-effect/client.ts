@@ -221,12 +221,33 @@ type Endpoint3_17Input = { readonly sessionID: Endpoint3_17Request["params"]["se
 const Endpoint3_17 = (raw: RawClient["server.session"]) => (input: Endpoint3_17Input) =>
   raw["session.interrupt"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint3_18Request = Parameters<RawClient["server.session"]["session.message"]>[0]
+type Endpoint3_18Request = Parameters<RawClient["server.session"]["session.task.status"]>[0]
 type Endpoint3_18Input = {
   readonly sessionID: Endpoint3_18Request["params"]["sessionID"]
-  readonly messageID: Endpoint3_18Request["params"]["messageID"]
+  readonly target?: Endpoint3_18Request["payload"]["target"]
+  readonly targets?: Endpoint3_18Request["payload"]["targets"]
+  readonly cursor?: Endpoint3_18Request["payload"]["cursor"]
+  readonly limit?: Endpoint3_18Request["payload"]["limit"]
+  readonly include_results?: Endpoint3_18Request["payload"]["include_results"]
 }
 const Endpoint3_18 = (raw: RawClient["server.session"]) => (input: Endpoint3_18Input) =>
+  raw["session.task.status"]({
+    params: { sessionID: input["sessionID"] },
+    payload: {
+      target: input["target"],
+      targets: input["targets"],
+      cursor: input["cursor"],
+      limit: input["limit"],
+      include_results: input["include_results"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint3_19Request = Parameters<RawClient["server.session"]["session.message"]>[0]
+type Endpoint3_19Input = {
+  readonly sessionID: Endpoint3_19Request["params"]["sessionID"]
+  readonly messageID: Endpoint3_19Request["params"]["messageID"]
+}
+const Endpoint3_19 = (raw: RawClient["server.session"]) => (input: Endpoint3_19Input) =>
   raw["session.message"]({ params: { sessionID: input["sessionID"], messageID: input["messageID"] } }).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
@@ -251,7 +272,8 @@ const adaptGroup3 = (raw: RawClient["server.session"]) => ({
   history: Endpoint3_15(raw),
   events: Endpoint3_16(raw),
   interrupt: Endpoint3_17(raw),
-  message: Endpoint3_18(raw),
+  status: Endpoint3_18(raw),
+  message: Endpoint3_19(raw),
 })
 
 type Endpoint4_0Request = Parameters<RawClient["server.message"]["session.messages"]>[0]
