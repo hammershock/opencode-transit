@@ -497,7 +497,7 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
           : ("unknown" as const),
     eligibility:
       row.state === "queued"
-        ? active && !activeObserved
+        ? row.eligibility === "frozen" || (active && !activeObserved)
           ? ("frozen" as const)
           : ("eligible" as const)
         : ("none" as const),

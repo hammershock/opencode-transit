@@ -10,7 +10,13 @@ import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
 import { SessionSchema } from "./schema"
 import { EventTable } from "../event/sql"
 import { SessionV1 } from "../v1/session"
-import { SessionTaskDeletionTable, SessionTaskSteerTable, SessionTaskTable } from "./sql"
+import {
+  SessionTable,
+  SessionTaskDeletionTable,
+  SessionTaskOperationTable,
+  SessionTaskSteerTable,
+  SessionTaskTable,
+} from "./sql"
 
 type DB = Database.Interface["db"]
 
@@ -141,6 +147,7 @@ export const admit = Effect.fn("SessionTask.admit")(function* (
     and(
       eq(SessionTaskTable.child_session_id, input.childSessionID),
       inArray(SessionTaskTable.state, ["admitted", "active"]),
+      eq(SessionTaskTable.abandoned_unknown, false),
     ),
   )
   if (options?.validate !== false && childRunning > 0 && input.backend === "legacy" && !input.liveLegacyOwner)
@@ -405,6 +412,13 @@ const validatePromotion = Effect.fn("SessionTask.validatePromotion")(function* (
   const row = yield* find(db, inputID)
   if (!row || row.state !== "active" || row.eligibility !== "eligible")
     return yield* Effect.die(new AdmissionConflict())
+  const child = yield* db
+    .select({ revision: SessionTable.location_revision })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, SessionSchema.ID.make(row.child_session_id)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!child || child.revision !== row.location_revision) return yield* Effect.die(new AdmissionConflict())
   const sameChild = yield* count(
     db,
     and(
@@ -592,6 +606,87 @@ export const projectArchivedUnknown = Effect.fn("SessionTask.projectArchivedUnkn
       archive_operation_id: input.operationID,
       archive_actor_id: input.actorID,
       archive_time: input.timestamp,
+    })
+    .where(eq(SessionTaskTable.input_id, input.inputID))
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .update(SessionTaskTable)
+    .set({ eligibility: "frozen" })
+    .where(and(eq(SessionTaskTable.child_session_id, input.childSessionID), eq(SessionTaskTable.state, "queued")))
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .update(SessionTaskSteerTable)
+    .set({ state: "not_delivered", reason: "owner_lost", time_not_delivered: input.timestamp })
+    .where(
+      and(eq(SessionTaskSteerTable.invocation_input_id, input.inputID), eq(SessionTaskSteerTable.state, "admitted")),
+    )
+    .run()
+    .pipe(Effect.orDie)
+})
+
+export const projectReconciled = Effect.fn("SessionTask.projectReconciled")(function* (
+  db: DB,
+  input: {
+    childSessionID: string
+    inputID: string
+    operationID: string
+    actorKind: "user" | "parent"
+    actorID: string
+    disposition: "resume_pending" | "cancel_pending"
+    capacityState: "available" | "capacity_unavailable" | "not_applicable"
+    timestamp: number
+  },
+) {
+  const operation = yield* db
+    .select()
+    .from(SessionTaskOperationTable)
+    .where(eq(SessionTaskOperationTable.operation_id, input.operationID))
+    .get()
+    .pipe(Effect.orDie)
+  if (operation) {
+    if (
+      operation.input_id !== input.inputID ||
+      operation.actor_kind !== input.actorKind ||
+      operation.actor_id !== input.actorID ||
+      operation.disposition !== input.disposition ||
+      operation.capacity_state !== input.capacityState
+    )
+      return yield* Effect.die(new AdmissionConflict())
+    return
+  }
+  const row = yield* find(db, input.inputID)
+  if (!row) return
+  if (row.child_session_id !== input.childSessionID || row.state !== "queued")
+    return yield* Effect.die(new AdmissionConflict())
+  if (input.disposition === "resume_pending" && row.eligibility !== "frozen")
+    return yield* Effect.die(new AdmissionConflict())
+  if (input.disposition === "cancel_pending" && row.eligibility === "cancelled")
+    return yield* Effect.die(new AdmissionConflict())
+  yield* db
+    .insert(SessionTaskOperationTable)
+    .values({
+      operation_id: input.operationID,
+      input_id: input.inputID,
+      actor_kind: input.actorKind,
+      actor_id: input.actorID,
+      disposition: input.disposition,
+      capacity_state: input.capacityState,
+      time_created: input.timestamp,
+    })
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .update(SessionTaskTable)
+    .set({
+      eligibility: input.disposition === "resume_pending" ? "eligible" : "cancelled",
+      disposition_operation_id: input.operationID,
+      disposition_actor_id: input.actorID,
+      disposition_time: input.timestamp,
+      ...(input.disposition === "cancel_pending"
+        ? { state: "settled", outcome: "cancelled", time_settled: input.timestamp }
+        : {}),
     })
     .where(eq(SessionTaskTable.input_id, input.inputID))
     .run()

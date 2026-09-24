@@ -321,6 +321,18 @@ const layer = Layer.effectDiscard(
         timestamp: event.data.timestamp,
       }),
     )
+    yield* events.project(SessionTaskEvent.Reconciled, (event) =>
+      SessionTask.projectReconciled(db, {
+        childSessionID: event.data.sessionID,
+        inputID: event.data.inputID,
+        operationID: event.data.operationID,
+        actorKind: event.data.actorKind,
+        actorID: event.data.actorID,
+        disposition: event.data.disposition,
+        capacityState: event.data.capacityState,
+        timestamp: event.data.timestamp,
+      }),
+    )
     yield* events.project(SessionV1.Event.Updated, (event) => {
       const {
         directory: _directory,

@@ -11,7 +11,7 @@ import { SessionTask } from "./task"
 import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
-import { SessionInputTable, SessionMessageTable } from "./sql"
+import { SessionInputTable, SessionMessageTable, SessionTaskSteerTable, SessionTaskTable } from "./sql"
 import { EventTable } from "../event/sql"
 
 type DatabaseService = Database.Interface["db"]
@@ -44,17 +44,25 @@ export const isSettled = Effect.fn("SessionInput.isSettled")(function* (
 })
 
 const withoutSettlement = (db: DatabaseService) =>
-  notExists(
-    db
-      .select({ id: EventTable.id })
-      .from(EventTable)
-      .where(
-        and(
-          eq(EventTable.aggregate_id, SessionInputTable.session_id),
-          eq(EventTable.type, settledType),
-          sql`json_extract(${EventTable.data}, '$.messageID') = ${SessionInputTable.id}`,
+  and(
+    notExists(
+      db
+        .select({ id: EventTable.id })
+        .from(EventTable)
+        .where(
+          and(
+            eq(EventTable.aggregate_id, SessionInputTable.session_id),
+            eq(EventTable.type, settledType),
+            sql`json_extract(${EventTable.data}, '$.messageID') = ${SessionInputTable.id}`,
+          ),
         ),
-      ),
+    ),
+    notExists(
+      db
+        .select({ id: SessionTaskTable.input_id })
+        .from(SessionTaskTable)
+        .where(and(eq(SessionTaskTable.input_id, SessionInputTable.id), eq(SessionTaskTable.state, "settled"))),
+    ),
   )
 
 const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
@@ -226,7 +234,7 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
   sessionID: SessionSchema.ID,
   delivery: Delivery,
 ) {
-  const row = yield* db
+  const rows = yield* db
     .select({ id: SessionInputTable.id })
     .from(SessionInputTable)
     .where(
@@ -237,10 +245,21 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
         withoutSettlement(db),
       ),
     )
-    .limit(1)
-    .get()
+    .all()
     .pipe(Effect.orDie)
-  return row !== undefined
+  if (delivery !== "steer") return rows.length > 0
+  for (const row of rows) {
+    const steer = yield* db
+      .select()
+      .from(SessionTaskSteerTable)
+      .where(eq(SessionTaskSteerTable.input_id, row.id))
+      .get()
+      .pipe(Effect.orDie)
+    if (!steer) return true
+    if (steer.state === "admitted" && (yield* SessionTask.find(db, steer.invocation_input_id))?.state === "active")
+      return true
+  }
+  return false
 })
 
 export const equivalent = (
@@ -329,7 +348,19 @@ export const promoteSteers = Effect.fn("SessionInput.promoteSteers")(function* (
     .orderBy(asc(SessionInputTable.admitted_seq))
     .all()
     .pipe(Effect.orDie)
-  return yield* publish(db, events, sessionID, rows)
+  const eligible = yield* Effect.filter(rows, (row) =>
+    Effect.gen(function* () {
+      const steer = yield* db
+        .select()
+        .from(SessionTaskSteerTable)
+        .where(eq(SessionTaskSteerTable.input_id, row.id))
+        .get()
+        .pipe(Effect.orDie)
+      if (!steer) return true
+      return steer.state === "admitted" && (yield* SessionTask.find(db, steer.invocation_input_id))?.state === "active"
+    }),
+  )
+  return yield* publish(db, events, sessionID, eligible)
 })
 
 export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(function* (
@@ -353,5 +384,11 @@ export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(fun
     .get()
     .pipe(Effect.orDie)
   if (row === undefined) return undefined
-  return (yield* publish(db, events, sessionID, [row]))[0]
+  const task = yield* SessionTask.find(db, row.id)
+  if (task && (task.eligibility !== "eligible" || task.state === "settled")) return undefined
+  return (yield* publish(db, events, sessionID, [row]).pipe(
+    Effect.catchDefect((defect) =>
+      defect instanceof SessionTask.CapacityUnavailable ? Effect.succeed([]) : Effect.die(defect),
+    ),
+  ))[0]
 })

@@ -22,6 +22,8 @@ export interface Interface {
   readonly run: (input: {
     readonly sessionID: SessionSchema.ID
     readonly force: boolean
+    /** A Task-owned drain executes only this invocation; the next one needs a new owner lease. */
+    readonly taskInputID?: string
   }) => Effect.Effect<void, RunError>
 }
 

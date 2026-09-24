@@ -30,6 +30,8 @@ import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { SessionTurn } from "../turn"
+import { SessionTask } from "../task"
+import { SessionMessage } from "../message"
 import { type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
@@ -190,6 +192,8 @@ const layer = Layer.effect(
           const steers = yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
           promoted = queued ? [queued, ...steers] : steers
         }
+        if (promotion === "queue" && promoted.length === 0)
+          return { needsContinuation: false, step: currentStep, failed: false }
         if (promoted.length > 0) {
           onPromoted(promoted)
           currentStep = 1
@@ -369,6 +373,7 @@ const layer = Layer.effect(
             needsContinuation: !publisher.hasProviderError() && needsContinuation,
             step: currentStep,
             failed: publisher.hasProviderError(),
+            resultMessageID: publisher.hasAssistantStarted() ? yield* publisher.startAssistant() : undefined,
           }
         }),
       )
@@ -379,7 +384,12 @@ const layer = Layer.effect(
       step: number,
       onPromoted: (inputs: ReadonlyArray<SessionInput.Admitted>) => void,
     ) => Effect.Effect<
-      { readonly needsContinuation: boolean; readonly step: number; readonly failed: boolean },
+      {
+        readonly needsContinuation: boolean
+        readonly step: number
+        readonly failed: boolean
+        readonly resultMessageID?: SessionMessage.ID
+      },
       RunError
     >
 
@@ -414,6 +424,7 @@ const layer = Layer.effect(
     const run = Effect.fn("SessionRunner.run")(function* (input: {
       readonly sessionID: SessionSchema.ID
       readonly force: boolean
+      readonly taskInputID?: string
     }) {
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
@@ -424,6 +435,7 @@ const layer = Layer.effect(
       while (shouldRun) {
         const promoted = new Set<SessionInput.Admitted["id"]>()
         let failed = false
+        let resultMessageID: SessionMessage.ID | undefined
         const logicalTurn = Effect.gen(function* () {
           let needsContinuation = true
           let step = 1
@@ -432,6 +444,7 @@ const layer = Layer.effect(
               for (const admitted of inputs) promoted.add(admitted.id)
             })
             failed ||= result.failed
+            resultMessageID = result.resultMessageID ?? resultMessageID
             needsContinuation = result.needsContinuation
             step = result.step + 1
             promotion = "steer"
@@ -447,14 +460,24 @@ const layer = Layer.effect(
               : Cause.hasInterrupts(exit.cause)
                 ? ("cancelled" as const)
                 : ("failed" as const)
-            return SessionTurn.settle(db, events, {
-              sessionID: input.sessionID,
-              messageIDs: Array.from(promoted),
-              outcome,
+            return Effect.gen(function* () {
+              yield* SessionTurn.settle(db, events, {
+                sessionID: input.sessionID,
+                messageIDs: Array.from(promoted),
+                outcome,
+              })
+              if (input.taskInputID && promoted.has(SessionMessage.ID.make(input.taskInputID)))
+                yield* SessionTask.settle(db, events, {
+                  inputID: input.taskInputID,
+                  childSessionID: input.sessionID,
+                  outcome,
+                  resultMessageID,
+                })
             })
           }),
         )
         yield* logicalTurn
+        if (input.taskInputID) return
         shouldRun = yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = shouldRun ? "queue" : undefined
       }

@@ -9,7 +9,8 @@ import { and, eq, inArray, ne, asc } from "drizzle-orm"
 import { Effect } from "effect"
 import type { Database } from "../database/database"
 import { SessionTask } from "./task"
-import { SessionTaskTable } from "./sql"
+import { SessionTable, SessionTaskTable } from "./sql"
+import { SessionSchema } from "./schema"
 
 type DB = Database.Interface["db"]
 
@@ -212,6 +213,20 @@ export const withLease = <A, E, R>(
                   .pipe(Effect.orDie)
                 if (!current || current.child_session_id !== input.childSessionID || current.state === "settled")
                   return yield* Effect.die(new OwnerUnavailable("invocation is no longer eligible"))
+                if (current.backend === "v2" && (current.state === "active" || current.eligibility !== "eligible"))
+                  return yield* Effect.die(
+                    new OwnerUnavailable("V2 invocation cannot be adopted from an active or frozen state"),
+                  )
+                if (current.backend === "v2") {
+                  const child = yield* database.db
+                    .select({ revision: SessionTable.location_revision })
+                    .from(SessionTable)
+                    .where(eq(SessionTable.id, SessionSchema.ID.make(input.childSessionID)))
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (!child || child.revision !== current.location_revision)
+                    return yield* Effect.die(new OwnerUnavailable("Task Location revision changed before execution"))
+                }
                 if (current.owner_pid !== null)
                   return yield* Effect.die(new OwnerUnavailable("invocation already has an owner generation"))
                 const currentOld = yield* unresolved(database.db, input)

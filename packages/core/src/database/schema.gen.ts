@@ -267,6 +267,18 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_task_operation\` (
+          \`operation_id\` text PRIMARY KEY,
+          \`input_id\` text NOT NULL,
+          \`actor_kind\` text NOT NULL,
+          \`actor_id\` text NOT NULL,
+          \`disposition\` text NOT NULL,
+          \`capacity_state\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`fk_session_task_operation_input_id_session_task_input_id_fk\` FOREIGN KEY (\`input_id\`) REFERENCES \`session_task\`(\`input_id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_task_steer\` (
           \`input_id\` text PRIMARY KEY,
           \`invocation_input_id\` text NOT NULL,
@@ -372,6 +384,9 @@ export default {
       yield* tx.run(`CREATE INDEX \`session_workspace_idx\` ON \`session\` (\`workspace_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_parent_idx\` ON \`session\` (\`parent_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_sync_space_idx\` ON \`session\` (\`sync_space_id\`,\`time_updated\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`session_task_operation_input_idx\` ON \`session_task_operation\` (\`input_id\`,\`time_created\`);`,
+      )
       yield* tx.run(
         `CREATE UNIQUE INDEX \`session_task_steer_operation_idx\` ON \`session_task_steer\` (\`operation_id\`);`,
       )

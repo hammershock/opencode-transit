@@ -256,6 +256,23 @@ export const SessionTaskSteerTable = sqliteTable(
   ],
 )
 
+/** Exact, replayable management operation receipts for pending Task inputs. */
+export const SessionTaskOperationTable = sqliteTable(
+  "session_task_operation",
+  {
+    operation_id: text().primaryKey(),
+    input_id: text()
+      .notNull()
+      .references(() => SessionTaskTable.input_id, { onDelete: "cascade" }),
+    actor_kind: text().$type<"user" | "parent">().notNull(),
+    actor_id: text().notNull(),
+    disposition: text().$type<"resume_pending" | "cancel_pending">().notNull(),
+    capacity_state: text().$type<"available" | "capacity_unavailable" | "not_applicable">().notNull(),
+    time_created: integer().notNull(),
+  },
+  (table) => [index("session_task_operation_input_idx").on(table.input_id, table.time_created)],
+)
+
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   session_id: text()
     .$type<SessionSchema.ID>()
