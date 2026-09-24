@@ -11,6 +11,7 @@ import { SessionTable, SessionTaskStopTable, SessionTaskTable } from "./sql"
 import { SessionTask } from "./task"
 import { SessionTaskOwner } from "./task-owner"
 import { SessionTaskDelivery } from "./task-delivery"
+import { SessionTaskResult } from "./task-result"
 
 export class UnknownOrForbidden extends Error {
   readonly code = "task_unknown_or_forbidden"
@@ -131,6 +132,7 @@ export const interrupt = Effect.fn("SessionTaskControl.interrupt")(function* (in
     }),
   )
   if (receipt.state === "cancelled_pending") {
+    yield* SessionTaskResult.recordAndWake(database, events, execution.wake, input.inputID)
     const row = yield* SessionTask.find(db, input.inputID)
     if (row) yield* SessionTaskDelivery.reassessRoot(database, SessionSchema.ID.make(row.root_session_id))
   }
@@ -296,6 +298,11 @@ export const stop = Effect.fn("SessionTaskControl.stop")(function* (input: {
     }),
   )
   if (receipt.data.some((member) => member.state === "cancelled_pending")) {
+    yield* Effect.forEach(
+      receipt.data.filter((member) => member.state === "cancelled_pending"),
+      (member) => SessionTaskResult.recordAndWake(database, events, execution.wake, member.inputID),
+      { discard: true },
+    )
     const first = yield* SessionTask.find(db, receipt.data[0]!.inputID)
     if (first) yield* SessionTaskDelivery.reassessRoot(database, SessionSchema.ID.make(first.root_session_id))
   }

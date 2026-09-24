@@ -141,6 +141,7 @@ function toLLMMessage(message: SessionMessage.Message, model: Model): Message[] 
           ],
           metadata: {
             ...message.metadata,
+            ...(message.origin ? { origin: message.origin } : {}),
             ...(message.agents?.length ? { agents: message.agents } : {}),
           },
         }),

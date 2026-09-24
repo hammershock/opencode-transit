@@ -75,6 +75,7 @@ import { ToolRegistry as LocationToolRegistry } from "@opencode-ai/core/tool/reg
 import { TargetRegistry } from "@opencode-ai/core/target-registry"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { SessionActivity } from "@opencode-ai/core/session/activity"
+import { SessionTaskResult } from "@opencode-ai/core/session/task-result"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -201,6 +202,7 @@ const layer = Layer.effect(
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
+      yield* SessionTaskResult.stop(database, events, sessionID)
       yield* state.cancel(sessionID)
     })
 

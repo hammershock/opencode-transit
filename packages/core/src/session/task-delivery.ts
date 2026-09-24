@@ -15,6 +15,7 @@ import { SessionTaskOwner } from "./task-owner"
 import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
 import { SessionTaskScheduler } from "./task-scheduler"
 import { SessionLocationAccess } from "./location-access"
+import { SessionTaskResult } from "./task-result"
 
 export class UnknownOrForbidden extends Error {
   readonly code = "task_unknown_or_forbidden"
@@ -182,6 +183,7 @@ export const followup = Effect.fn("SessionTaskDelivery.followup")(function* (inp
   description: string
   agentID: string
   text: string
+  background?: boolean
 }) {
   const database = yield* Database.Service
   const db = database.db
@@ -196,7 +198,8 @@ export const followup = Effect.fn("SessionTaskDelivery.followup")(function* (inp
       prior.prompt_digest !== promptDigest ||
       prior.description !== input.description ||
       prior.agent_id !== input.agentID ||
-      prior.backend !== "v2"
+      prior.backend !== "v2" ||
+      prior.background !== (input.background ?? false)
     )
       return yield* Effect.fail(new SessionTask.AdmissionConflict())
     return { inputID: prior.input_id, state: prior.state }
@@ -281,6 +284,7 @@ export const followup = Effect.fn("SessionTaskDelivery.followup")(function* (inp
     agentID: input.agentID,
     locationRevision: child.revision,
     backend: "v2",
+    background: input.background ?? false,
   }
   const record = SessionTask.withOwner(input.childSessionID)(
     SessionInput.admit(db, events, {
@@ -374,6 +378,7 @@ export const reconcile = Effect.fn("SessionTaskDelivery.reconcile")(function* (i
   const database = yield* Database.Service
   const db = database.db
   const events = yield* EventV2.Service
+  const execution = yield* SessionExecution.Service
   const previous = yield* db
     .select()
     .from(SessionTaskOperationTable)
@@ -573,6 +578,8 @@ export const reconcile = Effect.fn("SessionTaskDelivery.reconcile")(function* (i
           () => record,
           (lease) => Effect.tryPromise(() => lease.close()).pipe(Effect.orDie),
         )
+  if (input.disposition === "cancel_pending")
+    yield* SessionTaskResult.recordAndWake(database, events, execution.wake, input.inputID)
   if (input.disposition === "cancel_pending" || receipt.capacityState === "available")
     yield* reassessRoot(database, SessionSchema.ID.make(task.root_session_id))
   return receipt

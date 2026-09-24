@@ -50,6 +50,12 @@ export const User = Schema.Struct({
   agents: Prompt.fields.agents,
   skills: Prompt.fields.invocations,
   type: Schema.Literal("user"),
+  origin: Schema.Struct({
+    kind: Schema.Literal("delegation_result"),
+    invocationInputID: Schema.String,
+    terminalEventID: Schema.String,
+    version: Schema.Literal(1),
+  }).pipe(optional),
 }).annotate({ identifier: "Session.Message.User" })
 
 export interface Synthetic extends Schema.Schema.Type<typeof Synthetic> {}

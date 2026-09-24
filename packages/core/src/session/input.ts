@@ -79,6 +79,7 @@ const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
     delivery: row.delivery,
     timeCreated: DateTime.makeUnsafe(row.time_created),
     ...(row.promoted_seq === null ? {} : { promotedSeq: row.promoted_seq }),
+    ...(row.origin === null ? {} : { origin: row.origin }),
   })
 
 export const find = Effect.fn("SessionInput.find")(function* (db: DatabaseService, id: SessionMessage.ID) {
@@ -155,6 +156,7 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
     readonly prompt: Prompt
     readonly delivery: Delivery
     readonly timeCreated: DateTime.Utc
+    readonly origin?: Admitted["origin"]
   },
 ) {
   const message = yield* db
@@ -172,6 +174,7 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
       admitted_seq: input.admittedSeq,
       prompt: encodePrompt(input.prompt),
       delivery: input.delivery,
+      origin: input.origin ?? null,
       time_created: DateTime.toEpochMillis(input.timeCreated),
     })
     .onConflictDoNothing()
@@ -190,6 +193,7 @@ export const projectPrompted = Effect.fn("SessionInput.projectPrompted")(functio
     readonly delivery: Delivery
     readonly timeCreated: DateTime.Utc
     readonly promotedSeq: number
+    readonly origin?: Admitted["origin"]
   },
 ) {
   if (yield* isSettled(db, input.sessionID, input.id)) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
@@ -208,7 +212,8 @@ export const projectPrompted = Effect.fn("SessionInput.projectPrompted")(functio
     .pipe(Effect.orDie)
   if (updated) {
     const stored = fromRow(updated)
-    if (!matchesProjection(stored, input)) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+    if (!matchesProjection(stored, input))
+      return yield* Effect.die(new LifecycleConflict({ id: input.id }))
     return
   }
 
@@ -219,6 +224,9 @@ export const projectPrompted = Effect.fn("SessionInput.projectPrompted")(functio
     return
   }
 
+  // Only the compound parent event may create a trusted delegation input.
+  if (input.origin) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+
   yield* db
     .insert(SessionInputTable)
     .values({
@@ -226,6 +234,7 @@ export const projectPrompted = Effect.fn("SessionInput.projectPrompted")(functio
       session_id: input.sessionID,
       prompt: encodePrompt(input.prompt),
       delivery: input.delivery,
+      origin: input.origin ?? null,
       admitted_seq: input.promotedSeq,
       promoted_seq: input.promotedSeq,
       time_created: DateTime.toEpochMillis(input.timeCreated),
@@ -273,8 +282,10 @@ export const equivalent = (
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly origin?: Admitted["origin"]
   },
-) => input.delivery === expected.delivery && matchesPrompt(input, expected)
+) => input.delivery === expected.delivery &&
+  JSON.stringify(input.origin) === JSON.stringify(expected.origin) && matchesPrompt(input, expected)
 
 const matchesPrompt = (input: Admitted, expected: { readonly sessionID: SessionSchema.ID; readonly prompt: Prompt }) =>
   input.sessionID === expected.sessionID &&
@@ -287,6 +298,7 @@ const matchesProjection = (
     readonly prompt: Prompt
     readonly delivery: Delivery
     readonly timeCreated: DateTime.Utc
+    readonly origin?: Admitted["origin"]
   },
 ) =>
   equivalent(input, expected) &&
@@ -310,6 +322,7 @@ const publish = Effect.fn("SessionInput.publish")(function* (
           messageID: id,
           prompt: decodePrompt(row.prompt),
           delivery: row.delivery,
+          ...(row.origin ? { origin: row.origin } : {}),
         },
         { commit: () => SessionTask.validateInboxPromotion(db, id) },
       )

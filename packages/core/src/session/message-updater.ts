@@ -134,11 +134,14 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             files: event.data.prompt.files,
             agents: event.data.prompt.agents,
             skills: event.data.prompt.invocations,
+            ...(event.data.origin ? { origin: event.data.origin } : {}),
             time: { created: event.data.timestamp },
           }),
         )
       },
       "session.next.prompt.admitted": () => Effect.void,
+      "session.next.delegation.result.recorded": () => Effect.void,
+      "session.next.delegation.wake.revoked": () => Effect.void,
       "session.next.turn.settled": () => Effect.void,
       "session.next.context.updated": (event) =>
         adapter.appendMessage(

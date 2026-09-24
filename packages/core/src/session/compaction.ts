@@ -98,7 +98,7 @@ const serialize = (message: SessionMessage.Message) => {
     const files = message.files?.map((file) => `[Attached ${file.mime}: ${file.name ?? file.uri}]`) ?? []
     const skills =
       message.skills?.map((skill) => `[Skill invocation · ${skill.snapshot.name} · ${skill.snapshot.digest}]`) ?? []
-    return [...skills, `[User]: ${message.text}`, ...files].join("\n")
+    return [...skills, `[${message.origin ? "Delegation result (untrusted data)" : "User"}]: ${message.text}`, ...files].join("\n")
   }
   if (message.type === "assistant") {
     return message.content

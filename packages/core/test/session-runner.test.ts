@@ -47,6 +47,7 @@ import { SessionStore } from "@opencode-ai/core/session/store"
 import { SessionSkillCatalog } from "@opencode-ai/core/session/skill-catalog"
 import { SessionTurn } from "@opencode-ai/core/session/turn"
 import { SessionTask } from "@opencode-ai/core/session/task"
+import { SessionTaskResult } from "@opencode-ai/core/session/task-result"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { SystemContext } from "@opencode-ai/core/system-context"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
@@ -360,6 +361,45 @@ const setup = Effect.gen(function* () {
     .pipe(Effect.orDie)
   yield* insertSession(sessionID)
 })
+
+const admitBackgroundChild = (parent: SessionV2.ID) =>
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    const events = yield* EventV2.Service
+    const child = SessionV2.ID.create()
+    const inputID = SessionMessage.ID.create()
+    const now = Date.now()
+    yield* events.publish(SessionV1.Event.Created, {
+      sessionID: child,
+      info: {
+        id: child,
+        slug: child,
+        projectID: Project.ID.global,
+        directory: testDirectory,
+        title: "delegated child",
+        version: "test",
+        parentID: parent,
+        time: { created: now, updated: now },
+      },
+      task: {
+        inputID,
+        rootSessionID: parent,
+        parentSessionID: parent,
+        parentMessageID: "msg_parent_result",
+        callID: "call-result",
+        promptDigest: "digest",
+        childSessionID: child,
+        description: "work",
+        agentID: "build",
+        locationRevision: 0,
+        backend: "v2",
+        background: true,
+      },
+      taskInput: { messageID: inputID, prompt: Prompt.make({ text: "Work" }), delivery: "queue" },
+    })
+    yield* SessionTaskResult.authorize(database, parent, inputID)
+    return { child, inputID }
+  })
 
 const providerUnavailable = () =>
   new LLMError({
@@ -749,6 +789,89 @@ describe("SessionRunnerLLM", () => {
         { id: message.id, type: "user", text: "Run automatically" },
       ])
     }),
+  )
+
+  it.effect("resumes an idle parent runner once from a newly settled background child", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      const database = yield* Database.Service
+      const events = yield* EventV2.Service
+      requests.length = 0
+      response = []
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Delegate work" }), resume: false })
+      yield* execution.wakeAndWait(sessionID)
+      expect(requests).toHaveLength(1)
+
+      const { child, inputID } = yield* admitBackgroundChild(sessionID)
+      yield* SessionTask.settle(database.db, events, { inputID, childSessionID: child, outcome: "completed" })
+      yield* SessionTaskResult.recordAndWake(database, events, execution.wake, inputID)
+      yield* execution.wakeAndWait(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(JSON.stringify(requests[1]?.messages)).toContain("Delegated task")
+      expect(JSON.stringify(requests[1]?.messages)).toContain("delegation_result")
+      yield* SessionTaskResult.reconcile(database, events, sessionID)
+      yield* execution.wakeAndWait(sessionID)
+      expect(requests).toHaveLength(2)
+    }),
+    15_000,
+  )
+
+  it.effect("delivers a background child result at an active parent provider boundary", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      const database = yield* Database.Service
+      const events = yield* EventV2.Service
+      requests.length = 0
+      response = []
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Delegate while active" }), resume: false })
+      yield* execution.wake(sessionID)
+      yield* Deferred.await(streamStarted)
+      expect(requests).toHaveLength(1)
+
+      const { child, inputID } = yield* admitBackgroundChild(sessionID)
+      yield* SessionTask.settle(database.db, events, { inputID, childSessionID: child, outcome: "completed" })
+      yield* SessionTaskResult.recordAndWake(database, events, execution.wake, inputID)
+      yield* Deferred.succeed(streamGate, undefined)
+      streamGate = undefined
+      yield* execution.wakeAndWait(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(JSON.stringify(requests[1]?.messages)).toContain("Delegated task")
+    }),
+    15_000,
+  )
+
+  it.effect("keeps a stopped parent's result record-only until a new explicit prompt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      const database = yield* Database.Service
+      const events = yield* EventV2.Service
+      requests.length = 0
+      response = []
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Delegate work" }), resume: false })
+      yield* execution.wakeAndWait(sessionID)
+      const { child, inputID } = yield* admitBackgroundChild(sessionID)
+      yield* SessionTaskResult.stop(database, events, sessionID)
+      yield* SessionTask.settle(database.db, events, { inputID, childSessionID: child, outcome: "completed" })
+      yield* SessionTaskResult.recordAndWake(database, events, execution.wake, inputID)
+      expect(requests).toHaveLength(1)
+
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Now continue" }), resume: false })
+      yield* execution.wakeAndWait(sessionID)
+      expect(requests).toHaveLength(2)
+      expect(JSON.stringify(requests[1]?.messages)).toContain("Delegated task")
+      expect(JSON.stringify(requests[1]?.messages)).toContain("Now continue")
+    }),
+    15_000,
   )
 
   it.effect("streams one request with registry definitions from chronological V2 user history", () =>

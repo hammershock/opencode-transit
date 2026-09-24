@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "294a6d29-46dd-458b-87b3-b2f1c6c7a4a2",
+  "id": "35369528-4bec-43c5-bb9a-81de454fa975",
   "prevIds": [
-    "2ebf9c7e-8ca0-4b8f-b51c-c8e820601016"
+    "294a6d29-46dd-458b-87b3-b2f1c6c7a4a2"
   ],
   "ddl": [
     {
@@ -99,6 +99,10 @@
       "entityType": "tables"
     },
     {
+      "name": "session_task_result",
+      "entityType": "tables"
+    },
+    {
       "name": "session_task_steer",
       "entityType": "tables"
     },
@@ -108,6 +112,10 @@
     },
     {
       "name": "session_task",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_task_wake_revocation",
       "entityType": "tables"
     },
     {
@@ -1149,6 +1157,16 @@
       "table": "session_input"
     },
     {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin",
+      "entityType": "columns",
+      "table": "session_input"
+    },
+    {
       "type": "integer",
       "notNull": true,
       "autoincrement": false,
@@ -1754,6 +1772,116 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "invocation_input_id",
+      "entityType": "columns",
+      "table": "session_task_result"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "root_session_id",
+      "entityType": "columns",
+      "table": "session_task_result"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "parent_session_id",
+      "entityType": "columns",
+      "table": "session_task_result"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "child_session_id",
+      "entityType": "columns",
+      "table": "session_task_result"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "terminal_event_id",
+      "entityType": "columns",
+      "table": "session_task_result"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "outcome",
+      "entityType": "columns",
+      "table": "session_task_result"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "result_message_id",
+      "entityType": "columns",
+      "table": "session_task_result"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "summary",
+      "entityType": "columns",
+      "table": "session_task_result"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "notification_input_id",
+      "entityType": "columns",
+      "table": "session_task_result"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "notify",
+      "entityType": "columns",
+      "table": "session_task_result"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "version",
+      "entityType": "columns",
+      "table": "session_task_result"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "input_id",
       "entityType": "columns",
       "table": "session_task_steer"
@@ -2089,6 +2217,16 @@
       "table": "session_task"
     },
     {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "background",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
       "type": "text",
       "notNull": false,
       "autoincrement": false,
@@ -2105,6 +2243,16 @@
       "default": null,
       "generated": null,
       "name": "result_message_id",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "terminal_event_id",
       "entityType": "columns",
       "table": "session_task"
     },
@@ -2217,6 +2365,46 @@
       "name": "owner_observed_at",
       "entityType": "columns",
       "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "invocation_input_id",
+      "entityType": "columns",
+      "table": "session_task_wake_revocation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "root_session_id",
+      "entityType": "columns",
+      "table": "session_task_wake_revocation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "parent_session_id",
+      "entityType": "columns",
+      "table": "session_task_wake_revocation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "stop_event_id",
+      "entityType": "columns",
+      "table": "session_task_wake_revocation"
     },
     {
       "type": "text",
@@ -2575,6 +2763,21 @@
     },
     {
       "columns": [
+        "parent_session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_task_result_parent_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_task_result"
+    },
+    {
+      "columns": [
         "input_id"
       ],
       "tableTo": "session_input",
@@ -2632,6 +2835,21 @@
       "name": "fk_session_task_child_session_id_session_id_fk",
       "entityType": "fks",
       "table": "session_task"
+    },
+    {
+      "columns": [
+        "parent_session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_task_wake_revocation_parent_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_task_wake_revocation"
     },
     {
       "columns": [
@@ -2888,6 +3106,15 @@
     },
     {
       "columns": [
+        "invocation_input_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_task_result_pk",
+      "table": "session_task_result",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         "input_id"
       ],
       "nameExplicit": false,
@@ -2911,6 +3138,15 @@
       "nameExplicit": false,
       "name": "session_task_pk",
       "table": "session_task",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "invocation_input_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_task_wake_revocation_pk",
+      "table": "session_task_wake_revocation",
       "entityType": "pks"
     },
     {
@@ -3389,6 +3625,15 @@
       "name": "todo_session_idx",
       "entityType": "indexes",
       "table": "todo"
+    },
+    {
+      "columns": [
+        "notification_input_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_task_result_notification_input_id_unique",
+      "entityType": "uniques",
+      "table": "session_task_result"
     }
   ],
   "renames": []

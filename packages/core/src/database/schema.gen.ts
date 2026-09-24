@@ -191,6 +191,7 @@ export default {
           \`session_id\` text NOT NULL,
           \`prompt\` text NOT NULL,
           \`delivery\` text NOT NULL,
+          \`origin\` text,
           \`admitted_seq\` integer NOT NULL,
           \`promoted_seq\` integer,
           \`time_created\` integer NOT NULL,
@@ -279,6 +280,22 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_task_result\` (
+          \`invocation_input_id\` text PRIMARY KEY,
+          \`root_session_id\` text NOT NULL,
+          \`parent_session_id\` text NOT NULL,
+          \`child_session_id\` text NOT NULL,
+          \`terminal_event_id\` text NOT NULL,
+          \`outcome\` text NOT NULL,
+          \`result_message_id\` text,
+          \`summary\` text NOT NULL,
+          \`notification_input_id\` text NOT NULL UNIQUE,
+          \`notify\` integer NOT NULL,
+          \`version\` integer NOT NULL,
+          CONSTRAINT \`fk_session_task_result_parent_session_id_session_id_fk\` FOREIGN KEY (\`parent_session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_task_steer\` (
           \`input_id\` text PRIMARY KEY,
           \`invocation_input_id\` text NOT NULL,
@@ -325,8 +342,10 @@ export default {
           \`disposition_actor_id\` text,
           \`disposition_time\` integer,
           \`backend\` text NOT NULL,
+          \`background\` integer DEFAULT false NOT NULL,
           \`outcome\` text,
           \`result_message_id\` text,
+          \`terminal_event_id\` text,
           \`abandoned_unknown\` integer DEFAULT false NOT NULL,
           \`archive_operation_id\` text,
           \`archive_actor_id\` text,
@@ -339,6 +358,15 @@ export default {
           \`owner_generation\` text,
           \`owner_observed_at\` integer,
           CONSTRAINT \`fk_session_task_child_session_id_session_id_fk\` FOREIGN KEY (\`child_session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`session_task_wake_revocation\` (
+          \`invocation_input_id\` text PRIMARY KEY,
+          \`root_session_id\` text NOT NULL,
+          \`parent_session_id\` text NOT NULL,
+          \`stop_event_id\` text NOT NULL,
+          CONSTRAINT \`fk_session_task_wake_revocation_parent_session_id_session_id_fk\` FOREIGN KEY (\`parent_session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
         );
       `)
       yield* tx.run(`

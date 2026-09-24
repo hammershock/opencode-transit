@@ -20,4 +20,10 @@ export const Admitted = Schema.Struct({
   delivery: Delivery,
   timeCreated: DateTimeUtcFromMillis,
   promotedSeq: NonNegativeInt.pipe(optional),
+  origin: Schema.Struct({
+    kind: Schema.Literal("delegation_result"),
+    invocationInputID: Schema.String,
+    terminalEventID: Schema.String,
+    version: Schema.Literal(1),
+  }).pipe(optional),
 }).annotate({ identifier: "SessionInput.Admitted" })

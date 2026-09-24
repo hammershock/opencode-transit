@@ -17,6 +17,8 @@ export const Admission = Schema.Struct({
   agentID: Schema.String,
   locationRevision: Schema.Int,
   backend: Schema.Literals(["legacy", "v2"]),
+  /** The caller requested an asynchronous result delivered to the parent. */
+  background: Schema.optional(Schema.Boolean),
 })
 export type Admission = typeof Admission.Type
 
