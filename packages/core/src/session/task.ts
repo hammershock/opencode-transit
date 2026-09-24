@@ -1,6 +1,6 @@
 export * as SessionTask from "./task"
 
-import { and, asc, eq, inArray, or, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, ne, or, sql } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
 import { Effect } from "effect"
 import type { Database } from "../database/database"
@@ -10,7 +10,13 @@ import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
 import { SessionSchema } from "./schema"
 import { EventTable } from "../event/sql"
 import { SessionV1 } from "../v1/session"
-import { SessionTaskDeletionTable, SessionTaskTable } from "./sql"
+import {
+  SessionTable,
+  SessionTaskDeletionTable,
+  SessionTaskOperationTable,
+  SessionTaskSteerTable,
+  SessionTaskTable,
+} from "./sql"
 
 type DB = Database.Interface["db"]
 
@@ -141,13 +147,18 @@ export const admit = Effect.fn("SessionTask.admit")(function* (
     and(
       eq(SessionTaskTable.child_session_id, input.childSessionID),
       inArray(SessionTaskTable.state, ["admitted", "active"]),
+      eq(SessionTaskTable.abandoned_unknown, false),
     ),
   )
   if (options?.validate !== false && childRunning > 0 && input.backend === "legacy" && !input.liveLegacyOwner)
     return yield* Effect.die(new OwnerUnknown())
   const childPending = yield* count(
     db,
-    and(eq(SessionTaskTable.child_session_id, input.childSessionID), eq(SessionTaskTable.state, "queued")),
+    and(
+      eq(SessionTaskTable.child_session_id, input.childSessionID),
+      eq(SessionTaskTable.state, "queued"),
+      ne(SessionTaskTable.eligibility, "cancelled"),
+    ),
   )
   const state = childRunning === 0 && childPending === 0 ? "admitted" : "queued"
   if (options?.validate !== false) {
@@ -167,7 +178,11 @@ export const admit = Effect.fn("SessionTask.admit")(function* (
         return yield* Effect.die(new CapacityError("child_pending", childPending, CHILD_PENDING_LIMIT))
       const rootPending = yield* count(
         db,
-        and(eq(SessionTaskTable.root_session_id, input.rootSessionID), eq(SessionTaskTable.state, "queued")),
+        and(
+          eq(SessionTaskTable.root_session_id, input.rootSessionID),
+          eq(SessionTaskTable.state, "queued"),
+          ne(SessionTaskTable.eligibility, "cancelled"),
+        ),
       )
       if (rootPending >= ROOT_PENDING_LIMIT)
         return yield* Effect.die(new CapacityError("root_pending", rootPending, ROOT_PENDING_LIMIT))
@@ -207,13 +222,21 @@ export const validate = Effect.fn("SessionTask.validate")(function* (db: DB, inp
   if (row.state === "queued") {
     const child = yield* count(
       db,
-      and(eq(SessionTaskTable.child_session_id, row.child_session_id), eq(SessionTaskTable.state, "queued")),
+      and(
+        eq(SessionTaskTable.child_session_id, row.child_session_id),
+        eq(SessionTaskTable.state, "queued"),
+        ne(SessionTaskTable.eligibility, "cancelled"),
+      ),
     )
     if (child > CHILD_PENDING_LIMIT)
       return yield* Effect.die(new CapacityError("child_pending", child - 1, CHILD_PENDING_LIMIT))
     const root = yield* count(
       db,
-      and(eq(SessionTaskTable.root_session_id, row.root_session_id), eq(SessionTaskTable.state, "queued")),
+      and(
+        eq(SessionTaskTable.root_session_id, row.root_session_id),
+        eq(SessionTaskTable.state, "queued"),
+        ne(SessionTaskTable.eligibility, "cancelled"),
+      ),
     )
     if (root > ROOT_PENDING_LIMIT)
       return yield* Effect.die(new CapacityError("root_pending", root - 1, ROOT_PENDING_LIMIT))
@@ -314,11 +337,18 @@ export const projectPromoted = Effect.fn("SessionTask.projectPromoted")(function
   if (current.child_session_id !== input.childSessionID || current.state === "settled")
     return yield* Effect.die(new AdmissionConflict())
   if (current.state === "active") return
+  if (current.eligibility !== "eligible") return yield* Effect.die(new AdmissionConflict())
   if (current.state === "queued") {
     const head = yield* db
       .select({ id: SessionTaskTable.input_id })
       .from(SessionTaskTable)
-      .where(and(eq(SessionTaskTable.child_session_id, input.childSessionID), eq(SessionTaskTable.state, "queued")))
+      .where(
+        and(
+          eq(SessionTaskTable.child_session_id, input.childSessionID),
+          eq(SessionTaskTable.state, "queued"),
+          ne(SessionTaskTable.eligibility, "cancelled"),
+        ),
+      )
       .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.input_id))
       .limit(1)
       .get()
@@ -333,9 +363,84 @@ export const projectPromoted = Effect.fn("SessionTask.projectPromoted")(function
     .pipe(Effect.orDie)
 })
 
+export const projectSteerAdmitted = Effect.fn("SessionTask.projectSteerAdmitted")(function* (
+  db: DB,
+  input: { inputID: string; invocationInputID: string; operationID: string; promptDigest: string; timestamp: number },
+) {
+  const existing = yield* db
+    .select()
+    .from(SessionTaskSteerTable)
+    .where(
+      or(eq(SessionTaskSteerTable.input_id, input.inputID), eq(SessionTaskSteerTable.operation_id, input.operationID)),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  if (existing) {
+    if (
+      existing.input_id !== input.inputID ||
+      existing.invocation_input_id !== input.invocationInputID ||
+      existing.operation_id !== input.operationID ||
+      existing.prompt_digest !== input.promptDigest
+    )
+      return yield* Effect.die(new AdmissionConflict())
+    return
+  }
+  const invocation = yield* find(db, input.invocationInputID)
+  if (!invocation || invocation.state !== "active") return yield* Effect.die(new AdmissionConflict())
+  yield* db
+    .insert(SessionTaskSteerTable)
+    .values({
+      input_id: input.inputID,
+      invocation_input_id: input.invocationInputID,
+      operation_id: input.operationID,
+      prompt_digest: input.promptDigest,
+      state: "admitted",
+      time_created: input.timestamp,
+    })
+    .run()
+    .pipe(Effect.orDie)
+})
+
+export const projectInboxPromoted = Effect.fn("SessionTask.projectInboxPromoted")(function* (
+  db: DB,
+  input: { inputID: string; childSessionID: string; timestamp: number },
+) {
+  const invocation = yield* find(db, input.inputID)
+  if (invocation) {
+    yield* projectPromoted(db, input)
+    return
+  }
+  const steer = yield* db
+    .select()
+    .from(SessionTaskSteerTable)
+    .where(eq(SessionTaskSteerTable.input_id, input.inputID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!steer) return
+  const owner = yield* find(db, steer.invocation_input_id)
+  if (!owner || owner.child_session_id !== input.childSessionID || steer.state === "not_delivered")
+    return yield* Effect.die(new AdmissionConflict())
+  if (steer.state === "promoted") return
+  if (owner.state !== "active") return yield* Effect.die(new AdmissionConflict())
+  yield* db
+    .update(SessionTaskSteerTable)
+    .set({ state: "promoted", time_promoted: input.timestamp })
+    .where(eq(SessionTaskSteerTable.input_id, input.inputID))
+    .run()
+    .pipe(Effect.orDie)
+})
+
 const validatePromotion = Effect.fn("SessionTask.validatePromotion")(function* (db: DB, inputID: string) {
   const row = yield* find(db, inputID)
-  if (!row || row.state !== "active") return yield* Effect.die(new AdmissionConflict())
+  if (!row || row.state !== "active" || row.eligibility !== "eligible")
+    return yield* Effect.die(new AdmissionConflict())
+  const child = yield* db
+    .select({ revision: SessionTable.location_revision })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, SessionSchema.ID.make(row.child_session_id)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!child || child.revision !== row.location_revision) return yield* Effect.die(new AdmissionConflict())
   const sameChild = yield* count(
     db,
     and(
@@ -354,6 +459,24 @@ const validatePromotion = Effect.fn("SessionTask.validatePromotion")(function* (
     ),
   )
   if (used > ACTIVE_LIMIT) return yield* Effect.die(new CapacityUnavailable())
+})
+
+/** The inbox event and Task transition share one short SQLite commit boundary. */
+export const validateInboxPromotion = Effect.fn("SessionTask.validateInboxPromotion")(function* (
+  db: DB,
+  inputID: string,
+) {
+  if (yield* find(db, inputID)) return yield* validatePromotion(db, inputID)
+  const steer = yield* db
+    .select()
+    .from(SessionTaskSteerTable)
+    .where(eq(SessionTaskSteerTable.input_id, inputID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!steer) return
+  const owner = yield* find(db, steer.invocation_input_id)
+  if (!owner || owner.state !== "active" || steer.state !== "promoted")
+    return yield* Effect.die(new AdmissionConflict())
 })
 
 export const settle = Effect.fn("SessionTask.settle")(function* (
@@ -415,6 +538,14 @@ export const projectSettled = Effect.fn("SessionTask.projectSettled")(function* 
       time_settled: input.timestamp,
     })
     .where(eq(SessionTaskTable.input_id, input.inputID))
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .update(SessionTaskSteerTable)
+    .set({ state: "not_delivered", reason: "settled", time_not_delivered: input.timestamp })
+    .where(
+      and(eq(SessionTaskSteerTable.invocation_input_id, input.inputID), eq(SessionTaskSteerTable.state, "admitted")),
+    )
     .run()
     .pipe(Effect.orDie)
 })
@@ -497,6 +628,93 @@ export const projectArchivedUnknown = Effect.fn("SessionTask.projectArchivedUnkn
       archive_operation_id: input.operationID,
       archive_actor_id: input.actorID,
       archive_time: input.timestamp,
+    })
+    .where(eq(SessionTaskTable.input_id, input.inputID))
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .update(SessionTaskTable)
+    .set({ eligibility: "frozen" })
+    .where(
+      and(
+        eq(SessionTaskTable.child_session_id, input.childSessionID),
+        eq(SessionTaskTable.state, "queued"),
+        ne(SessionTaskTable.eligibility, "cancelled"),
+      ),
+    )
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .update(SessionTaskSteerTable)
+    .set({ state: "not_delivered", reason: "owner_lost", time_not_delivered: input.timestamp })
+    .where(
+      and(eq(SessionTaskSteerTable.invocation_input_id, input.inputID), eq(SessionTaskSteerTable.state, "admitted")),
+    )
+    .run()
+    .pipe(Effect.orDie)
+})
+
+export const projectReconciled = Effect.fn("SessionTask.projectReconciled")(function* (
+  db: DB,
+  input: {
+    childSessionID: string
+    inputID: string
+    operationID: string
+    actorKind: "user" | "parent"
+    actorID: string
+    disposition: "resume_pending" | "cancel_pending"
+    capacityState: "available" | "capacity_unavailable" | "not_applicable"
+    timestamp: number
+  },
+) {
+  const operation = yield* db
+    .select()
+    .from(SessionTaskOperationTable)
+    .where(eq(SessionTaskOperationTable.operation_id, input.operationID))
+    .get()
+    .pipe(Effect.orDie)
+  if (operation) {
+    if (
+      operation.input_id !== input.inputID ||
+      operation.actor_kind !== input.actorKind ||
+      operation.actor_id !== input.actorID ||
+      operation.disposition !== input.disposition ||
+      operation.capacity_state !== input.capacityState
+    )
+      return yield* Effect.die(new AdmissionConflict())
+    return
+  }
+  const row = yield* find(db, input.inputID)
+  if (!row) return
+  if (row.child_session_id !== input.childSessionID || row.state !== "queued")
+    return yield* Effect.die(new AdmissionConflict())
+  if (input.disposition === "resume_pending" && row.eligibility !== "frozen")
+    return yield* Effect.die(new AdmissionConflict())
+  if (input.disposition === "cancel_pending" && row.eligibility === "cancelled")
+    return yield* Effect.die(new AdmissionConflict())
+  yield* db
+    .insert(SessionTaskOperationTable)
+    .values({
+      operation_id: input.operationID,
+      input_id: input.inputID,
+      actor_kind: input.actorKind,
+      actor_id: input.actorID,
+      disposition: input.disposition,
+      capacity_state: input.capacityState,
+      time_created: input.timestamp,
+    })
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .update(SessionTaskTable)
+    .set({
+      eligibility: input.disposition === "resume_pending" ? "eligible" : "cancelled",
+      disposition_operation_id: input.operationID,
+      disposition_actor_id: input.actorID,
+      disposition_time: input.timestamp,
+      ...(input.disposition === "cancel_pending"
+        ? { state: "settled", outcome: "cancelled", time_settled: input.timestamp }
+        : {}),
     })
     .where(eq(SessionTaskTable.input_id, input.inputID))
     .run()

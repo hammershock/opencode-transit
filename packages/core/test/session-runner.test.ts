@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { sql } from "drizzle-orm"
 import {
   LLMClient,
   LLMError,
@@ -26,6 +27,7 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { Snapshot } from "@opencode-ai/core/snapshot"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionTaskView } from "@opencode-ai/core/session/task-view"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
@@ -44,6 +46,8 @@ import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { SessionSkillCatalog } from "@opencode-ai/core/session/skill-catalog"
 import { SessionTurn } from "@opencode-ai/core/session/turn"
+import { SessionTask } from "@opencode-ai/core/session/task"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { SystemContext } from "@opencode-ai/core/system-context"
 import { SystemContextRegistry } from "@opencode-ai/core/system-context/registry"
 import { InstructionContext } from "@opencode-ai/core/instruction-context"
@@ -573,6 +577,104 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   })
 
 describe("SessionRunnerLLM", () => {
+  it.effect("executes three Task inbox invocations in separate ordered turns with exact results", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const database = yield* Database.Service
+      const db = database.db
+      const events = yield* EventV2.Service
+      const runner = yield* SessionRunner.Service
+      const child = SessionV2.ID.create()
+      const inputs = Array.from({ length: 3 }, () => SessionMessage.ID.create())
+      const base = {
+        rootSessionID: sessionID,
+        parentSessionID: sessionID,
+        childSessionID: child,
+        description: "ordered work",
+        agentID: "build",
+        locationRevision: 0,
+        backend: "v2" as const,
+      }
+      const admission = (index: number) => ({
+        ...base,
+        inputID: inputs[index]!,
+        parentMessageID: `msg_task_parent_${index}`,
+        callID: `call-task-${index}`,
+        promptDigest: `digest-${index}`,
+      })
+      const time = Date.now()
+      yield* events.publish(
+        SessionV1.Event.Created,
+        {
+          sessionID: child,
+          info: {
+            id: child,
+            slug: "task-child",
+            projectID: Project.ID.global,
+            parentID: sessionID,
+            directory: testDirectory,
+            title: "task child",
+            version: "test",
+            time: { created: time, updated: time },
+          },
+          task: admission(0),
+          taskInput: { messageID: inputs[0]!, prompt: Prompt.make({ text: "first work" }), delivery: "queue" },
+        },
+        { commit: () => SessionTask.validate(db, inputs[0]!) },
+      )
+      yield* Effect.forEach([1, 2], (index) =>
+        SessionInput.admit(db, events, {
+          id: inputs[index]!,
+          sessionID: child,
+          prompt: Prompt.make({ text: `${index === 1 ? "second" : "third"} work` }),
+          delivery: "queue",
+          task: { kind: "invocation", admission: admission(index) },
+          commit: () => SessionTask.validate(db, inputs[index]!),
+        }),
+      )
+      expect((yield* SessionTask.find(db, inputs[1]!))?.state).toBe("queued")
+      responses = [
+        fragmentFixture("text", "task-result-a", ["A done"]).completeEvents,
+        fragmentFixture("text", "task-result-b", ["B done"]).completeEvents,
+        fragmentFixture("text", "task-result-c", ["C done"]).completeEvents,
+      ]
+      requests.length = 0
+      yield* runner.run({ sessionID: child, force: false, taskInputID: inputs[0] })
+      expect(requests).toHaveLength(1)
+      expect((yield* SessionTask.find(db, inputs[0]!))?.state).toBe("settled")
+      expect((yield* SessionTask.find(db, inputs[1]!))?.state).toBe("queued")
+      yield* runner.run({ sessionID: child, force: false, taskInputID: inputs[1] })
+      yield* runner.run({ sessionID: child, force: false, taskInputID: inputs[2] })
+      expect(requests.map(userTexts)).toEqual([
+        ["first work"],
+        ["first work", "second work"],
+        ["first work", "second work", "third work"],
+      ])
+      const rows = yield* Effect.forEach(inputs, (id) => SessionTask.find(db, id))
+      expect(rows.map((row) => row?.state)).toEqual(["settled", "settled", "settled"])
+      expect(new Set(rows.map((row) => row?.result_message_id)).size).toBe(3)
+      yield* db.run(sql`UPDATE session_task SET time_started = 100 WHERE child_session_id = ${child}`)
+      yield* Effect.forEach(rows, (row, index) =>
+        db.run(sql`UPDATE session_message SET time_created = 100, time_updated = ${101 + index}
+          WHERE id = ${row!.result_message_id}`),
+      )
+      const views = yield* Effect.forEach([0, 1, 2], (index) =>
+        SessionTaskView.read(database, {
+          parentSessionID: sessionID,
+          childSessionID: child,
+          invocation: {
+            parent_session_id: sessionID,
+            parent_message_id: admission(index).parentMessageID,
+            call_id: admission(index).callID,
+          },
+          includeResults: true,
+        }),
+      )
+      expect(views.map((view) => view.result?.summary)).toEqual(["A done", "B done", "C done"])
+      expect(views.map((view) => view.last_progress_at)).toEqual([101, 102, 103])
+    }),
+  )
+
   it.effect("advertises and executes a globally attached application tool", () =>
     Effect.gen(function* () {
       yield* setup
@@ -721,7 +823,12 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-build", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Build agent instructions", expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
+        "Build agent instructions",
+        expect.stringContaining("Execution harness:"),
+        expect.stringContaining("Current date:"),
+        expect.stringContaining("<available-targets>"),
+      ])
     }),
   )
 
@@ -747,7 +854,12 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-reviewer", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
+        "Reviewer instructions",
+        expect.stringContaining("Execution harness:"),
+        expect.stringContaining("Current date:"),
+        expect.stringContaining("<available-targets>"),
+      ])
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
   )
@@ -776,7 +888,12 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-selected", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual([
+        "Reviewer instructions",
+        expect.stringContaining("Execution harness:"),
+        expect.stringContaining("Current date:"),
+        expect.stringContaining("<available-targets>"),
+      ])
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
   )
@@ -803,8 +920,18 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), "Build skills", expect.stringContaining("<available-targets>")],
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), "Reviewer skills", expect.stringContaining("<available-targets>")],
+        [
+          expect.stringContaining("Execution harness:"),
+          expect.stringContaining("Current date:"),
+          "Build skills",
+          expect.stringContaining("<available-targets>"),
+        ],
+        [
+          expect.stringContaining("Execution harness:"),
+          expect.stringContaining("Current date:"),
+          "Reviewer skills",
+          expect.stringContaining("<available-targets>"),
+        ],
       ])
       expect((yield* session.messages({ sessionID })).filter((message) => message.type === "system")).toHaveLength(0)
     }),
@@ -834,7 +961,13 @@ describe("SessionRunnerLLM", () => {
       response = []
       yield* session.resume(sessionID)
       expect(requests.map((request) => request.model)).toEqual([model])
-      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([[expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")]])
+      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
+        [
+          expect.stringContaining("Execution harness:"),
+          expect.stringContaining("Current date:"),
+          expect.stringContaining("<available-targets>"),
+        ],
+      ])
     }),
   )
 
@@ -889,9 +1022,21 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")],
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")],
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")],
+        [
+          expect.stringContaining("Execution harness:"),
+          expect.stringContaining("Current date:"),
+          expect.stringContaining("<available-targets>"),
+        ],
+        [
+          expect.stringContaining("Execution harness:"),
+          expect.stringContaining("Current date:"),
+          expect.stringContaining("<available-targets>"),
+        ],
+        [
+          expect.stringContaining("Execution harness:"),
+          expect.stringContaining("Current date:"),
+          expect.stringContaining("<available-targets>"),
+        ],
       ])
     }),
   )
@@ -926,8 +1071,16 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")],
-        [expect.stringContaining("Execution harness:"), expect.stringContaining("Current date:"), expect.stringContaining("<available-targets>")],
+        [
+          expect.stringContaining("Execution harness:"),
+          expect.stringContaining("Current date:"),
+          expect.stringContaining("<available-targets>"),
+        ],
+        [
+          expect.stringContaining("Execution harness:"),
+          expect.stringContaining("Current date:"),
+          expect.stringContaining("<available-targets>"),
+        ],
       ])
       yield* replaySessionProjection(sessionID)
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Third" }), resume: false })

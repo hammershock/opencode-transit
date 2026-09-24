@@ -14,6 +14,37 @@ export const Target = Schema.Struct({
   invocation: Schema.optional(Invocation),
 })
 
+export const ExactTarget = Schema.Struct({
+  task_id: SessionID,
+  invocation: Invocation,
+  input_id: Schema.String,
+})
+
+export const SendRequest = Schema.Struct({
+  target: ExactTarget,
+  operation_id: Schema.String,
+  text: Schema.String,
+})
+
+export const SendReceipt = Schema.Struct({
+  input_id: Schema.String,
+  state: Schema.Literals(["admitted", "promoted", "not_delivered"]),
+  reason: Schema.NullOr(Schema.String),
+})
+
+export const ReconcileRequest = Schema.Struct({
+  target: ExactTarget,
+  operation_id: Schema.String,
+  disposition: Schema.Literals(["resume_pending", "cancel_pending"]),
+})
+
+export const ReconcileReceipt = Schema.Struct({
+  input_id: Schema.String,
+  disposition: Schema.Literals(["resume_pending", "cancel_pending"]),
+  eligibility: Schema.Literals(["eligible", "frozen", "cancelled"]),
+  capacity_state: Schema.Literals(["available", "capacity_unavailable", "not_applicable"]),
+})
+
 export const View = Schema.Struct({
   target: Target,
   description: Schema.String,

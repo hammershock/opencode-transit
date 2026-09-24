@@ -267,6 +267,33 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_task_operation\` (
+          \`operation_id\` text PRIMARY KEY,
+          \`input_id\` text NOT NULL,
+          \`actor_kind\` text NOT NULL,
+          \`actor_id\` text NOT NULL,
+          \`disposition\` text NOT NULL,
+          \`capacity_state\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`fk_session_task_operation_input_id_session_task_input_id_fk\` FOREIGN KEY (\`input_id\`) REFERENCES \`session_task\`(\`input_id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`session_task_steer\` (
+          \`input_id\` text PRIMARY KEY,
+          \`invocation_input_id\` text NOT NULL,
+          \`operation_id\` text NOT NULL,
+          \`prompt_digest\` text NOT NULL,
+          \`state\` text NOT NULL,
+          \`reason\` text,
+          \`time_created\` integer NOT NULL,
+          \`time_promoted\` integer,
+          \`time_not_delivered\` integer,
+          CONSTRAINT \`fk_session_task_steer_input_id_session_input_id_fk\` FOREIGN KEY (\`input_id\`) REFERENCES \`session_input\`(\`id\`) ON DELETE CASCADE,
+          CONSTRAINT \`fk_session_task_steer_invocation_input_id_session_task_input_id_fk\` FOREIGN KEY (\`invocation_input_id\`) REFERENCES \`session_task\`(\`input_id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_task\` (
           \`input_id\` text PRIMARY KEY,
           \`root_session_id\` text NOT NULL,
@@ -279,6 +306,10 @@ export default {
           \`agent_id\` text NOT NULL,
           \`location_revision\` integer NOT NULL,
           \`state\` text NOT NULL,
+          \`eligibility\` text DEFAULT 'eligible' NOT NULL,
+          \`disposition_operation_id\` text,
+          \`disposition_actor_id\` text,
+          \`disposition_time\` integer,
           \`backend\` text NOT NULL,
           \`outcome\` text,
           \`result_message_id\` text,
@@ -354,10 +385,22 @@ export default {
       yield* tx.run(`CREATE INDEX \`session_parent_idx\` ON \`session\` (\`parent_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_sync_space_idx\` ON \`session\` (\`sync_space_id\`,\`time_updated\`);`)
       yield* tx.run(
+        `CREATE INDEX \`session_task_operation_input_idx\` ON \`session_task_operation\` (\`input_id\`,\`time_created\`);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_task_steer_operation_idx\` ON \`session_task_steer\` (\`operation_id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_task_steer_invocation_idx\` ON \`session_task_steer\` (\`invocation_input_id\`,\`time_created\`);`,
+      )
+      yield* tx.run(
         `CREATE UNIQUE INDEX \`session_task_parent_call_idx\` ON \`session_task\` (\`parent_message_id\`,\`call_id\`);`,
       )
       yield* tx.run(
         `CREATE UNIQUE INDEX \`session_task_archive_operation_idx\` ON \`session_task\` (\`archive_operation_id\`);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_task_disposition_operation_idx\` ON \`session_task\` (\`disposition_operation_id\`);`,
       )
       yield* tx.run(
         `CREATE INDEX \`session_task_root_state_idx\` ON \`session_task\` (\`root_session_id\`,\`state\`,\`time_created\`);`,

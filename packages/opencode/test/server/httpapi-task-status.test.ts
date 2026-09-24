@@ -14,16 +14,52 @@ afterEach(async () => {
 describe("Task status HttpApi capability boundary", () => {
   test("legacy adapter returns explicit unsupported without resolving a target", async () => {
     await using tmp = await tmpdir({ git: true })
-    const response = await HttpApiApp.webHandler().handler(
-      new Request("http://localhost/api/session/ses_missing/task/status", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-opencode-directory": tmp.path },
-        body: JSON.stringify({ target: { task_id: "ses_hidden" } }),
-      }),
-      Context.empty() as Context.Context<unknown>,
-    )
-    expect(response.status, await response.clone().text()).toBe(503)
-    expect(await response.text()).toContain("task_control_unsupported")
+    for (const [route, body] of [
+      ["status", { target: { task_id: "ses_hidden" } }],
+      [
+        "send",
+        {
+          target: {
+            task_id: "ses_hidden",
+            invocation: {
+              parent_session_id: "ses_missing",
+              parent_message_id: "msg_parent",
+              call_id: "call-task",
+            },
+            input_id: "msg_input",
+          },
+          operation_id: "send-1",
+          text: "steer",
+        },
+      ],
+      [
+        "reconcile",
+        {
+          target: {
+            task_id: "ses_hidden",
+            invocation: {
+              parent_session_id: "ses_missing",
+              parent_message_id: "msg_parent",
+              call_id: "call-task",
+            },
+            input_id: "msg_input",
+          },
+          operation_id: "reconcile-1",
+          disposition: "cancel_pending",
+        },
+      ],
+    ] as const) {
+      const response = await HttpApiApp.webHandler().handler(
+        new Request(`http://localhost/api/session/ses_missing/task/${route}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-opencode-directory": tmp.path },
+          body: JSON.stringify(body),
+        }),
+        Context.empty() as Context.Context<unknown>,
+      )
+      expect(response.status, await response.clone().text()).toBe(503)
+      expect(await response.text()).toContain("task_control_unsupported")
+    }
   })
 
   test("complete capability fixture lists only direct children and hides foreign targets", async () => {
@@ -103,5 +139,25 @@ describe("Task status HttpApi capability boundary", () => {
     expect(await forged.text()).toBe(hiddenBody)
     expect(mixed.status).toBe(hidden.status)
     expect(await mixed.text()).toBe(hiddenBody)
+    for (const route of ["send", "reconcile"] as const) {
+      const payload = (taskID: string) => ({
+        target: {
+          task_id: taskID,
+          input_id: "msg_missing",
+          invocation: {
+            parent_session_id: parent.id,
+            parent_message_id: "msg_parent",
+            call_id: "call-task",
+          },
+        },
+        operation_id: `operation-${route}`,
+        ...(route === "send" ? { text: "steer" } : { disposition: "cancel_pending" }),
+      })
+      const unknown = await request(`/api/session/${parent.id}/task/${route}`, payload("ses_missing"))
+      const forbidden = await request(`/api/session/${parent.id}/task/${route}`, payload(foreign.id))
+      expect(unknown.status, await unknown.clone().text()).toBe(404)
+      expect(forbidden.status).toBe(unknown.status)
+      expect(await forbidden.text()).toBe(await unknown.text())
+    }
   })
 })

@@ -7,6 +7,12 @@ import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { SessionExecution } from "../execution"
 import { SessionLocationAccess } from "../location-access"
+import { Database } from "../../database/database"
+import { SessionTaskOwner } from "../task-owner"
+import { SessionTaskTable } from "../sql"
+import { SessionTask } from "../task"
+import { SessionTaskScheduler } from "../task-scheduler"
+import { asc, eq } from "drizzle-orm"
 
 /** Current-process routing for implicit-local Locations. Future remote placement belongs here. */
 const layer = Layer.effect(
@@ -15,12 +21,30 @@ const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap.Service
     const access = yield* SessionLocationAccess.Service
+    const database = yield* Database.Service
+    // The coordinator cannot schedule its successor until construction completes.
+    let wake: (sessionID: SessionSchema.ID) => Effect.Effect<void> = () => Effect.void
     const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError>({
       drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, force) {
         const session = yield* store.get(sessionID)
         if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
         const location = yield* access.require(sessionID).pipe(Effect.catch(Effect.die))
-        return yield* SessionRunner.Service.use((runner) => runner.run({ sessionID, force })).pipe(
+        const tasks = yield* database.db
+          .select()
+          .from(SessionTaskTable)
+          .where(eq(SessionTaskTable.child_session_id, sessionID))
+          .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.input_id))
+          .all()
+          .pipe(Effect.orDie)
+        const v2 = tasks.filter((task) => task.backend === "v2")
+        const next = v2.find(
+          (task) => task.state === "admitted" || (task.state === "queued" && task.eligibility !== "cancelled"),
+        )
+        if (v2.length > 0 && (!next || next.eligibility !== "eligible")) return
+        if (next && next.location_revision !== session.locationRevision) return
+        const run = SessionRunner.Service.use((runner) =>
+          runner.run({ sessionID, force, ...(next ? { taskInputID: next.input_id } : {}) }),
+        ).pipe(
           Effect.provide(locations.get(location)),
           Effect.tapCause((cause) =>
             Cause.hasInterruptsOnly(cause)
@@ -28,8 +52,36 @@ const layer = Layer.effect(
               : Effect.logError("Failed to drain Session", cause).pipe(Effect.annotateLogs({ sessionID })),
           ),
         )
+        if (!next) return yield* run
+        const owned = SessionTaskOwner.withLease(
+          database,
+          { childSessionID: sessionID, inputID: next.input_id },
+          run,
+        ).pipe(
+          Effect.catch((error) =>
+            error instanceof SessionTaskOwner.OwnerUnavailable || error instanceof SessionTaskOwner.LeaseLost
+              ? Effect.logWarning("Task owner unavailable; child execution was not resumed", { sessionID })
+              : Effect.die(error),
+          ),
+        )
+        return yield* owned.pipe(
+          Effect.ensuring(
+            Effect.gen(function* () {
+              if ((yield* SessionTask.find(database.db, next.input_id))?.state !== "settled") return
+              yield* SessionTaskScheduler.reassess(database, SessionSchema.ID.make(next.root_session_id), {
+                wake: (child) => wake(child),
+                executable: (child) =>
+                  access.resolve(child).pipe(
+                    Effect.map((resolution) => resolution.status === "resolved"),
+                    Effect.catch(() => Effect.succeed(false)),
+                  ),
+              }).pipe(Effect.orDie)
+            }),
+          ),
+        )
       }),
     })
+    wake = coordinator.wake
 
     return SessionExecution.Service.of({
       active: coordinator.active,
@@ -44,7 +96,7 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: SessionExecution.Service,
   layer,
-  deps: [SessionStore.node, LocationServiceMap.node, SessionLocationAccess.node],
+  deps: [SessionStore.node, LocationServiceMap.node, SessionLocationAccess.node, Database.node],
 })
 
 export * as SessionExecutionLocal from "./local"

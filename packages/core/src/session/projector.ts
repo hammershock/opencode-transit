@@ -252,11 +252,25 @@ const layer = Layer.effectDiscard(
           .get()
           .pipe(Effect.orDie)
         if (!stored) return yield* Effect.die(new SessionAlreadyProjected())
-        if (event.data.task)
-          yield* SessionTask.admit(db, event.data.task, {
+        if (event.data.task) {
+          const task = yield* SessionTask.admit(db, event.data.task, {
             validate: false,
             timestamp: event.data.info.time.created,
           })
+          if (task && event.data.taskInput) {
+            if (!event.durable) return yield* Effect.die("Durable Session event is missing aggregate sequence")
+            if (event.data.taskInput.messageID !== task.input_id)
+              return yield* Effect.die(new SessionTask.AdmissionConflict())
+            yield* SessionInput.projectAdmitted(db, {
+              admittedSeq: event.durable.seq,
+              id: event.data.taskInput.messageID,
+              sessionID: event.data.sessionID,
+              prompt: event.data.taskInput.prompt,
+              delivery: event.data.taskInput.delivery,
+              timeCreated: DateTime.makeUnsafe(event.data.info.time.created),
+            })
+          }
+        }
         if (event.data.info.workspaceID) {
           yield* db
             .update(WorkspaceTable)
@@ -304,6 +318,18 @@ const layer = Layer.effectDiscard(
         childSessionID: event.data.sessionID,
         operationID: event.data.operationID,
         actorID: event.data.actorID,
+        timestamp: event.data.timestamp,
+      }),
+    )
+    yield* events.project(SessionTaskEvent.Reconciled, (event) =>
+      SessionTask.projectReconciled(db, {
+        childSessionID: event.data.sessionID,
+        inputID: event.data.inputID,
+        operationID: event.data.operationID,
+        actorKind: event.data.actorKind,
+        actorID: event.data.actorID,
+        disposition: event.data.disposition,
+        capacityState: event.data.capacityState,
         timestamp: event.data.timestamp,
       }),
     )
@@ -530,12 +556,28 @@ const layer = Layer.effectDiscard(
           timeCreated: event.data.timestamp,
           promotedSeq: event.durable.seq,
         })
+        yield* SessionTask.projectInboxPromoted(db, {
+          inputID: event.data.messageID,
+          childSessionID: event.data.sessionID,
+          timestamp: DateTime.toEpochMillis(event.data.timestamp),
+        })
         yield* run(db, event)
       }),
     )
     yield* events.project(SessionEvent.PromptAdmitted, (event) =>
       Effect.gen(function* () {
         if (event.durable === undefined) return yield* Effect.die("Durable Session event is missing aggregate sequence")
+        if (event.data.task?.kind === "invocation") {
+          const admitted = yield* SessionTask.admit(db, event.data.task.admission, {
+            validate: false,
+            timestamp: DateTime.toEpochMillis(event.data.timestamp),
+          })
+          if (!admitted) return
+        }
+        if (event.data.task?.kind === "steer") {
+          const invocation = yield* SessionTask.find(db, event.data.task.invocationInputID)
+          if (!invocation || invocation.child_session_id !== event.data.sessionID) return
+        }
         yield* SessionInput.projectAdmitted(db, {
           admittedSeq: event.durable.seq,
           id: event.data.messageID,
@@ -544,6 +586,14 @@ const layer = Layer.effectDiscard(
           delivery: event.data.delivery,
           timeCreated: event.data.timestamp,
         })
+        if (event.data.task?.kind === "steer")
+          yield* SessionTask.projectSteerAdmitted(db, {
+            inputID: event.data.messageID,
+            invocationInputID: event.data.task.invocationInputID,
+            operationID: event.data.task.operationID,
+            promptDigest: event.data.task.promptDigest,
+            timestamp: DateTime.toEpochMillis(event.data.timestamp),
+          })
       }),
     )
     yield* events.project(SessionEvent.Turn.Settled, () => Effect.void)

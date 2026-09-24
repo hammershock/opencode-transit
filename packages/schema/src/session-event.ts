@@ -14,6 +14,7 @@ import { SessionMessage } from "./session-message"
 import { Revert } from "./revert"
 import { ModelContext } from "./model-context"
 import { SkillInvocation } from "./skill-invocation"
+import { SessionTaskEvent } from "./session-task-event"
 
 export { FileAttachment }
 
@@ -110,7 +111,20 @@ export type Prompted = typeof Prompted.Type
 export const PromptAdmitted = Event.define({
   type: "session.next.prompt.admitted",
   ...options,
-  schema: PromptFields,
+  schema: {
+    ...PromptFields,
+    task: Schema.optional(
+      Schema.Union([
+        Schema.Struct({ kind: Schema.Literal("invocation"), admission: SessionTaskEvent.Admission }),
+        Schema.Struct({
+          kind: Schema.Literal("steer"),
+          invocationInputID: Schema.String,
+          operationID: Schema.String,
+          promptDigest: Schema.String,
+        }),
+      ]),
+    ),
+  },
 })
 export type PromptAdmitted = typeof PromptAdmitted.Type
 

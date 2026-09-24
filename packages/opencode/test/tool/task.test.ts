@@ -4,7 +4,7 @@ import {
   createSubagentData,
   snapshotSubagentData,
 } from "@/cli/cmd/run/subagent-data"
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -28,7 +28,12 @@ import { TaskTool, type TaskPromptOps, TaskPlacementError } from "../../src/tool
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { disposeAllInstances } from "../fixture/fixture"
+import { disposeAllInstances, tmpdir } from "../fixture/fixture"
+import { AppRuntime } from "@/effect/app-runtime"
+import { TestLLMServer } from "../lib/llm-server"
+import { testProviderConfig } from "../lib/test-provider"
+import { InstanceStore } from "@/project/instance-store"
+import { InstanceRef } from "@/effect/instance-ref"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -45,7 +50,11 @@ import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/schema/schema"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
-import { SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
+import { SessionInputTable, SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
+import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
+import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionMessage } from "@opencode-ai/core/session/message"
 import { eq } from "drizzle-orm"
 import { Global } from "@opencode-ai/core/global"
 import { TargetRegistry } from "@opencode-ai/core/target-registry"
@@ -96,6 +105,52 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}, replacements: LayerNode.R
 
 const it = testEffect(layer())
 const background = testEffect(layer({ experimentalBackgroundSubagents: true }))
+
+background.instance("V2 Task adapter rejects a historical V1 child before admitting an inbox input", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const { chat, assistant } = yield* seed()
+    const child = yield* sessions.create({ parentID: chat.id, title: "historical child", agent: "general" })
+    const backend: SessionTaskCapability.Backend = {
+      id: "session_v2",
+      features: new Set<SessionTaskCapability.Feature>([
+        "atomic_admission",
+        "exact_owner_guard",
+        "durable_queue",
+        "reconcile",
+        "exact_cancellation",
+        "exact_result",
+        "notification",
+      ]),
+    }
+    const tool = yield* TaskTool.pipe(Effect.provideService(SessionTaskCapability.Service, backend))
+    const def = yield* tool.init()
+    const exit = yield* def
+      .execute(
+        {
+          description: "continue old work",
+          prompt: "continue",
+          subagent_type: "general",
+          task_id: child.id,
+          background: true,
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          callID: "call-v2-resume-old",
+          agent: "build",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+          extra: { promptOps: stubOps() },
+        },
+      )
+      .pipe(Effect.exit)
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toMatchObject({ code: "task_control_unsupported" })
+  }),
+)
 const remoteTarget = Location.RexdTarget.make({
   type: "rexd",
   targetID: Location.TargetID.make("00000000-0000-4000-8000-000000000122"),
@@ -312,6 +367,210 @@ const seed = Effect.fn("TaskToolTest.seed")(function* (title = "Pinned") {
   yield* session.updateMessage(assistant)
   return { chat, assistant }
 })
+
+test("V1 parent Task call admits a V2 child and first inbox input in the real App runtime", async () => {
+  await using temp = await tmpdir({ git: true, config: { experimental: { background_subagents: true } } })
+  await AppRuntime.runPromise(
+    Effect.gen(function* () {
+      const instances = yield* InstanceStore.Service
+      const instance = yield* instances.load({ directory: temp.path })
+      return yield* Effect.gen(function* () {
+        const database = yield* Database.Service
+        const { chat, assistant } = yield* seed()
+        const backend: SessionTaskCapability.Backend = {
+          id: "session_v2",
+          features: new Set<SessionTaskCapability.Feature>([
+            "atomic_admission",
+            "exact_owner_guard",
+            "durable_queue",
+            "reconcile",
+            "exact_cancellation",
+            "exact_result",
+            "notification",
+          ]),
+        }
+        const tool = yield* TaskTool.pipe(
+          Effect.provideService(SessionTaskCapability.Service, backend),
+          Effect.provideService(TargetRegistry.Service, TargetRegistry.make({ directory: temp.path })),
+        )
+        expect((yield* Effect.serviceOption(SessionV2.Service))._tag).toBe("Some")
+        expect((yield* Effect.serviceOption(SessionExecution.Service))._tag).toBe("Some")
+        const def = yield* tool.init()
+        const invoke = () =>
+          def.execute(
+            {
+              description: "inspect cache bug",
+              prompt: "check the cache key",
+              subagent_type: "general",
+              background: true,
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              callID: "call-v2-create",
+              agent: "build",
+              abort: new AbortController().signal,
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+        const [receipt, retry] = yield* Effect.all([invoke(), invoke()], { concurrency: "unbounded" })
+        const task = yield* database.db
+          .select()
+          .from(SessionTaskTable)
+          .where(eq(SessionTaskTable.child_session_id, receipt.metadata.sessionId))
+          .get()
+        const inbox = yield* database.db
+          .select()
+          .from(SessionInputTable)
+          .where(eq(SessionInputTable.id, SessionMessage.ID.make(task!.input_id)))
+          .get()
+        expect(task?.backend).toBe("v2")
+        expect(task?.parent_session_id).toBe(chat.id)
+        expect(inbox?.delivery).toBe("queue")
+        expect([receipt.output, retry.output].some((output) => output.includes(task!.input_id))).toBe(true)
+        expect([receipt.output, retry.output].find((output) => output.includes(task!.input_id))).toContain(
+          'state="admitted"',
+        )
+        expect(retry.metadata.sessionId).toBe(receipt.metadata.sessionId)
+        expect(
+          yield* database.db
+            .select()
+            .from(SessionTaskTable)
+            .where(eq(SessionTaskTable.parent_message_id, assistant.id))
+            .all(),
+        ).toHaveLength(1)
+      }).pipe(Effect.provideService(InstanceRef, instance))
+    }).pipe(Effect.scoped),
+  )
+}, 30_000)
+
+test("V2 Task adapter promotes its first inbox input into a real provider turn", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const temp = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          tmpdir({
+            git: true,
+            config: { ...testProviderConfig(llm.url), experimental: { background_subagents: true } },
+          }),
+        ),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      yield* llm.text("task child completed")
+      const child = Bun.spawn([process.execPath, "test/fixture/task-v2-process.ts"], {
+        cwd: import.meta.dir + "/../..",
+        env: {
+          ...process.env,
+          OPENCODE_DB: temp.path + "/task-v2.sqlite",
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            experimental: { background_subagents: true },
+          }),
+          TASK_V2_TEST_DIRECTORY: temp.path,
+          TASK_V2_TEST_LLM_URL: llm.url,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const [stdout, stderr, code] = yield* Effect.promise(() =>
+        Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
+      )
+      expect(code, stderr).toBe(0)
+      const line = stdout.split("\n").find((item) => item.startsWith("TASK_V2_RESULT:"))
+      expect(line).toBeDefined()
+      const result = JSON.parse(line!.slice("TASK_V2_RESULT:".length)) as {
+        database: string
+        state: string
+        outcome: string
+        result?: string
+      }
+      expect(result.database).toBe(temp.path + "/task-v2.sqlite")
+      expect(result.state).toBe("settled")
+      expect(result.outcome).toBe("completed")
+      expect(result.result).toBeDefined()
+      const hits = yield* llm.inputs
+      expect(hits).toHaveLength(1)
+      expect(JSON.stringify(hits[0])).toContain("check cache")
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
+  )
+}, 60_000)
+
+test("V2 Task process promotes an active steer before two ordered queued follow-ups", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const temp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true, config: { experimental: { background_subagents: true } } })),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      let release: () => void = () => {}
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      yield* llm.hold("A first", held)
+      yield* llm.text("A steer done")
+      yield* llm.text("B done")
+      yield* llm.text("C done")
+      const child = Bun.spawn([process.execPath, "test/fixture/task-v2-process.ts"], {
+        cwd: import.meta.dir + "/../..",
+        env: {
+          ...process.env,
+          OPENCODE_DB: temp.path + "/task-v2.sqlite",
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            experimental: { background_subagents: true },
+          }),
+          TASK_V2_TEST_DIRECTORY: temp.path,
+          TASK_V2_TEST_LLM_URL: llm.url,
+          TASK_V2_TEST_SEQUENCE: "1",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const ready = (yield* Effect.promise(async () => {
+        const deadline = Date.now() + 30_000
+        while (Date.now() < deadline) {
+          if (await Bun.file(temp.path + "/task-v2-ready.json").exists())
+            return await Bun.file(temp.path + "/task-v2-ready.json").json()
+          if (child.exitCode !== null) throw new Error(`Task process exited before ready: ${child.exitCode}`)
+          await Bun.sleep(25)
+        }
+        throw new Error("Task process did not admit steer and follow-ups")
+      })) as { steer: { state: string }; followups: string[]; followupOutputs: string[] }
+      expect(ready.steer.state).toBe("admitted")
+      expect(ready.followups).toHaveLength(2)
+      expect(ready.followupOutputs).toHaveLength(2)
+      expect(ready.followupOutputs.every((output) => output.includes('state="queued"'))).toBe(true)
+      release()
+      const [stdout, stderr, code] = yield* Effect.promise(() =>
+        Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
+      )
+      expect(code, stderr).toBe(0)
+      const line = stdout.split("\n").find((item) => item.startsWith("TASK_V2_RESULT:"))
+      expect(line, stderr).toBeDefined()
+      const result = JSON.parse(line!.slice("TASK_V2_RESULT:".length)) as {
+        rows: { input: string; state: string; outcome: string; result: string }[]
+        steer: { admitted: string; state: string }
+      }
+      expect(result.rows).toHaveLength(3)
+      expect(result.rows.map((row) => row.state)).toEqual(["settled", "settled", "settled"])
+      expect(result.rows.map((row) => row.outcome)).toEqual(["completed", "completed", "completed"])
+      expect(new Set(result.rows.map((row) => row.result)).size).toBe(3)
+      expect(result.rows.slice(1).map((row) => row.input)).toEqual(ready.followups)
+      expect(result.steer).toEqual({ admitted: "admitted", state: "promoted" })
+      const inputs = yield* llm.inputs
+      expect(inputs).toHaveLength(4)
+      expect(JSON.stringify(inputs[1])).toContain("steer A")
+      expect(JSON.stringify(inputs[1])).not.toContain("work B")
+      expect(JSON.stringify(inputs[2])).toContain("work B")
+      expect(JSON.stringify(inputs[2])).not.toContain("work C")
+      expect(JSON.stringify(inputs[3])).toContain("work C")
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
+  )
+}, 60_000)
 
 function stubOps(opts?: {
   onPrompt?: (input: SessionPrompt.PromptInput) => void

@@ -32,6 +32,8 @@ import { LocationServiceMap } from "./location-service-map"
 import { ContextSnapshotDecodeError, MessageDecodeError } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
+import { SessionTask } from "./session/task"
+import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
 import { SessionTurn } from "./session/turn"
 import { Snapshot } from "./snapshot"
 import { SessionRevert } from "./session/revert"
@@ -60,6 +62,8 @@ import { SkillGuidance } from "./skill/guidance"
 import { SessionSkillCatalog } from "./session/skill-catalog"
 import { InstructionContext } from "./instruction-context"
 import { ToolRegistry } from "./tool/registry"
+import { PermissionV1 } from "./v1/permission"
+import type { SessionPolicy } from "@opencode-ai/schema/session-policy"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -101,10 +105,15 @@ export type ListInput = typeof ListInput.Type
 
 type CreateInput = {
   id?: SessionSchema.ID
+  parentID?: SessionSchema.ID
+  task?: SessionTaskEvent.Admission
+  taskInput?: { messageID: SessionMessage.ID; prompt: Prompt; delivery: SessionInput.Delivery }
   agent?: AgentV2.ID
   model?: ModelV2.Ref
   location: Location.Ref
   approvalMode?: ApprovalMode.Mode
+  permission?: PermissionV1.Ruleset
+  permissionBoundary?: SessionPolicy.Boundary
 }
 
 type CompactInput = {
@@ -575,8 +584,45 @@ const layer = Layer.effect(
         locationMutation.withLock(
           Effect.gen(function* () {
             const sessionID = input.id ?? SessionSchema.ID.create()
+            if (
+              input.task &&
+              (!input.taskInput ||
+                input.task.backend !== "v2" ||
+                input.taskInput.delivery !== "queue" ||
+                input.task.childSessionID !== sessionID ||
+                input.taskInput.messageID !== input.task.inputID ||
+                input.parentID !== input.task.parentSessionID)
+            )
+              return yield* Effect.die(new SessionTask.AdmissionConflict())
+            if (input.taskInput && !input.task) return yield* Effect.die(new SessionTask.AdmissionConflict())
             const recorded = yield* store.get(sessionID)
-            if (recorded) return recorded
+            if (recorded) {
+              if (input.task && input.taskInput) {
+                const invocation = yield* SessionTask.find(db, input.task.inputID)
+                const inbox = yield* SessionInput.find(db, input.taskInput.messageID)
+                if (
+                  recorded.parentID !== input.parentID ||
+                  invocation?.root_session_id !== input.task.rootSessionID ||
+                  invocation?.parent_session_id !== input.task.parentSessionID ||
+                  invocation?.parent_message_id !== input.task.parentMessageID ||
+                  invocation?.call_id !== input.task.callID ||
+                  invocation?.prompt_digest !== input.task.promptDigest ||
+                  invocation?.child_session_id !== sessionID ||
+                  invocation?.description !== input.task.description ||
+                  invocation?.agent_id !== input.task.agentID ||
+                  invocation?.location_revision !== input.task.locationRevision ||
+                  invocation?.backend !== "v2" ||
+                  !inbox ||
+                  !SessionInput.equivalent(inbox, {
+                    sessionID,
+                    prompt: input.taskInput.prompt,
+                    delivery: input.taskInput.delivery,
+                  })
+                )
+                  return yield* Effect.die(new SessionTask.AdmissionConflict())
+              }
+              return recorded
+            }
             const project = yield* projects.resolve(input.location.directory)
             yield* db
               .insert(ProjectTable)
@@ -591,6 +637,7 @@ const layer = Layer.effect(
               ?.namespaceID
             const info = SessionV1.SessionInfo.make({
               id: sessionID,
+              parentID: input.parentID,
               slug: Slug.create(),
               version: InstallationVersion,
               projectID: project.id,
@@ -602,6 +649,8 @@ const layer = Layer.effect(
               workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
               title: `New session - ${new Date(now).toISOString()}`,
               approvalMode: input.approvalMode ?? "normal",
+              permission: input.permission,
+              permissionBoundary: input.permissionBoundary,
               agent: input.agent,
               model: input.model
                 ? {
@@ -615,7 +664,18 @@ const layer = Layer.effect(
               time: { created: now, updated: now },
             })
             const projected = yield* events
-              .publish(SessionV1.Event.Created, { sessionID, info }, { location: input.location })
+              .publish(
+                SessionV1.Event.Created,
+                {
+                  sessionID,
+                  info,
+                  ...(input.task ? { task: input.task, taskInput: input.taskInput } : {}),
+                },
+                {
+                  location: input.location,
+                  ...(input.task ? { commit: () => SessionTask.validate(db, input.task!.inputID) } : {}),
+                },
+              )
               .pipe(
                 Effect.as({ type: "created" } as const),
                 Effect.catchDefect((defect) => {

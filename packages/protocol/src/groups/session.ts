@@ -492,6 +492,36 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
       ),
     )
     .add(
+      HttpApiEndpoint.post("session.task.send", "/api/session/:sessionID/task/send", {
+        params: { sessionID: Session.ID },
+        payload: SessionTask.SendRequest,
+        success: SessionTask.SendReceipt,
+        error: [SessionNotFoundError, ConflictError, InvalidRequestError, ServiceUnavailableError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.task.send",
+          summary: "Steer an active direct child Task invocation",
+          description:
+            "Admit one exact steer with a durable receipt. Admission does not imply promotion or model consumption.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.task.reconcile", "/api/session/:sessionID/task/reconcile", {
+        params: { sessionID: Session.ID },
+        payload: SessionTask.ReconcileRequest,
+        success: SessionTask.ReconcileReceipt,
+        error: [SessionNotFoundError, ConflictError, InvalidRequestError, ServiceUnavailableError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.task.reconcile",
+          summary: "Resolve one frozen direct child Task input",
+          description:
+            "Resume or cancel the original input by stable operation ID; this endpoint does not archive unknown owners.",
+        }),
+      ),
+    )
+    .add(
       HttpApiEndpoint.get("session.message", "/api/session/:sessionID/message/:messageID", {
         params: { sessionID: Session.ID, messageID: SessionMessage.ID },
         success: Schema.Struct({ data: SessionMessage.Message }),

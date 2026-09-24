@@ -64,4 +64,19 @@ export const ArchivedUnknown = Event.define({
   },
 })
 
-export const Definitions = Event.inventory(Admitted, Promoted, Settled, ArchivedUnknown)
+export const Reconciled = Event.define({
+  type: "session.task.reconciled",
+  durable: { aggregate: "sessionID", version: 1 },
+  schema: {
+    sessionID: SessionID,
+    inputID: Schema.String,
+    operationID: Schema.String,
+    actorKind: Schema.Literals(["user", "parent"]),
+    actorID: Schema.String,
+    disposition: Schema.Literals(["resume_pending", "cancel_pending"]),
+    capacityState: Schema.Literals(["available", "capacity_unavailable", "not_applicable"]),
+    timestamp: Schema.Finite,
+  },
+})
+
+export const Definitions = Event.inventory(Admitted, Promoted, Settled, ArchivedUnknown, Reconciled)

@@ -3,15 +3,23 @@ import path from "path"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
 import { eq, sql } from "drizzle-orm"
-import { Effect, Exit } from "effect"
+import { DateTime, Effect, Exit } from "effect"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import { Database } from "@opencode-ai/core/database/database"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
-import { SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
+import {
+  SessionInputTable,
+  SessionTable,
+  SessionTaskOperationTable,
+  SessionTaskSteerTable,
+  SessionTaskTable,
+} from "@opencode-ai/core/session/sql"
 import { SessionTask } from "@opencode-ai/core/session/task"
+import { SessionTaskScheduler } from "@opencode-ai/core/session/task-scheduler"
+import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionTaskView } from "@opencode-ai/core/session/task-view"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -21,6 +29,9 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
+import { SessionEvent } from "@opencode-ai/schema/session-event"
+import { Prompt } from "@opencode-ai/schema/prompt"
+import { SessionMessage } from "@opencode-ai/core/session/message"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -58,6 +69,223 @@ const run = <A, E>(effect: Effect.Effect<A, E, import("effect/unstable/sql/SqlCl
 const eventIt = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProjector.node])))
 
 describe("SessionTask durable projection", () => {
+  eventIt.effect("freezes queued inputs on unknown archival and replays exact reconcile receipts", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const events = yield* EventV2.Service
+      const root = SessionSchema.ID.create()
+      const child = SessionSchema.ID.create()
+      const first = SessionMessage.ID.create()
+      const second = SessionMessage.ID.create()
+      const now = Date.now()
+      const info = {
+        id: root,
+        slug: "reconcile-root",
+        projectID: Project.ID.global,
+        directory: "/project",
+        title: "root",
+        version: "test",
+        time: { created: now, updated: now },
+      }
+      const base = {
+        rootSessionID: root,
+        parentSessionID: root,
+        childSessionID: child,
+        description: "work",
+        agentID: "build",
+        locationRevision: 0,
+        backend: "v2" as const,
+      }
+      yield* events.publish(SessionV1.Event.Created, { sessionID: root, info })
+      yield* events.publish(SessionV1.Event.Created, {
+        sessionID: child,
+        info: { ...info, id: child, slug: "reconcile-child", parentID: root },
+        task: {
+          ...base,
+          inputID: first,
+          parentMessageID: "msg_reconcile_parent_a",
+          callID: "call-a",
+          promptDigest: "a",
+        },
+        taskInput: { messageID: first, prompt: Prompt.make({ text: "A" }), delivery: "queue" },
+      })
+      yield* events.publish(SessionEvent.Prompted, {
+        sessionID: child,
+        messageID: first,
+        prompt: Prompt.make({ text: "A" }),
+        delivery: "queue",
+        timestamp: DateTime.makeUnsafe(now),
+      })
+      yield* SessionInput.admit(db, events, {
+        id: second,
+        sessionID: child,
+        prompt: Prompt.make({ text: "B" }),
+        delivery: "queue",
+        task: {
+          kind: "invocation",
+          admission: {
+            ...base,
+            inputID: second,
+            parentMessageID: "msg_reconcile_parent_b",
+            callID: "call-b",
+            promptDigest: "b",
+          },
+        },
+      })
+      yield* SessionTask.archiveUnknown(yield* Database.Service, events, {
+        inputID: first,
+        childSessionID: child,
+        operationID: "archive-a",
+        actor: { kind: "user", id: "user" },
+      })
+      expect((yield* SessionTask.find(db, second))?.eligibility).toBe("frozen")
+      yield* events.publish(SessionTaskEvent.Reconciled, {
+        sessionID: child,
+        inputID: second,
+        operationID: "resume-b",
+        actorKind: "user",
+        actorID: "user",
+        disposition: "resume_pending",
+        capacityState: "available",
+        timestamp: Date.now(),
+      })
+      expect((yield* SessionTask.find(db, second))?.eligibility).toBe("eligible")
+      yield* events.publish(SessionTaskEvent.Reconciled, {
+        sessionID: child,
+        inputID: second,
+        operationID: "cancel-b",
+        actorKind: "user",
+        actorID: "user",
+        disposition: "cancel_pending",
+        capacityState: "not_applicable",
+        timestamp: Date.now(),
+      })
+      expect((yield* SessionTask.find(db, second))?.outcome).toBe("cancelled")
+      expect((yield* SessionTask.find(db, second))?.eligibility).toBe("cancelled")
+      expect(
+        yield* db.select().from(SessionTaskOperationTable).where(eq(SessionTaskOperationTable.input_id, second)).all(),
+      ).toHaveLength(2)
+      expect(yield* SessionInput.promoteNextQueued(db, events, child)).toBeUndefined()
+    }),
+  )
+
+  eventIt.effect("projects one atomic V2 inbox invocation and an exact steer receipt", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const events = yield* EventV2.Service
+      const root = SessionSchema.ID.create()
+      const child = SessionSchema.ID.create()
+      const info = {
+        id: root,
+        slug: "task-inbox-root",
+        projectID: Project.ID.global,
+        directory: "/project",
+        title: "root",
+        version: "test",
+        time: { created: Date.now(), updated: Date.now() },
+      }
+      yield* events.publish(SessionV1.Event.Created, { sessionID: root, info })
+      yield* events.publish(SessionV1.Event.Created, {
+        sessionID: child,
+        info: { ...info, id: child, parentID: root, slug: "task-inbox-child" },
+      })
+      const inputID = SessionMessage.ID.create()
+      const initialTime = DateTime.makeUnsafe(Date.now())
+      const admission = {
+        inputID,
+        rootSessionID: root,
+        parentSessionID: root,
+        parentMessageID: "msg_task_inbox_parent",
+        callID: "call-task-inbox",
+        promptDigest: "first-digest",
+        childSessionID: child,
+        description: "inbox child",
+        agentID: "build",
+        locationRevision: 0,
+        backend: "v2" as const,
+      }
+      yield* events.publish(SessionEvent.PromptAdmitted, {
+        sessionID: child,
+        messageID: inputID,
+        timestamp: initialTime,
+        prompt: Prompt.make({ text: "first" }),
+        delivery: "queue",
+        task: { kind: "invocation", admission },
+      })
+      expect((yield* SessionTask.find(db, inputID))?.state).toBe("admitted")
+      expect(
+        (yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, inputID)).get())?.delivery,
+      ).toBe("queue")
+      yield* events.publish(SessionEvent.Prompted, {
+        sessionID: child,
+        messageID: inputID,
+        timestamp: initialTime,
+        prompt: Prompt.make({ text: "first" }),
+        delivery: "queue",
+      })
+      expect((yield* SessionTask.find(db, inputID))?.state).toBe("active")
+      const steerID = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.PromptAdmitted, {
+        sessionID: child,
+        messageID: steerID,
+        timestamp: DateTime.makeUnsafe(Date.now()),
+        prompt: Prompt.make({ text: "update" }),
+        delivery: "steer",
+        task: {
+          kind: "steer",
+          invocationInputID: inputID,
+          operationID: "steer-operation",
+          promptDigest: "update-digest",
+        },
+      })
+      expect(
+        (yield* db.select().from(SessionTaskSteerTable).where(eq(SessionTaskSteerTable.input_id, steerID)).get())
+          ?.state,
+      ).toBe("admitted")
+      const promotedSteerID = SessionMessage.ID.create()
+      const promotedTime = DateTime.makeUnsafe(Date.now())
+      yield* events.publish(SessionEvent.PromptAdmitted, {
+        sessionID: child,
+        messageID: promotedSteerID,
+        timestamp: promotedTime,
+        prompt: Prompt.make({ text: "second update" }),
+        delivery: "steer",
+        task: {
+          kind: "steer",
+          invocationInputID: inputID,
+          operationID: "second-steer-operation",
+          promptDigest: "second-update-digest",
+        },
+      })
+      yield* events.publish(SessionEvent.Prompted, {
+        sessionID: child,
+        messageID: promotedSteerID,
+        timestamp: promotedTime,
+        prompt: Prompt.make({ text: "second update" }),
+        delivery: "steer",
+      })
+      expect(
+        (yield* db
+          .select()
+          .from(SessionTaskSteerTable)
+          .where(eq(SessionTaskSteerTable.input_id, promotedSteerID))
+          .get())?.state,
+      ).toBe("promoted")
+      yield* SessionTask.settle(db, events, { inputID, childSessionID: child, outcome: "completed" })
+      expect(
+        (yield* db.select().from(SessionTaskSteerTable).where(eq(SessionTaskSteerTable.input_id, steerID)).get())
+          ?.state,
+      ).toBe("not_delivered")
+      expect(
+        (yield* db
+          .select()
+          .from(SessionTaskSteerTable)
+          .where(eq(SessionTaskSteerTable.input_id, promotedSteerID))
+          .get())?.state,
+      ).toBe("promoted")
+    }),
+  )
+
   eventIt.effect("serializes simultaneous promotion against the final root slot", () =>
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
@@ -310,6 +538,77 @@ describe("SessionTask durable projection", () => {
 })
 
 describe("SessionTask admission", () => {
+  test("reassesses eligible root heads in durable order after a slot release", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db, root } = yield* fixture
+        const children = Array.from({ length: 10 }, () => SessionSchema.ID.create())
+        yield* Effect.forEach(children, (child, index) =>
+          db
+            .insert(SessionTable)
+            .values({
+              id: child,
+              project_id: Project.ID.global,
+              parent_id: root,
+              slug: `scheduler-${index}`,
+              directory: "/project",
+              title: "child",
+              version: "test",
+            })
+            .run(),
+        )
+        yield* Effect.forEach(children, (child, index) =>
+          db
+            .insert(SessionTaskTable)
+            .values({
+              input_id: `msg_scheduler_${index}`,
+              root_session_id: root,
+              parent_session_id: root,
+              parent_message_id: `msg_scheduler_parent_${index}`,
+              call_id: `call-scheduler-${index}`,
+              prompt_digest: "digest",
+              child_session_id: child,
+              description: "work",
+              agent_id: "build",
+              location_revision: 0,
+              backend: "v2",
+              state: index < 8 ? "active" : "queued",
+              time_created: index,
+            })
+            .run(),
+        )
+        const wakes: string[] = []
+        const options = {
+          wake: (child: SessionSchema.ID) =>
+            Effect.sync(() => {
+              wakes.push(child)
+            }),
+          executable: () => Effect.succeed(true),
+        }
+        expect(
+          yield* SessionTaskScheduler.reassess({ db, filename: ":memory:" } as Database.Interface, root, options),
+        ).toEqual([])
+        yield* db
+          .update(SessionTaskTable)
+          .set({ state: "settled", outcome: "completed" })
+          .where(eq(SessionTaskTable.input_id, "msg_scheduler_0"))
+          .run()
+        expect(
+          yield* SessionTaskScheduler.reassess({ db, filename: ":memory:" } as Database.Interface, root, options),
+        ).toEqual([children[8]])
+        expect(wakes).toEqual([children[8]])
+        yield* db
+          .update(SessionTaskTable)
+          .set({ eligibility: "frozen" })
+          .where(eq(SessionTaskTable.input_id, "msg_scheduler_8"))
+          .run()
+        expect(
+          yield* SessionTaskScheduler.reassess({ db, filename: ":memory:" } as Database.Interface, root, options),
+        ).toEqual([children[9]])
+      }),
+    )
+  })
+
   test("paginates direct children and invocations behind fixed enumeration bounds", async () => {
     await run(
       Effect.gen(function* () {
@@ -767,7 +1066,7 @@ describe("SessionTask admission", () => {
         callID: "call-progress-b",
         promptDigest: "digest-b",
         description: "second run",
-        backend: "v2" as const,
+        backend: "legacy" as const,
       }
       yield* events.publish(SessionTaskEvent.Admitted, {
         sessionID: child,
@@ -792,6 +1091,16 @@ describe("SessionTask admission", () => {
       const sameMillis = Math.max(Date.now() + 1, firstProgress + 1)
       yield* db.run(sql`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
         VALUES ('prt_child_progress_a_boundary', 'msg_child_progress_a', ${child}, ${sameMillis}, ${sameMillis + 2}, '{"type":"text","text":"A late"}')`)
+      yield* events.publish(SessionTaskEvent.Reconciled, {
+        sessionID: child,
+        inputID: second.inputID,
+        operationID: "resume-progress-b",
+        actorKind: "user",
+        actorID: "user-test",
+        disposition: "resume_pending",
+        capacityState: "available",
+        timestamp: sameMillis,
+      })
       yield* events.publish(SessionTaskEvent.Promoted, {
         sessionID: child,
         inputID: second.inputID,

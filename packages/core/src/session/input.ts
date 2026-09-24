@@ -1,15 +1,17 @@
 export * as SessionInput from "./input"
 
-import { and, asc, eq, isNull, lte, notExists, sql } from "drizzle-orm"
+import { and, asc, eq, isNull, lte, notExists, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
 import { Admitted, Delivery } from "@opencode-ai/schema/session-input"
 import type { Database } from "../database/database"
 import { EventV2 } from "../event"
 import { SessionEvent } from "./event"
+import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
+import { SessionTask } from "./task"
 import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
-import { SessionInputTable, SessionMessageTable } from "./sql"
+import { SessionInputTable, SessionMessageTable, SessionTaskSteerTable, SessionTaskTable } from "./sql"
 import { EventTable } from "../event/sql"
 
 type DatabaseService = Database.Interface["db"]
@@ -42,17 +44,30 @@ export const isSettled = Effect.fn("SessionInput.isSettled")(function* (
 })
 
 const withoutSettlement = (db: DatabaseService) =>
-  notExists(
-    db
-      .select({ id: EventTable.id })
-      .from(EventTable)
-      .where(
-        and(
-          eq(EventTable.aggregate_id, SessionInputTable.session_id),
-          eq(EventTable.type, settledType),
-          sql`json_extract(${EventTable.data}, '$.messageID') = ${SessionInputTable.id}`,
+  and(
+    notExists(
+      db
+        .select({ id: EventTable.id })
+        .from(EventTable)
+        .where(
+          and(
+            eq(EventTable.aggregate_id, SessionInputTable.session_id),
+            eq(EventTable.type, settledType),
+            sql`json_extract(${EventTable.data}, '$.messageID') = ${SessionInputTable.id}`,
+          ),
         ),
-      ),
+    ),
+    notExists(
+      db
+        .select({ id: SessionTaskTable.input_id })
+        .from(SessionTaskTable)
+        .where(
+          and(
+            eq(SessionTaskTable.input_id, SessionInputTable.id),
+            or(eq(SessionTaskTable.state, "settled"), eq(SessionTaskTable.eligibility, "cancelled")),
+          ),
+        ),
+    ),
   )
 
 const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
@@ -83,19 +98,33 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly task?:
+      | { readonly kind: "invocation"; readonly admission: SessionTaskEvent.Admission }
+      | {
+          readonly kind: "steer"
+          readonly invocationInputID: string
+          readonly operationID: string
+          readonly promptDigest: string
+        }
+    readonly commit?: () => Effect.Effect<void>
   },
 ) {
   const existing = yield* find(db, input.id)
   if (existing !== undefined) return existing
   const timestamp = yield* DateTime.now
   return yield* events
-    .publish(SessionEvent.PromptAdmitted, {
-      messageID: input.id,
-      sessionID: input.sessionID,
-      timestamp,
-      prompt: input.prompt,
-      delivery: input.delivery,
-    })
+    .publish(
+      SessionEvent.PromptAdmitted,
+      {
+        messageID: input.id,
+        sessionID: input.sessionID,
+        timestamp,
+        prompt: input.prompt,
+        delivery: input.delivery,
+        ...(input.task ? { task: input.task } : {}),
+      },
+      input.commit ? { commit: input.commit } : undefined,
+    )
     .pipe(
       Effect.flatMap((event) =>
         event.durable === undefined
@@ -210,7 +239,7 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
   sessionID: SessionSchema.ID,
   delivery: Delivery,
 ) {
-  const row = yield* db
+  const rows = yield* db
     .select({ id: SessionInputTable.id })
     .from(SessionInputTable)
     .where(
@@ -221,10 +250,21 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
         withoutSettlement(db),
       ),
     )
-    .limit(1)
-    .get()
+    .all()
     .pipe(Effect.orDie)
-  return row !== undefined
+  if (delivery !== "steer") return rows.length > 0
+  for (const row of rows) {
+    const steer = yield* db
+      .select()
+      .from(SessionTaskSteerTable)
+      .where(eq(SessionTaskSteerTable.input_id, row.id))
+      .get()
+      .pipe(Effect.orDie)
+    if (!steer) return true
+    if (steer.state === "admitted" && (yield* SessionTask.find(db, steer.invocation_input_id))?.state === "active")
+      return true
+  }
+  return false
 })
 
 export const equivalent = (
@@ -262,13 +302,17 @@ const publish = Effect.fn("SessionInput.publish")(function* (
     const id = SessionMessage.ID.make(row.id)
     if (yield* isSettled(db, sessionID, id)) continue
     yield* events
-      .publish(SessionEvent.Prompted, {
-        sessionID,
-        timestamp: DateTime.makeUnsafe(row.time_created),
-        messageID: id,
-        prompt: decodePrompt(row.prompt),
-        delivery: row.delivery,
-      })
+      .publish(
+        SessionEvent.Prompted,
+        {
+          sessionID,
+          timestamp: DateTime.makeUnsafe(row.time_created),
+          messageID: id,
+          prompt: decodePrompt(row.prompt),
+          delivery: row.delivery,
+        },
+        { commit: () => SessionTask.validateInboxPromotion(db, id) },
+      )
       .pipe(
         Effect.catchDefect((defect) =>
           defect instanceof LifecycleConflict
@@ -309,7 +353,19 @@ export const promoteSteers = Effect.fn("SessionInput.promoteSteers")(function* (
     .orderBy(asc(SessionInputTable.admitted_seq))
     .all()
     .pipe(Effect.orDie)
-  return yield* publish(db, events, sessionID, rows)
+  const eligible = yield* Effect.filter(rows, (row) =>
+    Effect.gen(function* () {
+      const steer = yield* db
+        .select()
+        .from(SessionTaskSteerTable)
+        .where(eq(SessionTaskSteerTable.input_id, row.id))
+        .get()
+        .pipe(Effect.orDie)
+      if (!steer) return true
+      return steer.state === "admitted" && (yield* SessionTask.find(db, steer.invocation_input_id))?.state === "active"
+    }),
+  )
+  return yield* publish(db, events, sessionID, eligible)
 })
 
 export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(function* (
@@ -333,5 +389,11 @@ export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(fun
     .get()
     .pipe(Effect.orDie)
   if (row === undefined) return undefined
-  return (yield* publish(db, events, sessionID, [row]))[0]
+  const task = yield* SessionTask.find(db, row.id)
+  if (task && (task.eligibility !== "eligible" || task.state === "settled")) return undefined
+  return (yield* publish(db, events, sessionID, [row]).pipe(
+    Effect.catchDefect((defect) =>
+      defect instanceof SessionTask.CapacityUnavailable ? Effect.succeed([]) : Effect.die(defect),
+    ),
+  ))[0]
 })

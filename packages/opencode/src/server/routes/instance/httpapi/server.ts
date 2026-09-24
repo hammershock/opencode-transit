@@ -345,7 +345,7 @@ export function createRoutes(
     Layer.provide(locationLayer),
     Layer.provide(PtyEnvironment.layer),
     Layer.provide(
-      AppNodeBuilderV1.build(SessionV2.node, [
+      AppNodeBuilderV1.build(LayerNode.group([SessionV2.node, SessionExecution.node, SessionLocationAccess.node]), [
         [LocationServiceMap.node, locationServiceMapV2],
         [SessionExecution.node, SessionExecutionLocal.node],
       ]),
