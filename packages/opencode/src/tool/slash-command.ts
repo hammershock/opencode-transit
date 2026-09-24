@@ -58,7 +58,7 @@ export function targetList(snapshot: TargetRegistry.Snapshot, current?: Location
 export function runSlashCommand(
   command: string,
   targetRegistry: TargetRegistry.Interface,
-  environment: LocationEnvironment.Interface,
+  environment?: LocationEnvironment.Interface,
   current?: Location.Target,
 ): Effect.Effect<CommandResult> {
   return Effect.gen(function* () {
@@ -70,6 +70,7 @@ export function runSlashCommand(
       )
     }
     if (tokens[0] === "/env" && tokens[1] === "reload") {
+      if (!environment) return fail("headless_unavailable", "Environment service is unavailable for this session")
       return yield* environment.reload().pipe(
         Effect.map(
           (snapshot): CommandResult => ({
@@ -85,11 +86,7 @@ export function runSlashCommand(
   })
 }
 
-export const SlashCommandTool = Tool.define<
-  typeof Parameters,
-  Metadata,
-  TargetRegistry.Service | Session.Service
->(
+export const SlashCommandTool = Tool.define<typeof Parameters, Metadata, TargetRegistry.Service | Session.Service>(
   "slash_command",
   Effect.gen(function* () {
     const targetRegistry = yield* TargetRegistry.Service
@@ -106,11 +103,12 @@ export const SlashCommandTool = Tool.define<
             return { title: params.command, output: denied.stderr, metadata: { ...denied, command: params.command } }
           }
           const environment = yield* Effect.serviceOption(LocationEnvironment.Service)
-          if (Option.isNone(environment)) {
-            const denied = fail("headless_unavailable", "Environment service is unavailable for this session")
-            return { title: params.command, output: denied.stderr, metadata: { ...denied, command: params.command } }
-          }
-          const result = yield* runSlashCommand(params.command, targetRegistry, environment.value, info?.target)
+          const result = yield* runSlashCommand(
+            params.command,
+            targetRegistry,
+            Option.getOrUndefined(environment),
+            info?.target,
+          )
           return {
             title: params.command,
             output: result.stdout || result.stderr,
