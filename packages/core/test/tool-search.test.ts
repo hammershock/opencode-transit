@@ -72,6 +72,31 @@ const runtime = AppNodeBuilder.build(
 const it = testEffect(runtime)
 
 describe("Location search tools", () => {
+  it.live("rejects absolute file filters before reaching either search backend", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      const registry = yield* ToolRegistry.Service
+      const glob = yield* settleTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-absolute-glob", name: "glob", input: { pattern: "/tmp/**/*.ts" } },
+      })
+      const grep = yield* settleTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "call-absolute-include",
+          name: "grep",
+          input: { pattern: "marker", include: "C:\\work\\**\\*.ts" },
+        },
+      })
+      expect(glob.result).toEqual({ type: "error", value: "Glob pattern must be relative to the search path" })
+      expect(grep.result).toEqual({ type: "error", value: "Grep include glob must be relative to the search path" })
+      expect(calls).toEqual([])
+    }),
+  )
+
   it.live("routes glob and grep through the Location filesystem service", () =>
     Effect.gen(function* () {
       calls.length = 0

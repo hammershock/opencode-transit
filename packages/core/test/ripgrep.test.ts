@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Effect } from "effect"
+import { Cause, Effect, Exit } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { RelativePath } from "@opencode-ai/core/schema"
@@ -11,6 +11,23 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(LayerNode.compile(Ripgrep.node))
 
 describe("Ripgrep", () => {
+  it.live("rejects absolute glob filters before searching", () =>
+    Effect.gen(function* () {
+      const ripgrep = yield* Ripgrep.Service
+      const exits = yield* Effect.all([
+        Effect.exit(Effect.asVoid(ripgrep.glob({ cwd: process.cwd(), pattern: "/tmp/**/*.ts", limit: 10 }))),
+        Effect.exit(Effect.asVoid(ripgrep.find({ cwd: process.cwd(), pattern: "C:\\work\\**\\*.ts", limit: 10 }))),
+        Effect.exit(
+          Effect.asVoid(ripgrep.grep({ cwd: process.cwd(), pattern: "needle", include: "/tmp/**/*.ts", limit: 10 })),
+        ),
+      ])
+      exits.forEach((exit) => {
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) expect(String(Cause.squash(exit.cause))).toContain("relative to cwd")
+      })
+    }),
+  )
+
   it.live("keeps ignored files out of catch-all find results", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

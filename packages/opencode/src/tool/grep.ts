@@ -13,7 +13,7 @@ export const Parameters = Schema.Struct({
     description: "The file or directory to search in. Defaults to the current working directory.",
   }),
   include: Schema.optional(Schema.String).annotate({
-    description: 'File pattern to include in the search (e.g. "*.js", "*.{ts,tsx}")',
+    description: 'File pattern relative to the search path (e.g. "*.js", "*.{ts,tsx}")',
   }),
 })
 

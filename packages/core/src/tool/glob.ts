@@ -15,7 +15,9 @@ import { Tools } from "./tools"
 export const name = "glob"
 
 export const Input = Schema.Struct({
-  pattern: FileSystem.GlobInput.fields.pattern.annotate({ description: "Glob pattern to match files against" }),
+  pattern: FileSystem.GlobInput.fields.pattern.annotate({
+    description: "Glob pattern relative to the search path to match files against",
+  }),
   path: RelativePath.pipe(Schema.optional).annotate({
     description: "Relative directory to search. Defaults to the active Location.",
   }),
@@ -58,6 +60,10 @@ const layer = Layer.effectDiscard(
           ],
           execute: (input, context) =>
             Effect.gen(function* () {
+              // Both ripgrep and fff match filters relative to the Location/search root.
+              // An absolute pattern can silently miss files or scan the wrong tree.
+              if (path.posix.isAbsolute(input.pattern) || path.win32.isAbsolute(input.pattern))
+                return yield* new ToolFailure({ message: "Glob pattern must be relative to the search path" })
               yield* permission.assert({
                 action: name,
                 resources: [input.pattern],
@@ -77,7 +83,11 @@ const layer = Layer.effectDiscard(
                 limit: input.limit ?? Number.MAX_SAFE_INTEGER,
               })
             }).pipe(
-              Effect.mapError(() => new ToolFailure({ message: `Unable to find files matching ${input.pattern}` })),
+              Effect.mapError((error) =>
+                error instanceof ToolFailure
+                  ? error
+                  : new ToolFailure({ message: `Unable to find files matching ${input.pattern}` }),
+              ),
             ),
         }),
       })
