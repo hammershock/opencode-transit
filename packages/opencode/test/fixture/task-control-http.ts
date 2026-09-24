@@ -102,6 +102,6 @@ const interrupted = await request(`/api/session/${parent.data.id}/task/interrupt
     invocation: { parent_session_id: parent.data.id, parent_message_id: "msg-http-parent", call_id: "call-later" },
   },
 })
-process.stdout.write(`TASK_CONTROL_HTTP:${JSON.stringify({ first, later, stopped, retry, interrupted })}\n`)
+process.stdout.write(`TASK_CONTROL_HTTP:${JSON.stringify({ parent: parent.data.id, child: child.id, first, later, stopped, retry, interrupted })}\n`)
 await handler.dispose()
 await AppRuntime.dispose()

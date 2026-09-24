@@ -17,6 +17,7 @@ import { SessionTaskTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { Effect } from "effect"
 import { and, eq } from "drizzle-orm"
+import os from "node:os"
 
 Heap.start()
 
@@ -75,6 +76,8 @@ export const rpc = {
     inputID: string
     operationID: string
   }) {
+    const uid = process.getuid?.()
+    if (uid === undefined || !Number.isInteger(uid)) throw new Error("Local user identity unavailable")
     return AppRuntime.runPromise(
       InstanceStore.Service.use((store) =>
         store.provide(
@@ -84,6 +87,15 @@ export const rpc = {
             if (!instance) return yield* Effect.fail(new Error("Task target unavailable"))
             const db = (yield* Database.Service).db
             const events = yield* EventV2Bridge.Service
+            const parent = yield* db
+              .select({ id: SessionTable.id })
+              .from(SessionTable)
+              .where(and(
+                eq(SessionTable.id, SessionSchema.ID.make(input.parentSessionID)),
+                eq(SessionTable.project_id, instance.project.id),
+                eq(SessionTable.directory, instance.directory),
+              ))
+              .get()
             const child = yield* db
               .select({ id: SessionTable.id })
               .from(SessionTable)
@@ -98,12 +110,12 @@ export const rpc = {
                 ),
               )
               .get()
-            if (!child || !input.operationID) return yield* Effect.fail(new Error("Task target unavailable"))
+            if (!parent || !child || !input.operationID) return yield* Effect.fail(new Error("Task target unavailable"))
             const receipt = yield* SessionTaskDelivery.archiveUnknown({
               childSessionID: SessionSchema.ID.make(input.childSessionID),
               inputID: input.inputID,
               operationID: input.operationID,
-              actor: { kind: "user", id: "local-tui-user" },
+              actor: { kind: "user", id: `${os.userInfo().username}:${uid}` },
             }).pipe(Effect.provideService(EventV2.Service, events))
             if (!receipt) return yield* Effect.fail(new Error("Task target unavailable"))
             return { inputID: receipt.input_id, archived: receipt.abandoned_unknown }

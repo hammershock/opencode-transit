@@ -1,13 +1,15 @@
 import { AppRuntime } from "@/effect/app-runtime"
 import { InstanceStore } from "@/project/instance-store"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Database } from "@opencode-ai/core/database/database"
-import { MessageTable, SessionMessageTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
+import { MessageTable, SessionMessageTable, SessionTaskResultTable, SessionTaskTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { EventTable } from "@opencode-ai/core/event/sql"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
@@ -81,16 +83,73 @@ const outcome = await AppRuntime.runPromise(
           }
           return yield* Effect.die("V2 parent status call never settled")
         }
-        for (let attempt = 0; attempt < 240; attempt++) {
+        for (let attempt = 0; attempt < (process.env.TASK_V2_TEST_SETTLE === "true" ? 1200 : 240); attempt++) {
           const rows = yield* db
             .select()
             .from(SessionTaskTable)
             .where(eq(SessionTaskTable.parent_session_id, parent.id))
             .all()
-          if (rows.length > 0)
+          if (rows.length > 0 && (process.env.TASK_V2_TEST_SETTLE !== "true" || rows.every((row) => row.state === "settled")))
             return {
               parent: parent.id,
-              rows: rows.map((row) => ({ child: row.child_session_id, backend: row.backend, state: row.state })),
+              control: process.env.TASK_V2_TEST_STATUS === "true" && http
+                ? yield* Effect.promise(async () => {
+                    const row = rows[0]!
+                    const request = async (route: string, body: unknown) => {
+                      const response = await http.handler(
+                        new Request(`http://localhost/api/session/${parent.id}/task/${route}`, {
+                          method: "POST",
+                          headers: { "content-type": "application/json", "x-opencode-directory": directory },
+                          body: JSON.stringify(body),
+                        }),
+                        Context.empty() as Context.Context<unknown>,
+                      )
+                      const payload = await response.json()
+                      if (response.status !== 200) throw new Error(`${route}: ${response.status} ${JSON.stringify(payload)}`)
+                      return payload
+                    }
+                    return {
+                      status: await request("status", { target: { task_id: row.child_session_id } }),
+                      interrupt: await request("interrupt", {
+                        target: {
+                          task_id: row.child_session_id,
+                          input_id: row.input_id,
+                          invocation: {
+                            parent_session_id: row.parent_session_id,
+                            parent_message_id: row.parent_message_id,
+                            call_id: row.call_id,
+                          },
+                        },
+                      }),
+                    }
+                  })
+                : undefined,
+              rows: yield* Effect.forEach(rows, (row) =>
+                Effect.gen(function* () {
+                  const session = yield* db.select({ target: SessionTable.target, directory: SessionTable.directory })
+                    .from(SessionTable)
+                    .where(eq(SessionTable.id, SessionSchema.ID.make(row.child_session_id)))
+                    .get()
+                  const result = yield* db.select({ summary: SessionTaskResultTable.summary })
+                    .from(SessionTaskResultTable)
+                    .where(eq(SessionTaskResultTable.invocation_input_id, row.input_id))
+                    .get()
+                  const events = yield* db.select({ type: EventTable.type, data: EventTable.data })
+                    .from(EventTable)
+                    .where(eq(EventTable.aggregate_id, row.child_session_id))
+                    .all()
+                  return {
+                    child: row.child_session_id,
+                    backend: row.backend,
+                    state: row.state,
+                    outcome: row.outcome,
+                    summary: result?.summary,
+                    events: events.map((event) => ({ type: event.type, data: event.type.includes("failed") ? event.data : undefined })),
+                    target: session?.target,
+                    directory: session?.directory,
+                  }
+                }),
+              ),
               legacyMessages: (yield* db.select({ id: MessageTable.id }).from(MessageTable).where(eq(MessageTable.session_id, parent.id)).all()).length,
             }
           yield* Effect.sleep(Duration.millis(50))
