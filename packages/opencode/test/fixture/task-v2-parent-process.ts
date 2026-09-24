@@ -17,6 +17,7 @@ import { Effect, Duration } from "effect"
 import { Context } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 import { HttpApiApp } from "@/server/routes/instance/httpapi/server"
+import { Server } from "@/server/server"
 import { eq } from "drizzle-orm"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionMessage } from "@opencode-ai/core/session/message"
@@ -27,6 +28,10 @@ if (!directory || !llmURL) throw new Error("Missing Task V2 parent fixture confi
 const http = process.env.TASK_V2_TEST_HTTP === "true"
   ? HttpRouter.toWebHandler(HttpApiApp.createRoutes(), { disableLogger: true })
   : undefined
+if (process.env.TASK_V2_TEST_DEFAULT_HANDLER_FIRST === "true") {
+  const response = await Server.Default().app.request("/global/health")
+  if (!response.ok) throw new Error(`Default HTTP handler failed: ${response.status}`)
+}
 
 const outcome = await AppRuntime.runPromise(
   InstanceStore.Service.use((store) =>
@@ -163,4 +168,5 @@ const outcome = await AppRuntime.runPromise(
 
 console.log(`TASK_V2_PARENT_RESULT:${JSON.stringify(outcome)}`)
 await http?.dispose()
+if (process.env.TASK_V2_TEST_DEFAULT_HANDLER_FIRST === "true") await HttpApiApp.webHandler().dispose()
 await AppRuntime.dispose()
