@@ -70,14 +70,14 @@ Transit 不需要复制 Codex 的工具名、Agent 拓扑、默认并发数或�
 - **Child Session ID** 标识可复用的子会话及其历史；**Task invocation** 标识一次具体委派，由父 Session、父 assistant message、Task call ID 和对应 child input ID 关联。一次 `task_id` follow-up 是新的 invocation，不覆盖前一次结果。Session drain 或进程内 job 不是持久调用身份。
 - 由 Session input/execution owner 拥有接纳、晋升、执行和中断；Task 及控制工具只通过该 owner 操作，不建立另一套 durable job queue。legacy Task 可以经兼容 adapter 逐步接入，但同一动作不能存在两套互相矛盾的状态真值。
 - 父 Agent 只能列出、发送、等待和中断自己当前父 Session 直接委派且仍被允许控制的 child。知道 ID 不构成权限。用户的 TUI 可在其现有 Session 访问范围内查看和控制；嵌套委派由实际直接父 Session 控制。所有新工具在 catalog 与执行 leaf 双重检查权限，不能绕过 child 的 deny、Location policy 或用户批准。
-- Child 保留自身 Location；目标选择及校验遵守 RFC-0018。控制操作按 child 的实际 Location/owner 路由，远端不可达时报告不可用，不回退到本机。Agent 定义、模型、经济信息和访问状态分别沿用 RFC-0014/0016；控制消息不提升为用户授权或系统指令。
-- 并发限制、深度限制和资源预算是显式配置/策略；达到上限时在创建前拒绝或明确标为 `queued_capacity`，不得返回“已运行”。v1 推荐保留现有并发行为并先实现准确状态，后续再增加可配置配额；不从 Codex 猜一个默认数字。
+- Child 保留自身 Location；目标选择及校验遵守 RFC-0018。控制机上的 Session execution owner 与 Rexd 工作区执行能力分别判断：持久状态/结果查询及本地 durable pending 取消无需 Rexd 连通；当前控制进程仍持有 owner 时可请求中断其执行链，但须单独报告远端进程停止是否得到确认；依赖目标执行能力的新调用按现有 Location 策略拒绝。所有分支都不得本机 fallback，也不把 target ID 当成 owner 身份。Agent 定义、模型、经济信息和访问状态分别沿用 RFC-0014/0016；控制消息不提升为用户授权或系统指令。
+- v1 对一个 root 委派树设有限 active 配额，计入所有代际正在执行、等待权限/问题以及 owner unknown 且尚未明确处置的调用；持久 pending 不占 active 配额，但有独立有限队列上限。具体数值由实施契约固定并在 API 返回。超限在新调用接纳前明确拒绝；不引入独立的 `queued_capacity` 调度器，也不返回“已运行”。已有深度限制与经济预算仍分别生效。
 
 ## 3. 生命周期和真实性
 
 ### 3.1 状态分层
 
-API 返回结构化 `TaskView`，至少含 `task_id`、`invocation`、description、agent、Location 非敏感摘要、`lifecycle`、`outcome?`、`runtime`、`phase`、`cancellation`、`observed_at`、`last_progress_at?`、当前工具的名称/调用 ID/开始时间、结果引用与截断摘要。列表可分页且有界，不能返回原始命令参数、凭据或无限 transcript。
+API 返回结构化 `TaskView`，至少含 `task_id`、`invocation`、description、agent、Location 非敏感摘要、`lifecycle`、`outcome?`、`runtime`、`phase`、`cancellation`、观测来源/代际/时间、`last_progress_at?`、有界当前工具列表与总数、结果引用与截断摘要。列表可分页且有界，不能返回原始命令参数、凭据或无限 transcript。
 
 建议的公共形状如下；字段名与 wire 编码在实施前由 Schema/Protocol 契约固定。`result` 的摘要限 2 KiB UTF-8，完整内容仍经既有 Session 内容权限读取。
 
@@ -101,14 +101,19 @@ type TaskView = {
   runtime: "observed" | "unknown" | "unavailable"
   phase: "queued" | "model" | "tool" | "permission" | "question" | "unknown"
   cancellation: "none" | "requested" | "observed"
-  observed_at: number
+  lifecycle_source: "durable" | "legacy_projection"
+  runtime_observation?: { source: "execution_owner"; owner_generation: string; observed_at: number }
+  read_at: number
   last_progress_at?: number
-  active_tool?: { name: string; call_id: string; started_at?: number }
+  active_tools: { name: string; call_id: string; started_at?: number }[]
+  active_tool_count: number
+  active_invocation?: TaskTarget["invocation"]
+  queued_count: number
   result?: { message_id?: string; summary?: string; truncated: boolean }
 }
 ```
 
-`location.directory` 只对已有权限查看 child Location 的用户/父 Agent 返回；通用列表和同步摘要可省略。`observed_at` 是读取时间，不能用它刷新 `last_progress_at`。旧记录缺少 invocation 时标为 `unscoped_legacy`，不能成为精确 steer 或 interrupt 的目标。
+`location.directory` 只对已有权限查看 child Location 的用户/父 Agent 返回；通用列表和同步摘要可省略。`read_at` 是本次读取时间；`runtime_observation.observed_at` 是 owner 实际观测时间，读取缓存不能刷新它，也不能刷新 `last_progress_at`。`owner_generation` 只在当前进程内比较，不能同步；对外只暴露不含进程秘密的代际摘要。`active_tools` 有界、按调用 ID 去重，`active_tool_count` 是未截断总数；已完成工具经有界近期事件另行展示。旧记录缺少 invocation 时标为 `unscoped_legacy`，不能成为精确 steer 或 interrupt 的目标。
 
 | 维度           | 值与含义                                                                                   |
 | -------------- | ------------------------------------------------------------------------------------------ |
@@ -120,6 +125,8 @@ type TaskView = {
 
 旧 `running` part 只证明工具调用曾开始。进程退出、Instance scope 释放、连接断开、TUI 重连、超时和没有新文本，都不能自动投影为 `completed` 或 `cancelled`。执行 owner 的存活观测和 Session 的持久结算须分别携带来源与时间。若 owner 已失而持久调用未结算，显示 `active + runtime: unknown` 或有明确失败证据的 `unavailable`，UI 写“运行状态未知/执行连接不可用”，不能继续显示无条件旋转的“正在工作”。读取此状态不会自动恢复 provider 调用。
 
+`promoted` 只证明输入进入持久历史并可构造上下文；不证明 provider 已接收、模型已理解或工具已执行。UI 不得标作“已读”；如需实际使用证据，关联后续 provider turn/context。
+
 一次 Task invocation 最多有一个不可逆的 terminal outcome。完成与中断竞争时，以执行 owner 已确认并持久提交的先到终结事实为准；重复事件幂等。子 Session 结束一次调用后仍可接纳明确的新 follow-up，不因一次取消而永久删除。
 
 ### 3.2 后台存活边界
@@ -129,6 +136,8 @@ type TaskView = {
 明确的父 Session 用户停止、child 中断、Session 删除、应用退出各有独立契约。普通父回复不触发递归取消；用户停止整个父 Session 时是否递归中断其直接/间接 child，沿用现有显式停止行为并在 UI 显示受影响范围。Task 的 foreground 取消保持现有调用所有权；后台中断必须走指定 invocation。删除与同步 tombstone 的 barrier 优先，不能让迟到结果通知复活已删除父 Session。
 
 v1 不承诺 child 在应用退出后继续运行。若用户需求是真正跨进程持续执行，应另立具备 durable ownership、外部副作用对账和恢复策略的 RFC；本 RFC 只要求重启后准确报告未结算状态、保存已发生的消息，并提供用户主动检查或新建调用的途径。不得仅凭旧输入自动重放模型或工具。
+
+委派输入有显式 execution eligibility。运行中 A 的 steer S 绑定 A 的 input 与 owner generation；A 失去 owner 后，S 转为 `not_delivered(owner_lost)`，不能混入新调用。A 之后已接纳的 queued B/C 保持可见但冻结，直到用户逐项明确继续或取消；新的询问 D 在 B/C 未处置或无法确认旧 owner 排他终止时拒绝执行，绝不能用普通 wake 顺带晋升旧输入。A 保持 `unknown`，不伪造失败/取消；跨控制进程或设备失联不代表原执行已经停止，同一 child 的新执行须待显式处置且确认安全。查询、sync 导入及 record-only 对账不调用模型。
 
 ## 4. 父子互动契约
 
@@ -144,14 +153,17 @@ v1 不承诺 child 在应用退出后继续运行。若用户需求是真正跨�
 | `task_send`      | 向**正在执行的指定 invocation** 补充信息        | 返回接纳回执；idle/unknown 时拒绝；不启动下一轮 |
 | `task_wait`      | 等待指定任务的终结、重要变化或用户输入          | 有界事件等待；取消等待不取消 child              |
 | `task_interrupt` | 请求中断指定 invocation                         | 校验预期调用；保留 child 历史供询问与显式续接   |
+| `task_stop`      | 停止直属 child 的当前及队列快照                 | 原子范围屏障；逐项返回覆盖和确认状态            |
 
-模型工具、TUI 和 Server/Client 消费同一控制服务和状态 schema。TUI 可以提供“查看、补充、等待、停止”的用户入口；其操作遵守用户本身的权限，不伪装成 Agent 工具调用。
+模型工具、TUI 和 Server/Client 消费同一控制服务和状态 schema。TUI 可以提供“查看、补充、等待、精确中断、停止全部”的用户入口；其操作遵守用户本身的权限，不伪装成 Agent 工具调用。
 
-`task_status` 无目标时分页列出直属 child 的最新 invocation，目标查询最多 32 项；结果列表按持久委派顺序而非轮询时间排序。`include_results` 默认为 false。显式目标必须全部校验授权后再返回；未知与无权使用相同外部错误，避免枚举 Session。跨页使用固定枚举上界的 opaque cursor，新任务不插入旧分页。查询是只读的，不消费结果或通知。
+`task_status` 无目标时分页列出直属 child，每项包含 active invocation、queued count 和最新结算摘要；指定 child 时可按持久顺序分页列出该 child 的全部 active、pending 和历史 invocation，或精确查询 invocation；显式目标最多 32 项。结果列表按持久委派顺序而非轮询时间排序。`include_results` 默认为 false。显式目标必须全部校验授权后再返回；未知与无权使用相同外部错误，避免枚举 Session。跨页使用固定枚举上界的 opaque cursor，新任务不插入旧分页。状态查询不消费结果或通知，也不唤醒模型；若发现 child 已终结但父结果缺失，只允许执行 §5 的幂等 record-only 对账。控制请求必须带 invocation，只有只读 legacy 响应允许缺省。
 
 ### 4.2 Steer、follow-up 与回执
 
 `task_send` 仅对当前明确 active 的 invocation 做条件接纳，使用 Session durable inbox 的 `steer` delivery，在该 child 下一个安全 provider-turn 边界晋升。它的返回值为 `input_id` 和 `state: admitted`，**不写“已送达模型”**。`task_status` 可以用同一 `input_id` 查询 `admitted`、`promoted` 或 `not_delivered(reason)`。若完成/取消抢先发生，输入变为 `not_delivered`，不能泄漏到下次 follow-up，也不单独唤醒 idle child。重复相同调用幂等，冲突重用失败。
+
+所有新调用及控制共用 Session owner 的短串行边界：校验 expected child input、owner generation、适用 Location revision，与 guard 接纳、pending 取消或中断意图线性化；不得先查 status 再调用无条件 prompt/Session-ID interrupt。该边界不持锁等待 provider、工具或网络。旧 invocation 清理和 guard 处置完成后才晋升下一项。关联及结果引用在对应接纳/结算边界持久化，不读取 child Session 的“最后一条消息”猜测归属。
 
 `task(task_id=...)` 是独立 queued follow-up。原 invocation 被工具阻塞时，它可以被持久接纳，但返回必须说“已排队”，不能说“运行中的 child 已收到”。两个 follow-up 按确定顺序晋升，分别保有结果和通知；单个 background job 的最后一个输出不能覆盖前面的调用。父 Agent 的指令是任务数据，不能改变用户授权、子 Agent 权限或项目指令。用户可见的 steer 也需标明来源和送达状态。
 
@@ -178,6 +190,8 @@ sequenceDiagram
 
 `task_interrupt` 对已结算调用返回 `already_settled`；对未晋升的 follow-up 取消其 input；对 active 调用在执行 owner 内校验预期 invocation 后返回 `requested`，最终由结算事件确认。owner 不可用返回 `unavailable`，不把意图写成成功取消。同一 child 正执行下一项任务时，对旧 invocation 的请求不能取消新工作。系统尽力传播 AbortSignal 并释放所拥有的工具/子进程；若原生 I/O 或外部作业不可撤销，结果不得宣称已回滚其副作用。中断当前调用不自动删除 child Session，也不暗中清空其他已排队 follow-up；UI 显示余下队列。
 
+精确中断后，未冻结的 eligible queue 可在 A 清理完成后继续晋升；UI 必须明确提示。用户的“停止此子任务全部工作”是另一个同 owner 的原子范围操作：以线性化点取得 active 与 pending 快照，取消快照内队列输入、请求精确中断 active，并返回各项 `cancelled_pending`、`requested`、`already_settled` 或 `unavailable`。屏障之后新接纳的调用不在本次范围内；若要禁止后续接纳，须另行停止父 Session。精确中断不递归取消已派生孙任务；已有“停止整个 Session”的递归范围沿既有规则，范围停止也只覆盖直属 child 的调用，不赋予任意跨树控制权。
+
 **打断、询问、继续是三次有归属的动作。** `task_interrupt` 停止的是当前 invocation，不是暂停可恢复的工具栈；父 Agent 先用 `task_wait` 或 `task_status` 确认中断已结算，再读取该 child 已持久化的消息/工具进度。若需要 child 自己解释进展，父 Agent 对同一个 `task_id` 提交一项明确的 follow-up，让它依据保存的历史回答；之后再提交继续工作的 follow-up。新的调用保留同一 child Session 的上下文，但有新的 invocation、结果和通知，不能声称从原 bash、远端进程或 provider 输出的精确指令处续跑。若仍有更早排队的 follow-up，询问按队列次序等待；状态须显示这一事实，父 Agent 不得宣称问题已即时送达。用户也可选择不中断，直接查看只读状态，或用 `task_send` 请求 child 在下一个安全边界报告进展；该请求只有 `promoted` 后才算进入 child 模型上下文，且不保证立即答复。
 
 控制操作至少区分 `unknown_or_forbidden`、`invocation_conflict`、`not_running`、`unavailable` 和真正已结算结果；`task_wait` 另有 `terminal`、`state_changed`、`needs_input`、`parent_input`、`timeout` 返回原因。错误不得退化为一条泛化的 “Task cancelled”，也不得把进程失联变成可安全重试的授权。状态读取可以返回有界的最近结果，不能因此启动模型或改变 child 状态。
@@ -186,9 +200,11 @@ sequenceDiagram
 
 每个 invocation 以关联 child input 的唯一终结事实确定结果，保存结果 message 引用和有界摘要。后台 Task 工具返回 `running` 仅表示启动/接纳，不是工作完成。前台调用仍通过原工具结果返回，不重复注入同一内容。
 
-后台 `completed/failed/cancelled` 在父 Session 中产生一个有来源标识的 durable delegation-result 输入，关联 task ID、invocation 和结算身份；重试不得重复生成。投递须与父 Session 删除屏障协调，不能向已删除或同步 tombstoned 的父会话写入通知。子输出不能冒充用户消息或系统指令，仍按工具结果的非可信内容处理。结果投递生产者不等待父模型执行，避免与 `task_wait` 构成循环等待。
+后台 `completed/failed/cancelled` 先在 child aggregate 独立提交唯一 terminal 事实及对应结果引用。随后在父 Session aggregate 的**一个复合 durable event** 中同时投影 invocation 结果和可选 delegation-result 输入；不假定两个 aggregate 跨库原子，也不把两次独立 publish 当作一个提交。事件包含父/child invocation、确切 terminal identity、不可变 outcome、结果引用、有界摘要、稳定通知 input ID、固定模板/载荷版本及受信任 origin envelope。input ID 由父 Session、invocation 和 terminal identity 确定；精确重试复用相同载荷与版本，冲突复用报错。origin 由 Session 内部 schema 设置，普通用户 prompt 和 child 文本不可伪造；子输出仍是不可信工具结果。
 
-父正在执行或等待时，结果事件使等待结束并在既有安全边界成为父 Agent 可见输入。父已 idle、用户明确停止或程序刚重启时，完成状态及人类 TUI 通知仍可查看，但不擅自启动新的父模型请求；下一次用户或 Agent 明确继续时再消费该输入。TUI toast、父模型输入和系统即时通知是不同通道，分别说明是否实际投递。通知失败可重试，幂等键保证不会重复唤醒或重复计费。普通进度默认只在状态/TUI 展示，不因每条进度自动调用父模型。
+父 aggregate 的存在性、remove-wins tombstone 检查与复合 event 提交受**同一个删除屏障**保护。child terminal 已提交但父提交前崩溃时，允许在父显式激活/查询或当前服务生命周期的正常完成路径，以关联的 child terminal 做 record-only reconciliation，补齐父结果与通知输入；不得重跑 child、调用默认会 wake 的 prompt，或取 child 最后一条消息猜结果。父提交后的通知重试只对账稳定 ID。sync 导入只重建投影，不取得本机唤醒资格。保证是本地可用持久存储中每个 terminal 恰有一个相同通知输入，并能再次观察；不保证模型调用、网络传输或外部副作用 exactly-once。结果生产者提交后只发 advisory wake，不等待父模型执行。
+
+父正在执行或等待时，结果事件使等待结束并在既有安全边界成为父 Agent 可见输入。**当前服务生命周期中正常 idle、仍有该次授权后台委派唤醒资格**的父 Session 可由持久结果触发一次 advisory wake，让父 Agent 按其当前上下文汇总；多个结果遵守父 Session 串行调度和既有预算，按稳定 input ID 限制重复 admission/wake。用户明确停止撤销此前委派的自动唤醒资格；完成与停止竞争以同一父 owner 边界的先后为准，迟到或重试通知不能绕过停止。冷恢复、重启、sync 导入、状态查询、父 Location 不可执行均只展示结果与人类通知，不隐式调用父 provider；新用户输入可按既有规则恢复正常处理。TUI toast、父模型输入和系统即时通知分别显示真实投递状态。普通进度只在状态/TUI 展示，不逐条调用父模型。
 
 ## 6. TUI、CLI 与观测
 
@@ -196,11 +212,13 @@ sequenceDiagram
 - Child 页面先加载持久历史再订阅实时事件。若消息已在库中，不能显示完全空白且没有加载/错误说明；重连后须与权威快照对账。当前 invocation 与更早历史有明确边界，恢复 `task_id` 不把旧文本当作新进度。
 - 当前工具只展示名称、开始时间、已观测持续时长和最近事件时间；长时间无事件显示“上次观测于…”，不能推断卡死、模型仍在思考或文件扫描百分比。权限/问题采用现有交互通道。完成、失败、取消、owner unknown 使用不同标识和可展开原因。
 - Full TUI、`run`/mini 和 Server/Client 对同一 Task 状态得出相同结论；终端布局可不同。视图不直接查数据库。列表和摘要有界，隐藏原始工具参数、私密路径、凭据和不属于调用者的 Session 内容。
-- 对实验开关关闭或旧服务端，控制工具与按钮不出现或报告明确的 capability unavailable；旧 transcript 保持可读，无法归属的历史标为 `unscoped_legacy`，不得伪造精确当前状态。
+- 对实验开关关闭或旧服务端，停止接纳新后台控制能力，但保留已接纳任务的人工查看、pending 取消和可用 owner 的停止入口；旧 transcript 保持可读，无法归属的历史标为 `unscoped_legacy`，不得伪造精确当前状态。
 
 ## 7. 持久化、兼容和故障处理
 
 Session 继续拥有输入、消息、调用关联和终结事实；BackgroundJob 可作为执行中的临时调度部件，不能作为重启后的唯一状态来源。读路径从持久事实加当前执行 owner 观测构造视图。既有 legacy Task 的 `task_id` 和历史记录继续可读；新字段可选且版本化，迁移不得把历史 `running` 一概改成 cancelled/failed。若需要新的 public Protocol/HttpApi 字段，按仓库规则生成 Client/SDK，不能直接编辑生成文件。
+
+当前 `packages/opencode/src/tool/task.ts` 仍经 `TaskPromptOps.prompt` 执行，`BackgroundJob.extend` 以进程内 tail 排队；Core SessionInput/SessionTurn 契约并未自然覆盖它们。实施须交付共同 admission/settlement 接口，让新 Task 路径和控制面实际消费同一个 durable inbox、owner 和关联结算；BackgroundJob 只可保留宿主/兼容观测，不拥有第二条执行队列或最后结果真值。状态可先用 legacy projection 诊断；只有 backend 实现精确 guard、队列、取消、结果及通知全部能力，才整体开放五个控制工具、API 和 TUI 动作。未满足 capability 的 legacy 路径明确返回 `unsupported`，不得以同名 API 偷偷降级到 `TaskPromptOps.prompt` 或 Session-ID 裸 interrupt。此 backend 指执行接纳适配能力，不把 local/Rexd Location 当成两套语义。
 
 进程或 Instance generation 更换时，旧 owner token 失效；新进程可识别并显示未结算调用，但不能默默接管和重复执行。远端 Rexd 断线分离 controller 观测失败与 target 侧执行是否结束；不触发本机 fallback。多设备 Session sync 可以传输持久消息/结果，但运行时 owner、设备局部状态和凭据不随 sync 复制；另一设备不得声称自己正在执行或自动中断原设备的 child。删除采用 RFC-0010 的 remove-wins 规则。
 
@@ -225,14 +243,14 @@ sequenceDiagram
 
 实施 issue 已先建档以便评审依赖；**RFC-0023 仍是 Draft，以下 feature issue 均明确 blocked、并非 Ready**。每项实施使用自己的 semantic branch、worktree 和 PR，issue 是任务状态的唯一实时来源。现有行为的两项 bug 可先独立处理，但不得借修 bug 偷偷启用本 RFC 的新控制语义。
 
-| 阶段 | Issue 与独立结果                                                                                                                                                                                                                                            | 前置条件                                                     |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| 0    | [#561](https://github.com/hammershock/opencode-transit/issues/561)：后台 child 执行所有权；[#562](https://github.com/hammershock/opencode-transit/issues/562)：已有 child 消息的空白视图；均已合并                                                          | 已完成；不依赖 RFC 接受                                      |
-| 1    | [#563](https://github.com/hammershock/opencode-transit/issues/563)：持久结算加当前 owner 观测的统一 Task 状态                                                                                                                                               | RFC-0023 接受；#561                                          |
-| 2    | [#564](https://github.com/hammershock/opencode-transit/issues/564)：父 Agent 的只读 `task_status`；[#565](https://github.com/hammershock/opencode-transit/issues/565)：active steer 与 queued follow-up                                                     | RFC-0023 接受；#563；两项可并行且需协调共享 contract         |
-| 3    | [#566](https://github.com/hammershock/opencode-transit/issues/566)：有界事件等待；[#567](https://github.com/hammershock/opencode-transit/issues/567)：精确中断；现有 [#431](https://github.com/hammershock/opencode-transit/issues/431)：当前与历史进度展示 | #566/#567 依赖 #563、#565；#431 依赖 #562，沿用已合并的 #430 |
-| 4    | [#568](https://github.com/hammershock/opencode-transit/issues/568)：幂等结果通知与删除屏障                                                                                                                                                                  | #563、#565、#566、#567                                       |
-| 5    | [#569](https://github.com/hammershock/opencode-transit/issues/569)：父 TUI 协作入口及 mini/run 验收                                                                                                                                                         | #562、#564–#568、#431；选址 UI 的实测另与现有 #547 衔接      |
+| 阶段 | Issue 与独立结果                                                                                                                                                                                                                                                      | 前置条件                                                     |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| 0    | [#561](https://github.com/hammershock/opencode-transit/issues/561)：后台 child 执行所有权；[#562](https://github.com/hammershock/opencode-transit/issues/562)：已有 child 消息的空白视图；均已合并                                                                    | 已完成；不依赖 RFC 接受                                      |
+| 1    | [#563](https://github.com/hammershock/opencode-transit/issues/563)：共同 admission/settlement 接口、legacy capability 桥接、持久结算加当前 owner 观测的统一 Task 状态                                                                                                 | RFC-0023 接受；#561                                          |
+| 2    | [#564](https://github.com/hammershock/opencode-transit/issues/564)：父 Agent 的只读 `task_status`；[#565](https://github.com/hammershock/opencode-transit/issues/565)：active steer 与 queued follow-up                                                               | RFC-0023 接受；#563；两项可并行且需协调共享 contract         |
+| 3    | [#566](https://github.com/hammershock/opencode-transit/issues/566)：有界事件等待；[#567](https://github.com/hammershock/opencode-transit/issues/567)：精确中断与范围停止；现有 [#431](https://github.com/hammershock/opencode-transit/issues/431)：当前与历史进度展示 | #566/#567 依赖 #563、#565；#431 依赖 #562，沿用已合并的 #430 |
+| 4    | [#568](https://github.com/hammershock/opencode-transit/issues/568)：幂等结果通知与删除屏障                                                                                                                                                                            | #563、#565、#566、#567                                       |
+| 5    | [#569](https://github.com/hammershock/opencode-transit/issues/569)：父 TUI 协作入口及 mini/run 验收                                                                                                                                                                   | #562、#564–#568、#431；选址 UI 的实测另与现有 #547 衔接      |
 
 已合并的 #429/#430/#433 是现有取消与 invocation 基础，不重新开任务。[#426](https://github.com/hammershock/opencode-transit/issues/426) 继续保留其诊断职责。RFC-0018 的跨 Target Task 基础 [#547](https://github.com/hammershock/opencode-transit/issues/547) 已交付；本 RFC 的控制面必须读取 child 的真实 Location。
 
@@ -252,16 +270,22 @@ sequenceDiagram
 | 父/child 所在 Instance dispose、程序正常/异常退出后重启               | 无终态任务呈 unknown/unavailable；历史保留，无自动 provider/tool 重放，无永久假旋转                          |
 | 远端 child 断连、重新连接、target 失效                                | 状态来源和错误准确，控制按真实 Location 路由，不回退本机                                                     |
 | 父 Session 删除与迟到结果并发                                         | 无通知复活或跨设备重现；不向无权调用者泄漏内容                                                               |
+| child terminal 后、父复合提交前/后、advisory wake 前/后分别崩溃       | record-only 对账后每次恰有一个父通知输入；父删除或 sync tombstone 竞争时不复活；无 child 重放                |
+| A active，B/C pending；父重连后停止全部，A 同时完成                   | 列出 A/B/C；B/C 不执行；返回范围屏障覆盖与逐项状态；屏障后新接纳的任务不被误伤                               |
+| A 终结、B 晋升时反复发送 steer/interrupt(A)                           | B 不接收 A 的 steer、不被 A 的中断取消；Task、API、TUI 同结果；不支持的 backend 明确拒绝                     |
+| A 有未晋升 steer S、旧 follow-up B/C，真实进程退出后提交新询问 D      | A unknown、S not_delivered、B/C 冻结可见；D 不顺带执行 B/C；原副作用计数不增加，查询与 sync 导入不发模型请求 |
+| Rexd 断线，controller owner 仍在                                      | 仍可读历史/结果、取消 pending、请求中断本地 owner；远端副作用未确认就明确报告，绝不本机 fallback             |
+| 正常 idle 的父收到结果，同时用户停止                                  | 有资格时父自动接回一次；停止胜出则撤销资格，迟到/重试通知不唤醒；冷恢复不唤醒                                |
 
 测试先用可控 Deferred、临时数据库与隔离目录证明状态竞态和取消传播，再从精确 PR head 建立 clean Mac candidate，并实测完整 TUI 与 `run`/mini。TUI 变化需截图或录屏；执行/通知/恢复需脱敏日志。跨 Target 控制或断线行为需要真实 Rexd 目标；多设备同步/删除边界变化按 `docs/testing-workflow.md` 选择双设备验收。不能用 Mac 成功推断 WSL2 通过，也不能用进程内模拟证明重启恢复。生产 Session 只作只读诊断，不用于破坏性测试。
 
 ## 待评审的产品选择
 
-1. 本 RFC 取代未接受的 RFC-0015 控制草案作为后台执行总契约；保持其中的四个控制工具方向，RFC-0015 不再独立实施。
+1. 本 RFC 拟取代未接受的 RFC-0015 控制草案作为后台执行总契约，并实质纳入其共同接纳/结算、原子控制及结果恢复契约；增加范围停止工具。RFC-0015 在本 RFC 接受后退休，接受前仍为独立 Draft 而非已获实施授权。
 2. v1 后台存活范围为当前应用服务生命周期；退出后未结算工作显示 unknown，禁止自动重放。真正跨进程继续工作另立 RFC。
 3. 父 Agent 仅控制直属 child；用户 TUI 仍按已有 Session 访问范围操作。
 4. `task_send` 是 active-only steer，`task(task_id=...)` 是 queued follow-up，二者回执不得混用。
-5. 终结结果持久、幂等；父 idle、用户停止或重启后仅人类可见，不擅自启动父模型。
-6. 精确中断当前 invocation 后，child Session 和已保存历史保留；询问进展与继续工作须分别明确提交新 invocation，不承诺恢复原工具栈。其他已排队 follow-up 保留；停止整个工作组需要显式范围操作或逐项取消。
+5. 终结结果持久、幂等；当前服务生命周期中正常 idle 且保留授权资格的父可自动接回一次。用户停止撤销资格；冷恢复、重启和 sync 导入只恢复可见记录，不自动唤醒。
+6. 精确中断当前 invocation 后，child Session 和已保存历史保留；询问进展与继续工作须分别明确提交新 invocation，不承诺恢复原工具栈。其他 eligible follow-up 可继续；停止全部使用有原子快照屏障的范围操作。
 
 接受这些选择后才能把后续实现 issue 标为 Ready；如果评审改变任一项，应先更新本 RFC 的状态机、验收场景和与 RFC-0015 的关系。
