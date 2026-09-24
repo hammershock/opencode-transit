@@ -18,6 +18,7 @@ import {
   RunVariantSelectBody,
 } from "@/cli/cmd/run/footer.command"
 import { RunFooterView } from "@/cli/cmd/run/footer.view"
+import { RunFooterSubagentBody } from "@/cli/cmd/run/footer.subagent"
 import { RunEntryContent } from "@/cli/cmd/run/scrollback.writer"
 import { RUN_THEME_FALLBACK, type RunTheme } from "@/cli/cmd/run/theme"
 import type {
@@ -310,6 +311,40 @@ test("direct footer composer area does not adopt footer surface", async () => {
     expect(area.backgroundColor.toInts()).not.toEqual(surface.toInts())
   } finally {
     app.cleanup()
+  }
+})
+
+test("subagent inspector keeps navigation visible at narrow width", async () => {
+  const app = await testRender(
+    () => (
+      <box width={58} height={14}>
+        <RunFooterSubagentBody
+          active={() => true}
+          theme={() => RUN_THEME_FALLBACK}
+          tab={() => subagent({ sessionID: "child-a", label: "Explore", description: "Inspect child A" })}
+          index={() => 1}
+          total={() => 2}
+          otherActive={() => 1}
+          detail={() => ({ sessionID: "child-a", commits: [], observedAt: Date.now() })}
+          width={() => 58}
+          onCycle={() => {}}
+          onClose={() => {}}
+        />
+      </box>
+    ),
+    { width: 58, height: 14 },
+  )
+  try {
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+    if (process.env.OPENCODE_SUBAGENT_FRAMES) {
+      await Bun.write(`${process.env.OPENCODE_SUBAGENT_FRAMES}/subagent-narrow.txt`, frame)
+    }
+    expect(frame).toContain("Inspect child A")
+    expect(frame).toContain("Current call")
+    expect(frame).toContain("1 other active")
+  } finally {
+    app.renderer.destroy()
   }
 })
 
@@ -1490,6 +1525,129 @@ test("subagent selection keeps two invocations of one child independently naviga
     app.mockInput.pressKey("ARROW_DOWN")
     app.mockInput.pressEnter()
     expect(selected).toEqual(["first-call", "second-call"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("subagent inspector keeps the selected call and exposes history on demand", async () => {
+  const [tab] = createSignal(subagent({ sessionID: "child-a", label: "Explore", description: "Current A" }))
+  const [otherActive, setOtherActive] = createSignal(0)
+  const detail = {
+    sessionID: "child-a",
+    commits: [{ kind: "system", source: "system", phase: "final", text: "Current result" }],
+    history: [{ kind: "system", source: "system", phase: "final", text: "Old installation message" }],
+  } satisfies FooterSubagentState["details"][string]
+  const app = await testRender(
+    () => (
+      <box width={100} height={14}>
+        <RunFooterSubagentBody
+          active={() => true}
+          theme={() => RUN_THEME_FALLBACK}
+          tab={tab}
+          index={() => 1}
+          total={() => 2}
+          otherActive={otherActive}
+          detail={() => detail}
+          width={() => 100}
+          onCycle={() => {}}
+          onClose={() => {}}
+        />
+      </box>
+    ),
+    { width: 100, height: 14 },
+  )
+  try {
+    await app.renderOnce()
+    if (process.env.OPENCODE_SUBAGENT_FRAMES) {
+      await Bun.write(`${process.env.OPENCODE_SUBAGENT_FRAMES}/subagent-normal.txt`, app.captureCharFrame())
+    }
+    expect(app.captureCharFrame()).toContain("Current A")
+    expect(app.captureCharFrame()).toContain("Current call")
+    setOtherActive(1)
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("1 other active")
+    app.mockInput.pressKey("h")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("History · running")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("subagent inspector labels a blocked tool and advancing observation age", async () => {
+  const [clock, setClock] = createSignal(10_000)
+  const [detail, setDetail] = createSignal<FooterSubagentState["details"][string]>({
+    sessionID: "child-a",
+    observedAt: 9_000,
+    commits: [
+      {
+        kind: "tool",
+        source: "tool",
+        phase: "start",
+        text: "Reading file",
+        partID: "tool-a",
+        tool: "read",
+        toolState: "running",
+        part: {
+          id: "tool-a",
+          sessionID: "child-a",
+          messageID: "assistant-a",
+          type: "tool",
+          callID: "call-a",
+          tool: "read",
+          state: { status: "running", input: { filePath: "secret-file" }, time: { start: 8_000 } },
+        },
+      },
+    ],
+  })
+  const app = await testRender(
+    () => (
+      <box width={100} height={14}>
+        <RunFooterSubagentBody
+          active={() => true}
+          theme={() => RUN_THEME_FALLBACK}
+          tab={() => subagent({ sessionID: "child-a", label: "Explore", description: "Inspect child A" })}
+          index={() => 1}
+          total={() => 1}
+          otherActive={() => 0}
+          detail={detail}
+          width={() => 100}
+          clock={clock}
+          onCycle={() => {}}
+          onClose={() => {}}
+        />
+      </box>
+    ),
+    { width: 100, height: 14 },
+  )
+  try {
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("Observed tool: read · running · elapsed 2s")
+    expect(app.captureCharFrame()).toContain("Last event observed 1s ago")
+    setClock(12_000)
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("elapsed 4s")
+    expect(app.captureCharFrame()).toContain("Last event observed 3s ago")
+    setDetail({
+      ...detail(),
+      commits: [
+        ...detail().commits,
+        {
+          kind: "tool",
+          source: "tool",
+          phase: "final",
+          text: "Done",
+          partID: "tool-a",
+          tool: "read",
+          toolState: "completed",
+        },
+        detail().commits[0]!,
+      ],
+    })
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("No pending or running tool observed")
+    expect(app.captureCharFrame()).toContain("Recent: read completed")
   } finally {
     app.renderer.destroy()
   }

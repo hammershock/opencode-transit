@@ -206,6 +206,7 @@ export type FooterSubagentDetail = {
   commits: StreamCommit[]
   history?: StreamCommit[]
   unscoped?: boolean
+  observedAt?: number
 }
 
 export type FooterSubagentState = {

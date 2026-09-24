@@ -30,6 +30,7 @@ type BootstrapChildMessage = SessionMessage & {
 type Frame = {
   key: string
   commit: StreamCommit
+  observedAt?: number
 }
 
 type DetailState = {
@@ -406,7 +407,7 @@ function mergeLiveCommit(current: StreamCommit, next: StreamCommit) {
   return merged
 }
 
-function appendCommits(detail: DetailState, commits: StreamCommit[]) {
+function appendCommits(detail: DetailState, commits: StreamCommit[], live = false) {
   let changed = false
 
   for (const commit of commits.map(compactCommit)) {
@@ -416,6 +417,7 @@ function appendCommits(detail: DetailState, commits: StreamCommit[]) {
       detail.frames.push({
         key,
         commit,
+        ...(live ? { observedAt: Date.now() } : {}),
       })
       changed = true
       continue
@@ -429,6 +431,7 @@ function appendCommits(detail: DetailState, commits: StreamCommit[]) {
     detail.frames[index] = {
       key,
       commit: next,
+      ...(live ? { observedAt: Date.now() } : {}),
     }
     changed = true
   }
@@ -570,7 +573,7 @@ function applyChildEvent(input: {
     thinking: input.thinking,
     limits: input.limits,
   })
-  const changed = appendCommits(input.detail, out.commits)
+  const changed = appendCommits(input.detail, out.commits, true)
   compactDetail(input.detail)
 
   return changed || queueChanged(input.detail.data, before)
@@ -671,6 +674,10 @@ function snapshotDetail(detail: DetailState, tab: FooterSubagentTab) {
     sessionID: detail.sessionID,
     commits: commits.filter(belongs),
     history: commits.filter((commit) => !belongs(commit)),
+    observedAt:
+      detail.frames
+        .filter((item) => belongs(item.commit))
+        .reduce((max, item) => Math.max(max, item.observedAt ?? 0), 0) || undefined,
   }
 }
 
@@ -729,10 +736,7 @@ export function snapshotSubagentData(data: SubagentData): FooterSubagentState {
   )
 }
 
-export function snapshotSelectedSubagentData(
-  data: SubagentData,
-  selectedKey: string | undefined,
-): FooterSubagentState {
+export function snapshotSelectedSubagentData(data: SubagentData, selectedKey: string | undefined): FooterSubagentState {
   const tab = selectedKey ? data.tabs.get(selectedKey) : undefined
   const detail = tab ? data.details.get(tab.sessionID) : undefined
 
@@ -873,29 +877,37 @@ export function reduceSubagentData(input: {
     }
 
     return (
-      appendCommits(detail, [
-        {
-          kind: "error",
-          text: event.properties.status.message,
-          phase: "start",
-          source: "system",
-          messageID: `retry:${event.properties.status.attempt}`,
-        },
-      ]) || cancelled
+      appendCommits(
+        detail,
+        [
+          {
+            kind: "error",
+            text: event.properties.status.message,
+            phase: "start",
+            source: "system",
+            messageID: `retry:${event.properties.status.attempt}`,
+          },
+        ],
+        true,
+      ) || cancelled
     )
   }
 
   if (event.type === "session.error" && event.properties.error) {
     return (
-      appendCommits(detail, [
-        {
-          kind: "error",
-          text: formatError(event.properties.error),
-          phase: "start",
-          source: "system",
-          messageID: `session.error:${event.properties.sessionID}:${formatError(event.properties.error)}`,
-        },
-      ]) || cancelled
+      appendCommits(
+        detail,
+        [
+          {
+            kind: "error",
+            text: formatError(event.properties.error),
+            phase: "start",
+            source: "system",
+            messageID: `session.error:${event.properties.sessionID}:${formatError(event.properties.error)}`,
+          },
+        ],
+        true,
+      ) || cancelled
     )
   }
 

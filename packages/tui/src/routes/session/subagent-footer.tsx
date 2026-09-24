@@ -1,9 +1,10 @@
-import { createMemo, createSignal, Show } from "solid-js"
+import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js"
+import { TaskInvocation } from "@opencode-ai/core/v1/task-invocation"
 import { useRouteData } from "../../context/route"
 import { useSync } from "../../context/sync"
 import { useTheme } from "../../context/theme"
 import { SplitBorder } from "../../ui/border"
-import type { AssistantMessage } from "@opencode-ai/sdk/v2"
+import type { AssistantMessage, ToolPart } from "@opencode-ai/sdk/v2"
 import { Locale } from "../../util/locale"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useCommandShortcut, useOpencodeKeymap } from "../../keymap"
@@ -13,6 +14,60 @@ export function SubagentFooter() {
   const sync = useSync()
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
   const session = createMemo(() => sync.session.get(route.sessionID))
+  const [now, setNow] = createSignal(Date.now())
+  onMount(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    onCleanup(() => clearInterval(timer))
+  })
+  const invocation = createMemo(() => {
+    const parentID = session()?.parentID
+    if (!parentID) return
+    return (sync.data.message[parentID] ?? [])
+      .flatMap((message) =>
+        (sync.data.part[message.id] ?? []).filter(
+          (part): part is ToolPart => part.type === "tool" && part.tool === "task",
+        ),
+      )
+      .filter((part) => {
+        const metadata = "metadata" in part.state ? part.state.metadata : undefined
+        return metadata?.sessionId === route.sessionID || metadata?.sessionID === route.sessionID
+      })
+      .at(-1)
+  })
+  const boundary = createMemo(() => {
+    const part = invocation()
+    return part && "metadata" in part.state ? TaskInvocation.read(part.state.metadata?.invocation) : undefined
+  })
+  const current = createMemo(() => {
+    const call = boundary()
+    if (!call) return
+    return messages()
+      .filter((message) => TaskInvocation.includes(call, message))
+      .flatMap((message) => (sync.data.part[message.id] ?? []).filter((item): item is ToolPart => item.type === "tool"))
+      .findLast((item) => item.state.status === "running" || item.state.status === "pending")
+  })
+  const startedAt = createMemo(() => {
+    const state = current()?.state
+    return state?.status === "running" ? state.time.start : undefined
+  })
+  const observed = createMemo(() => {
+    const call = boundary()
+    if (!call) return
+    return messages()
+      .filter((message) => TaskInvocation.includes(call, message))
+      .at(-1)?.time.created
+  })
+  const otherActive = createMemo(() => {
+    const parentID = session()?.parentID
+    if (!parentID) return 0
+    return sync.data.session.filter(
+      (item) =>
+        item.parentID === parentID &&
+        item.id !== route.sessionID &&
+        sync.data.session_status[item.id]?.type !== "idle" &&
+        sync.data.session_status[item.id] !== undefined,
+    ).length
+  })
 
   const subagentInfo = createMemo(() => {
     const s = session()
@@ -125,6 +180,21 @@ export function SubagentFooter() {
               </text>
             </box>
           </box>
+        </box>
+        <box flexDirection="row" justifyContent="space-between" gap={1}>
+          <text fg={theme.textMuted} wrapMode="none" truncate flexGrow={1}>
+            {invocation() ? `Latest call · ${invocation()!.state.status}` : "History · invocation unknown"}
+            {current() ? ` · ${current()!.tool} ${current()!.state.status}` : " · no running tool observed"}
+            {startedAt() ? ` · elapsed ${Math.max(0, Math.floor((now() - startedAt()!) / 1000))}s` : ""}
+            {observed()
+              ? ` · last record ${Math.max(0, Math.floor((now() - observed()!) / 1000))}s ago`
+              : " · freshness unknown"}
+          </text>
+          <Show when={otherActive() > 0}>
+            <text fg={theme.text} wrapMode="none" truncate flexShrink={0}>
+              {otherActive()} other active · Next
+            </text>
+          </Show>
         </box>
       </box>
     </box>
