@@ -26,6 +26,7 @@ RFC（Request for Comments）用于记录本 fork 中影响多个模块或核心
 | [0019](0019-target-descriptions.md)            | Target Descriptions                    | Accepted |
 | [0020](0020-model-context-inspection.md)       | Model Context Inspection               | Draft    |
 | [0021](0021-location-execution-permissions.md) | Location-derived Execution Permissions | Accepted |
+| [0022](0022-tool-execution-deadlines.md)       | Agent-visible Tool Execution Deadlines | Draft    |
 
 RFC-0018 的前置设计 RFC-0017（[PR #502](https://github.com/hammershock/opencode-transit/pull/502)）已交付；RFC-0018 另依赖 RFC-0019 与 RFC-0021。已接受的 RFC-0018 不代表跨 Target Task 能力已实现。
 
