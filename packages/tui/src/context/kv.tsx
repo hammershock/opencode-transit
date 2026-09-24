@@ -54,11 +54,11 @@ export const { use: useKV, provider: KVProvider } = createSimpleContext({
       set(key: string, value: any) {
         setStore(key, value)
         const snapshot = structuredClone(unwrap(store))
-        write = write
-          .then(() => Flock.withLock(lock, () => writeJsonAtomic(file, snapshot)))
-          .catch((error) => {
+        const pending = write.then(() => Flock.withLock(lock, () => writeJsonAtomic(file, snapshot)))
+        write = pending.catch((error) => {
             console.error("Failed to write KV state", { error })
           })
+        return pending
       },
     }
     return result

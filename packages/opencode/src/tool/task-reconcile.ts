@@ -12,7 +12,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Cause, Effect, Option, Schema } from "effect"
 import { Tool } from "./tool"
 
-const Parameters = Schema.Struct({
+export const Parameters = Schema.Struct({
   target: SessionTask.ExactTarget,
   disposition: Schema.Literals(["resume_pending", "cancel_pending"]),
 })

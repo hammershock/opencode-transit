@@ -42,6 +42,12 @@ export const legacyTaskPromptOps = {
   features: new Set<Feature>(["atomic_admission", "exact_result"]),
 } satisfies Backend
 
+/** The V2 inbox, owner, and Task result services implement the complete control contract. */
+export const sessionV2 = {
+  id: "session_v2",
+  features: new Set<Feature>(required),
+} satisfies Backend
+
 export class Unsupported extends Error {
   readonly code = "task_control_unsupported"
   constructor(readonly missing: readonly Feature[]) {

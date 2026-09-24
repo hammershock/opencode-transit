@@ -11,7 +11,7 @@ import { SessionTask } from "./task"
 import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
-import { SessionInputTable, SessionMessageTable, SessionTaskSteerTable, SessionTaskTable } from "./sql"
+import { MessageTable, SessionInputTable, SessionMessageTable, SessionTaskSteerTable, SessionTaskTable } from "./sql"
 import { EventTable } from "../event/sql"
 
 type DatabaseService = Database.Interface["db"]
@@ -91,6 +91,12 @@ export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict
   id: SessionMessage.ID,
 }) {}
 
+export class PromptBackendConflict extends Error {
+  constructor() {
+    super("Session prompt backend conflicts with its existing transcript")
+  }
+}
+
 export const admit = Effect.fn("SessionInput.admit")(function* (
   db: DatabaseService,
   events: EventV2.Interface,
@@ -124,7 +130,20 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
         delivery: input.delivery,
         ...(input.task ? { task: input.task } : {}),
       },
-      input.commit ? { commit: input.commit } : undefined,
+      {
+        commit: () =>
+          Effect.gen(function* () {
+            const legacy = yield* db
+              .select({ id: MessageTable.id })
+              .from(MessageTable)
+              .where(eq(MessageTable.session_id, input.sessionID))
+              .limit(1)
+              .get()
+              .pipe(Effect.orDie)
+            if (legacy) return yield* Effect.die(new PromptBackendConflict())
+            if (input.commit) yield* input.commit()
+          }),
+      },
     )
     .pipe(
       Effect.flatMap((event) =>

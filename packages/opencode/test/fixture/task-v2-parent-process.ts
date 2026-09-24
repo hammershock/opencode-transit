@@ -1,0 +1,107 @@
+import { AppRuntime } from "@/effect/app-runtime"
+import { InstanceStore } from "@/project/instance-store"
+import { SessionV2 } from "@opencode-ai/core/session"
+import { AgentV2 } from "@opencode-ai/core/agent"
+import { ProviderV2 } from "@opencode-ai/core/provider"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { Location } from "@opencode-ai/core/location"
+import { AbsolutePath } from "@opencode-ai/core/schema"
+import { Database } from "@opencode-ai/core/database/database"
+import { MessageTable, SessionMessageTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
+import { Catalog } from "@opencode-ai/core/catalog"
+import { LocationServiceMap } from "@opencode-ai/core/location-services"
+import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
+import { Effect, Duration } from "effect"
+import { Context } from "effect"
+import { HttpRouter } from "effect/unstable/http"
+import { HttpApiApp } from "@/server/routes/instance/httpapi/server"
+import { eq } from "drizzle-orm"
+import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionMessage } from "@opencode-ai/core/session/message"
+
+const directory = process.env.TASK_V2_TEST_DIRECTORY
+const llmURL = process.env.TASK_V2_TEST_LLM_URL
+if (!directory || !llmURL) throw new Error("Missing Task V2 parent fixture configuration")
+const http = process.env.TASK_V2_TEST_HTTP === "true"
+  ? HttpRouter.toWebHandler(HttpApiApp.createRoutes(), { disableLogger: true })
+  : undefined
+
+const outcome = await AppRuntime.runPromise(
+  InstanceStore.Service.use((store) =>
+    store.provide(
+      { directory },
+      Effect.gen(function* () {
+        const model = { providerID: ProviderV2.ID.make("test"), id: ModelV2.ID.make("test-model") }
+        const session = yield* SessionV2.Service
+        const parent = yield* session.create({
+          location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
+          approvalMode: "auto",
+          agent: AgentV2.ID.make("build"),
+          model,
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+        const locations = yield* LocationServiceMap.Service
+        const location = yield* (yield* SessionLocationAccess.Service).require(parent.id)
+        yield* Catalog.Service.use((catalog) =>
+          catalog.transform((draft) => {
+            draft.provider.update(model.providerID, (provider) => {
+              provider.api = { type: "aisdk", package: "@ai-sdk/openai-compatible", url: llmURL, settings: {} }
+              provider.request.body.apiKey = "test-key"
+            })
+            draft.model.update(model.providerID, model.id, () => {})
+          }),
+        ).pipe(Effect.provide(locations.get(location)))
+        const text = process.env.TASK_V2_TEST_CONTROL === "status" ? "PARENT_STATUS_MARKER" : "PARENT_TASK_MARKER"
+        const admitted = http
+          ? yield* Effect.promise(async () => {
+              const response = await http.handler(
+                new Request(`http://localhost/api/session/${parent.id}/prompt`, {
+                  method: "POST",
+                  headers: { "content-type": "application/json", "x-opencode-directory": directory },
+                  body: JSON.stringify({ prompt: { text } }),
+                }),
+                Context.empty() as Context.Context<unknown>,
+              )
+              const body = await response.json() as { data?: { id: string } }
+              if (response.status !== 200 || !body.data) throw new Error(`HTTP V2 prompt failed: ${response.status} ${JSON.stringify(body)}`)
+              return { id: SessionMessage.ID.make(body.data.id) }
+            })
+          : yield* session.prompt({ sessionID: parent.id, prompt: { text } })
+        const db = (yield* Database.Service).db
+        if (process.env.TASK_V2_TEST_CONTROL === "status") {
+          for (let attempt = 0; attempt < 240; attempt++) {
+            if (yield* SessionInput.isSettled(db, parent.id, admitted.id))
+              return {
+                parent: parent.id,
+                rows: [],
+                legacyMessages: (yield* db.select({ id: MessageTable.id }).from(MessageTable).where(eq(MessageTable.session_id, parent.id)).all()).length,
+                messages: yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, parent.id)).all(),
+              }
+            yield* Effect.sleep(Duration.millis(50))
+          }
+          return yield* Effect.die("V2 parent status call never settled")
+        }
+        for (let attempt = 0; attempt < 240; attempt++) {
+          const rows = yield* db
+            .select()
+            .from(SessionTaskTable)
+            .where(eq(SessionTaskTable.parent_session_id, parent.id))
+            .all()
+          if (rows.length > 0)
+            return {
+              parent: parent.id,
+              rows: rows.map((row) => ({ child: row.child_session_id, backend: row.backend, state: row.state })),
+              legacyMessages: (yield* db.select({ id: MessageTable.id }).from(MessageTable).where(eq(MessageTable.session_id, parent.id)).all()).length,
+            }
+          yield* Effect.sleep(Duration.millis(50))
+        }
+        const messages = yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, parent.id)).all()
+        return yield* Effect.die(`V2 parent provider never admitted Task: ${JSON.stringify(messages)}`)
+      }).pipe(Effect.scoped),
+    ),
+  ),
+)
+
+console.log(`TASK_V2_PARENT_RESULT:${JSON.stringify(outcome)}`)
+await http?.dispose()
+await AppRuntime.dispose()

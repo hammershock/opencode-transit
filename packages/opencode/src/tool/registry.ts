@@ -23,6 +23,7 @@ import { TaskWaitTool } from "./task-wait"
 import { TaskInterruptTool } from "./task-interrupt"
 import { TaskStopTool } from "./task-stop"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
+import { taskBackendNode } from "@/effect/task-backend"
 import { ConfigExperimental } from "@opencode-ai/core/config/experimental"
 import { Database } from "@opencode-ai/core/database/database"
 import { TodoWriteTool } from "./todo"
@@ -506,6 +507,7 @@ export const node = LayerNode.make({
     Database.node,
     Ripgrep.node,
     TargetRegistry.node,
+    taskBackendNode,
   ],
 })
 

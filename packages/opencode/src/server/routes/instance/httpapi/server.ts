@@ -77,7 +77,6 @@ import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
-import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/local"
 import { lazy } from "@/util/lazy"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@opencode-ai/server/cors"
@@ -115,9 +114,9 @@ import { syncHandlers } from "./handlers/sync"
 import { tuiHandlers } from "./handlers/tui"
 import { handlers } from "@opencode-ai/server/handlers"
 import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
-import { buildLocationServiceMap, localProvider, LocationServiceMap } from "@opencode-ai/core/location-services"
-import { rexdLocationProvider } from "@/rexd/location"
+import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { rexdTargetRegistryNode } from "@/rexd/target-registry"
+import { sessionLocationMap } from "@/effect/session-location-map"
 import { layer as locationLayer } from "@opencode-ai/server/location"
 import { sessionLocationLayer } from "@opencode-ai/server/middleware/session-location"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
@@ -312,13 +311,7 @@ export function createRoutes(
   corsOptions?: CorsOptions,
   taskBackend?: SessionTaskCapability.Backend,
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
-  const locationServiceMapV2 = buildLocationServiceMap(
-    [
-      [TargetRegistry.node, rexdTargetRegistryNode],
-      [SessionRunnerModel.node, OpenCodeSessionRunnerModel.node],
-    ],
-    [localProvider, rexdLocationProvider],
-  )
+  const locationServiceMapV2 = sessionLocationMap
 
   return Layer.mergeAll(
     rootApiRoutes,
@@ -327,7 +320,7 @@ export function createRoutes(
     instanceRoutes,
     taskBackend
       ? serverRoutes.pipe(Layer.provide(Layer.succeed(SessionTaskCapability.Service, taskBackend)))
-      : serverRoutes,
+      : serverRoutes.pipe(Layer.provide(Layer.succeed(SessionTaskCapability.Service, SessionTaskCapability.sessionV2))),
     docRoute,
     uiRoute,
   ).pipe(

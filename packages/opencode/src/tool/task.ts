@@ -29,9 +29,9 @@ import { Prompt } from "@opencode-ai/core/session/prompt"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
 import { ModelV2 } from "@opencode-ai/core/model"
-import { SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
+import { SessionMessageTable, SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import path from "path"
 import { Location } from "@opencode-ai/core/location"
 import { TargetRegistry } from "@opencode-ai/core/target-registry"
@@ -696,17 +696,34 @@ export const TaskTool = Tool.define(
       const childPolicy = planned.crossTarget
         ? filterCrossTargetPermission({ permission: childPermission, boundary })
         : { permission: childPermission, boundary }
-      const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
-        Effect.provideService(Database.Service, database),
-        Effect.orDie,
-      )
-      if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
-      const variant = msg.info.variant
+      const canonical = yield* database.db
+        .select()
+        .from(SessionMessageTable)
+        .where(
+          and(
+            eq(SessionMessageTable.id, SessionMessage.ID.make(ctx.messageID)),
+            eq(SessionMessageTable.session_id, SessionV2.ID.make(ctx.sessionID)),
+          ),
+        )
+        .get()
+      const assistant = canonical?.type === "assistant"
+        ? Schema.decodeUnknownOption(SessionMessage.Assistant)({ ...canonical.data, id: canonical.id, type: "assistant" }).valueOrUndefined
+        : undefined
+      const legacy = assistant
+        ? undefined
+        : yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.orDie,
+          )
+      const legacyAssistant = legacy?.info.role === "assistant" ? legacy.info : undefined
+      if (!assistant && !legacyAssistant)
+        return yield* Effect.fail(new Error("Not an assistant message"))
+      const useV2 = taskBackend.id === "session_v2" && assistant !== undefined
+      const variant = assistant?.model.variant ?? legacyAssistant?.variant
 
-      const model = destAgent.model ?? {
-        modelID: msg.info.modelID,
-        providerID: msg.info.providerID,
-      }
+      const model = destAgent.model ?? (assistant
+        ? { modelID: assistant.model.id, providerID: assistant.model.providerID }
+        : { modelID: legacyAssistant!.modelID, providerID: legacyAssistant!.providerID })
       const previous = ctx.callID
         ? yield* SessionTask.findInvocation(database.db, { parentMessageID: ctx.messageID, callID: ctx.callID })
         : undefined
@@ -763,14 +780,15 @@ export const TaskTool = Tool.define(
         }
       })
       if (previous) {
-        if (taskBackend.id === "session_v2" && previous.backend !== "v2")
+        if (useV2 && previous.backend !== "v2")
           return yield* Effect.fail(
             new TaskPlacementError("task_control_unsupported", "Legacy Task child has no V2 inbox"),
           )
+        if (!useV2 && previous.backend === "v2") return yield* Effect.fail(new SessionTask.AdmissionConflict())
         if (!matchesPrior(previous)) return yield* Effect.fail(new SessionTask.AdmissionConflict())
         return yield* priorReceipt(previous)
       }
-      if (taskBackend.id === "session_v2") {
+      if (useV2) {
         const capability = SessionTaskCapability.evaluate(taskBackend)
         if (capability.status === "unsupported")
           return yield* Effect.fail(new SessionTaskCapability.Unsupported(capability.missing))

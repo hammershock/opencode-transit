@@ -18,6 +18,12 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     headers?: RequestInit["headers"]
     events?: EventSource
     sseInactivityMs?: number
+    archiveUnknown?: (input: {
+      parentSessionID: string
+      childSessionID: string
+      inputID: string
+      operationID: string
+    }) => Promise<{ inputID: string; archived: boolean }>
   }) => {
     const abort = new AbortController()
     const remoteStatus = useRemoteStatus()
@@ -250,6 +256,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       event: emitter,
       fetch: trackedFetch,
       request,
+      archiveUnknown: props.archiveUnknown,
       url: props.url,
     }
   },

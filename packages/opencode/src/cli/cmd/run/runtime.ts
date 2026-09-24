@@ -532,6 +532,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         directory: ctx.directory,
         sessionID: state.sessionID,
         thinking: input.thinking,
+        backgroundSubagents: input.backgroundSubagents,
         replay: input.replay,
         replayLimit: input.replayLimit,
         limits: () => state.limits,

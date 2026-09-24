@@ -217,6 +217,7 @@ export function hoist<A, E, T extends Tag, const Items extends Replacements = re
   readonly hoisted: Node<unknown, E>
 } {
   const hoisted = new Map<string, AnyNode>()
+  const originals = new Map<string, AnyNode>()
   const replacementMap = replacementMapFrom(replacements)
 
   const node = walk<AnyNode>(
@@ -226,11 +227,13 @@ export function hoist<A, E, T extends Tag, const Items extends Replacements = re
         return { ...node, dependencies: node.dependencies.map(context.visit) }
       }
       if (node.tag === tag) {
-        const existing = hoisted.get(node.name)
-        if (existing && existing !== node) {
+        const normalized = rewriteReplacementDependencies(node, replacementMap)
+        const existing = originals.get(node.name)
+        if (existing && !sameImplementation(existing, normalized)) {
           throw new Error(`Tag ${tag} has conflicting implementations for ${node.name}`)
         }
-        hoisted.set(node.name, rewriteReplacementDependencies(node, replacementMap))
+        originals.set(node.name, normalized)
+        hoisted.set(node.name, normalized)
         return group([])
       }
       if (node.kind === "unbound") {
@@ -245,6 +248,19 @@ export function hoist<A, E, T extends Tag, const Items extends Replacements = re
     node: node as Node<A, E>,
     hoisted: group(Array.from(hoisted.values())) as Node<unknown, E>,
   }
+}
+
+function sameImplementation(left: AnyNode, right: AnyNode): boolean {
+  return (
+    left === right ||
+    (left.kind === right.kind &&
+      left.name === right.name &&
+      left.tag === right.tag &&
+      left.service === right.service &&
+      left.implementation === right.implementation &&
+      left.dependencies.length === right.dependencies.length &&
+      left.dependencies.every((dependency, index) => sameImplementation(dependency, right.dependencies[index]!)))
+  )
 }
 
 export function compile<A, E, const Items extends Replacements = readonly []>(

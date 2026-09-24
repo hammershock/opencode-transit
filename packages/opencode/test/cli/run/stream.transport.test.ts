@@ -452,6 +452,52 @@ function sdk(
 }
 
 describe("run stream transport", () => {
+  test("canonical mini turn uses its durable settlement rather than legacy idle", async () => {
+    const legacy = eventFeed()
+    const client = sdk({ status: () => ok({}), stream: legacy.stream })
+    const ui = footer()
+    const events = feed<unknown>()
+    spyOn(client.v2.session, "promptBackend").mockImplementation(() => ok({ data: "v2" }) as never)
+    spyOn(client.v2.session, "prompt").mockImplementation(() =>
+      ok({ data: { admittedSeq: 1, id: "msg-user" } }) as never,
+    )
+    spyOn(client.v2.session, "events").mockImplementation(() => sse(events.stream as never) as never)
+    const transport = await createSessionTransport({
+      sdk: client,
+      sessionID: "session-1",
+      thinking: true,
+      backgroundSubagents: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+    const turn = transport.runPromptTurn({
+      agent: undefined,
+      model: undefined,
+      variant: undefined,
+      prompt: { messageID: "msg-user", text: "hello", parts: [] },
+      files: [],
+      includeFiles: false,
+    })
+    try {
+      await waitFor(() => ui.events.find((event) => event.type === "turn.wait"))
+      events.push({ type: "session.next.prompted", data: { messageID: "msg-user" } })
+      events.push({ type: "session.next.step.started", data: { assistantMessageID: "msg-assistant" } })
+      events.push({
+        type: "session.next.text.ended",
+        data: { assistantMessageID: "msg-assistant", text: "canonical reply" },
+      })
+      await Bun.sleep(300)
+      expect(ui.commits.some((commit) => commit.text === "canonical reply")).toBe(false)
+      events.push({ type: "session.next.turn.settled", data: { messageID: "msg-user", outcome: "completed" } })
+      await turn
+      expect(ui.commits).toContainEqual(expect.objectContaining({ kind: "assistant", text: "canonical reply" }))
+    } finally {
+      events.close()
+      legacy.close()
+      await transport.close()
+    }
+  })
+
   test("does not replay persisted main-session history during bootstrap by default", async () => {
     const src = eventFeed()
     const ui = footer()

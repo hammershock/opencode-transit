@@ -11,7 +11,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Cause, Effect, Option, Schema } from "effect"
 import { Tool } from "./tool"
 
-const Parameters = Schema.Struct({ target: SessionTask.ExactTarget })
+export const Parameters = Schema.Struct({ target: SessionTask.ExactTarget })
 
 export const TaskInterruptTool = Tool.define(
   "task_interrupt",

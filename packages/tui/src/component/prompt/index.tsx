@@ -90,6 +90,7 @@ import {
   type TuiSlashCommand,
 } from "../../command-toolkit/host"
 import { adaptKeymapCommands, adaptServerCommands } from "../../command-toolkit/upstream"
+import { promptBackend } from "../../util/prompt-backend"
 
 registerOpencodeSpinner()
 
@@ -1396,7 +1397,22 @@ export function Prompt(props: PromptProps) {
         agents: nonTextParts.filter((part) => part.type === "agent").map((part) => ({ name: part.name })),
         skills: skillMentions,
       }
-      const admissionSignature = skillMentions.length
+      const v2Prompt = skillMentions.length
+        ? true
+        : sync.data.capabilities.experimentalBackgroundSubagents
+          ? await promptBackend(sessionID, sdk.request)
+              .then((backend) => backend === "v2")
+              .catch((error) => {
+                toast.show({ title: "Prompt unavailable", message: errorMessage(error), variant: "error" })
+                return undefined
+              })
+          : false
+      if (v2Prompt === undefined) {
+        if (finishMoveProgress) move.finishSubmit()
+        input.focus()
+        return false
+      }
+      const admissionSignature = v2Prompt
         ? JSON.stringify({ agent: agent.name, model: selectedModel, variant, prompt: skillPrompt })
         : undefined
       // The server may durably admit the prompt before the response is lost.
@@ -1423,7 +1439,7 @@ export function Prompt(props: PromptProps) {
         ],
       })
       if (props.sessionID) sync.message.optimistic.add(optimistic)
-      if (!skillMentions.length) {
+      if (!v2Prompt) {
         try {
           await sdk.client.v2.session.revert.commit({ sessionID }, { throwOnError: true })
         } catch (error) {
@@ -1434,7 +1450,7 @@ export function Prompt(props: PromptProps) {
           return false
         }
       }
-      const request = skillMentions.length
+      const request = v2Prompt
         ? sdk.client.v2.session.get({ sessionID }, { throwOnError: true }).then(async (current) => {
             if (current.data.data.agent !== agent.name)
               await sdk.client.v2.session.switchAgent({ sessionID, agent: agent.name }, { throwOnError: true })

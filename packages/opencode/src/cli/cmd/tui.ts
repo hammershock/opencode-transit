@@ -286,6 +286,9 @@ export const TuiThreadCommand = cmd({
             fetch: transport.fetch,
             headers: transport.headers,
             events: transport.events,
+            archiveUnknown: external
+              ? undefined
+              : (request) => client.call("archiveUnknown", { ...request, directory: cwd }),
             args: {
               continue: args.continue,
               sessionID: args.session,

@@ -17,6 +17,8 @@ import type {
   SessionsSwitchAgentOutput,
   SessionsSwitchModelInput,
   SessionsSwitchModelOutput,
+  SessionsPromptBackendInput,
+  SessionsPromptBackendOutput,
   SessionsPromptInput,
   SessionsPromptOutput,
   SessionsCompactInput,
@@ -479,6 +481,17 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+      promptBackend: (input: SessionsPromptBackendInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsPromptBackendOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/prompt/backend`,
+            successStatus: 200,
+            declaredStatuses: [404, 503, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
       prompt: (input: SessionsPromptInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: SessionsPromptOutput }>(
           {
@@ -486,7 +499,7 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/prompt`,
             body: { id: input["id"], prompt: input["prompt"], delivery: input["delivery"], resume: input["resume"] },
             successStatus: 200,
-            declaredStatuses: [409, 400, 404, 401],
+            declaredStatuses: [409, 400, 404, 503, 401],
             empty: false,
           },
           requestOptions,

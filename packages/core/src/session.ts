@@ -518,6 +518,8 @@ const layer = Layer.effect(
                 Effect.catchDefect((defect) =>
                   defect instanceof SessionInput.LifecycleConflict
                     ? new PromptConflictError({ sessionID: input.sessionID, messageID })
+                    : defect instanceof SessionInput.PromptBackendConflict
+                      ? new PromptConflictError({ sessionID: input.sessionID, messageID })
                     : Effect.die(defect),
                 ),
               )
@@ -1224,7 +1226,7 @@ const resolvePrompt = (input: PromptInput.Prompt) =>
       const target = URL.canParse(file.uri) ? new URL(file.uri).pathname : (file.name ?? file.uri)
       return {
         ...file,
-        mime: dataMime ?? (target.endsWith("/") ? "application/x-directory" : FSUtil.mimeType(target)),
+        mime: file.mime ?? dataMime ?? (target.endsWith("/") ? "application/x-directory" : FSUtil.mimeType(target)),
       }
     }),
   })

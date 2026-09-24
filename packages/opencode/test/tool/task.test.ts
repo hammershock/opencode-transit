@@ -106,7 +106,7 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}, replacements: LayerNode.R
 const it = testEffect(layer())
 const background = testEffect(layer({ experimentalBackgroundSubagents: true }))
 
-background.instance("V2 Task adapter rejects a historical V1 child before admitting an inbox input", () =>
+background.instance("historical V1 parent keeps a historical child on the legacy backend with full V2 capability", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const { chat, assistant } = yield* seed()
@@ -125,8 +125,7 @@ background.instance("V2 Task adapter rejects a historical V1 child before admitt
     }
     const tool = yield* TaskTool.pipe(Effect.provideService(SessionTaskCapability.Service, backend))
     const def = yield* tool.init()
-    const exit = yield* def
-      .execute(
+    const receipt = yield* def.execute(
         {
           description: "continue old work",
           prompt: "continue",
@@ -146,9 +145,12 @@ background.instance("V2 Task adapter rejects a historical V1 child before admitt
           extra: { promptOps: stubOps() },
         },
       )
-      .pipe(Effect.exit)
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toMatchObject({ code: "task_control_unsupported" })
+    expect(receipt.metadata.sessionId).toBe(child.id)
+    const db = (yield* Database.Service).db
+    const rows = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.child_session_id, child.id)).all()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.backend).toBe("legacy")
+    expect(yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, child.id)).all()).toHaveLength(0)
   }),
 )
 const remoteTarget = Location.RexdTarget.make({
@@ -368,7 +370,7 @@ const seed = Effect.fn("TaskToolTest.seed")(function* (title = "Pinned") {
   return { chat, assistant }
 })
 
-test("V1 parent Task call admits a V2 child and first inbox input in the real App runtime", async () => {
+test("historical V1 parent stays on the legacy Task backend with full V2 capability in the real App runtime", async () => {
   await using temp = await tmpdir({ git: true, config: { experimental: { background_subagents: true } } })
   await AppRuntime.runPromise(
     Effect.gen(function* () {
@@ -380,67 +382,42 @@ test("V1 parent Task call admits a V2 child and first inbox input in the real Ap
         const backend: SessionTaskCapability.Backend = {
           id: "session_v2",
           features: new Set<SessionTaskCapability.Feature>([
-            "atomic_admission",
-            "exact_owner_guard",
-            "durable_queue",
-            "reconcile",
-            "exact_cancellation",
-            "exact_result",
-            "notification",
+            "atomic_admission", "exact_owner_guard", "durable_queue", "reconcile",
+            "exact_cancellation", "exact_result", "notification",
           ]),
         }
         const tool = yield* TaskTool.pipe(
           Effect.provideService(SessionTaskCapability.Service, backend),
           Effect.provideService(TargetRegistry.Service, TargetRegistry.make({ directory: temp.path })),
         )
-        expect((yield* Effect.serviceOption(SessionV2.Service))._tag).toBe("Some")
-        expect((yield* Effect.serviceOption(SessionExecution.Service))._tag).toBe("Some")
         const def = yield* tool.init()
-        const invoke = () =>
-          def.execute(
-            {
-              description: "inspect cache bug",
-              prompt: "check the cache key",
-              subagent_type: "general",
-              background: true,
-            },
-            {
-              sessionID: chat.id,
-              messageID: assistant.id,
-              callID: "call-v2-create",
-              agent: "build",
-              abort: new AbortController().signal,
-              messages: [],
-              metadata: () => Effect.void,
-              ask: () => Effect.void,
-            },
-          )
-        const [receipt, retry] = yield* Effect.all([invoke(), invoke()], { concurrency: "unbounded" })
+        const receipt = yield* def.execute(
+          {
+            description: "inspect cache bug",
+            prompt: "check the cache key",
+            subagent_type: "general",
+            background: true,
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID: "call-legacy-full-v2",
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: stubOps({ text: "legacy child completed" }) },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
         const task = yield* database.db
           .select()
           .from(SessionTaskTable)
           .where(eq(SessionTaskTable.child_session_id, receipt.metadata.sessionId))
           .get()
-        const inbox = yield* database.db
-          .select()
-          .from(SessionInputTable)
-          .where(eq(SessionInputTable.id, SessionMessage.ID.make(task!.input_id)))
-          .get()
-        expect(task?.backend).toBe("v2")
+        expect(task?.backend).toBe("legacy")
         expect(task?.parent_session_id).toBe(chat.id)
-        expect(inbox?.delivery).toBe("queue")
-        expect([receipt.output, retry.output].some((output) => output.includes(task!.input_id))).toBe(true)
-        expect([receipt.output, retry.output].find((output) => output.includes(task!.input_id))).toContain(
-          'state="admitted"',
-        )
-        expect(retry.metadata.sessionId).toBe(receipt.metadata.sessionId)
-        expect(
-          yield* database.db
-            .select()
-            .from(SessionTaskTable)
-            .where(eq(SessionTaskTable.parent_message_id, assistant.id))
-            .all(),
-        ).toHaveLength(1)
+        expect(yield* database.db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, receipt.metadata.sessionId)).all()).toHaveLength(0)
       }).pipe(Effect.provideService(InstanceRef, instance))
     }).pipe(Effect.scoped),
   )

@@ -1,4 +1,5 @@
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { Cause, DateTime, Effect, Option, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -28,6 +29,8 @@ import { SessionTaskResult } from "@opencode-ai/core/session/task-result"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
+import { MessageTable } from "@opencode-ai/core/session/sql"
+import { eq } from "drizzle-orm"
 
 const DefaultSessionsLimit = 50
 const DefaultSessionHistoryLimit = 50
@@ -44,6 +47,13 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       () => SessionTaskCapability.legacyTaskPromptOps,
     )
     const contextExtension = yield* Effect.serviceOption(SessionContextExtension.Service)
+    const hasLegacyHistory = (sessionID: SessionSchema.ID) =>
+      database.db
+        .select({ id: MessageTable.id })
+        .from(MessageTable)
+        .where(eq(MessageTable.session_id, sessionID))
+        .limit(1)
+        .get()
 
     return handlers
       .handle(
@@ -305,8 +315,31 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.promptBackend",
+        Effect.fn(function* (ctx) {
+          yield* session.get(ctx.params.sessionID).pipe(
+            Effect.catchTag(
+              "Session.NotFoundError",
+              () => new SessionNotFoundError({ sessionID: ctx.params.sessionID, message: "Session not found" }),
+            ),
+          )
+          const old = yield* hasLegacyHistory(ctx.params.sessionID).pipe(
+            Effect.mapError(() => new ServiceUnavailableError({ service: "prompt_backend", message: "Prompt backend unavailable" })),
+          )
+          return { data: old ? "legacy" as const : "v2" as const }
+        }),
+      )
+      .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
+          const old = yield* hasLegacyHistory(ctx.params.sessionID).pipe(
+            Effect.mapError(() => new ServiceUnavailableError({ service: "prompt_backend", message: "Prompt backend unavailable" })),
+          )
+          if (old)
+            return yield* new ConflictError({
+              resource: ctx.params.sessionID,
+              message: "This Session has legacy history; use its legacy prompt path",
+            })
           return {
             data: yield* session
               .prompt({
