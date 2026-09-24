@@ -2,8 +2,8 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { createInterface } from "node:readline"
-import { Context, Effect, Layer } from "effect"
-import { eq, sql } from "drizzle-orm"
+import { Context, DateTime, Effect, Layer } from "effect"
+import { asc, eq, sql } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -11,7 +11,13 @@ import { EventTable } from "@opencode-ai/core/event/sql"
 import { Global } from "@opencode-ai/core/global"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
-import { PartTable, SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
+import {
+  PartTable,
+  SessionTable,
+  SessionTaskOperationTable,
+  SessionTaskSteerTable,
+  SessionTaskTable,
+} from "@opencode-ai/core/session/sql"
 import { SessionTask } from "@opencode-ai/core/session/task"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { BaiduSyncProvider } from "@opencode-ai/core/sync/baidu-provider"
@@ -28,6 +34,8 @@ import { SyncSetup } from "@opencode-ai/core/sync/setup"
 import { Flock } from "@opencode-ai/core/util/flock"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
+import { SessionEvent } from "@opencode-ai/schema/session-event"
+import { Prompt } from "@opencode-ai/core/session/prompt"
 
 type Input = {
   readonly workerID: string
@@ -49,6 +57,13 @@ type Command =
       readonly holdSettlement?: boolean
     }
   | { readonly id: string; readonly op: "admit-task"; readonly sessionID: string; readonly childID: string }
+  | {
+      readonly id: string
+      readonly op: "task-v2"
+      readonly sessionID: string
+      readonly childID: string
+      readonly holdEvent?: "steer" | "reconciled"
+    }
   | { readonly id: string; readonly op: "flush-task"; readonly childID: string }
   | { readonly id: string; readonly op: "sync" }
   | { readonly id: string; readonly op: "expire-automatic-lease" }
@@ -356,6 +371,16 @@ await Effect.runPromise(
                   .where(eq(SessionTaskTable.child_session_id, sessionID))
                   .all(),
               )
+              const v2Tasks = await Effect.runPromise(
+                database
+                  .select()
+                  .from(SessionTaskTable)
+                  .where(eq(SessionTaskTable.child_session_id, sessionID))
+                  .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.input_id))
+                  .all(),
+              )
+              const steers = await Effect.runPromise(database.select().from(SessionTaskSteerTable).all())
+              const operations = await Effect.runPromise(database.select().from(SessionTaskOperationTable).all())
               const durable = await Effect.runPromise(
                 database
                   .select({ seq: EventTable.seq, type: EventTable.type })
@@ -391,6 +416,23 @@ await Effect.runPromise(
                   session: session ? { id: session.id, title: session.title } : undefined,
                   parts,
                   tasks,
+                  v2Tasks: v2Tasks.map((task) => ({
+                    inputID: task.input_id,
+                    state: task.state,
+                    eligibility: task.eligibility,
+                    backend: task.backend,
+                    abandoned: task.abandoned_unknown,
+                  })),
+                  steers: steers
+                    .filter((steer) => v2Tasks.some((task) => task.input_id === steer.invocation_input_id))
+                    .map((steer) => ({ inputID: steer.input_id, state: steer.state, reason: steer.reason })),
+                  operations: operations
+                    .filter((operation) => v2Tasks.some((task) => task.input_id === operation.input_id))
+                    .map((operation) => ({
+                      inputID: operation.input_id,
+                      disposition: operation.disposition,
+                      capacityState: operation.capacity_state,
+                    })),
                   durable,
                   deletion: Boolean(deletion),
                   controlProjection: controlProjection?.generation,
@@ -398,6 +440,170 @@ await Effect.runPromise(
                   lease,
                 },
               })
+              continue
+            }
+            if (command.op === "task-v2") {
+              const rootID = SessionV2.ID.make(command.sessionID)
+              const childID = SessionV2.ID.make(command.childID)
+              const root = await Effect.runPromise(
+                database.select().from(SessionTable).where(eq(SessionTable.id, rootID)).get(),
+              )
+              if (!root) throw new Error(`Parent Session not found: ${rootID}`)
+              const timestamp = Date.now()
+              const first = `msg_v2_${command.childID}_a`
+              const steer = `msg_v2_${command.childID}_steer`
+              const next = `msg_v2_${command.childID}_b`
+              const admission = {
+                inputID: first,
+                rootSessionID: rootID,
+                parentSessionID: rootID,
+                parentMessageID: `msg_parent_v2_${command.childID}_a`,
+                callID: `call_v2_${command.childID}_a`,
+                promptDigest: "v2-a",
+                childSessionID: childID,
+                description: "V2 sync work",
+                agentID: "build",
+                locationRevision: 0,
+                backend: "v2" as const,
+              }
+              const publish = async (
+                definition: Parameters<typeof events.publish>[0],
+                data: object,
+                at: number,
+                hold = false,
+              ) => {
+                const event = await Effect.runPromise(events.publish(definition, data))
+                const durable = event as Parameters<typeof SessionSync.capture>[1]
+                if (hold) heldTaskEvents.set(command.childID, durable)
+                else await Effect.runPromise(SessionSync.capture(store, durable, at))
+              }
+              await publish(
+                SessionV1.Event.Created,
+                {
+                  sessionID: childID,
+                  info: {
+                    id: childID,
+                    slug: command.childID,
+                    projectID: root.project_id,
+                    parentID: rootID,
+                    directory: root.directory,
+                    syncSpaceID: spaceID,
+                    title: "V2 sync task child",
+                    version: "test",
+                    time: { created: timestamp, updated: timestamp },
+                  },
+                  task: admission,
+                  taskInput: { messageID: first, prompt: Prompt.make({ text: "A" }), delivery: "queue" },
+                },
+                timestamp,
+              )
+              await publish(
+                SessionEvent.Prompted,
+                {
+                  sessionID: childID,
+                  messageID: first,
+                  timestamp: DateTime.makeUnsafe(timestamp),
+                  prompt: Prompt.make({ text: "A" }),
+                  delivery: "queue",
+                },
+                timestamp + 1,
+              )
+              await publish(
+                SessionEvent.PromptAdmitted,
+                {
+                  sessionID: childID,
+                  messageID: steer,
+                  timestamp: DateTime.makeUnsafe(timestamp + 2),
+                  prompt: Prompt.make({ text: "steer A" }),
+                  delivery: "steer",
+                  task: {
+                    kind: "steer",
+                    invocationInputID: first,
+                    operationID: `steer_${command.childID}`,
+                    promptDigest: "steer-a",
+                  },
+                },
+                timestamp + 2,
+                command.holdEvent === "steer",
+              )
+              if (command.holdEvent === "steer") {
+                emit({ type: "response", id: command.id, ok: true })
+                continue
+              }
+              await publish(
+                SessionEvent.PromptAdmitted,
+                {
+                  sessionID: childID,
+                  messageID: next,
+                  timestamp: DateTime.makeUnsafe(timestamp + 3),
+                  prompt: Prompt.make({ text: "B" }),
+                  delivery: "queue",
+                  task: {
+                    kind: "invocation",
+                    admission: {
+                      ...admission,
+                      inputID: next,
+                      parentMessageID: `msg_parent_v2_${command.childID}_b`,
+                      callID: `call_v2_${command.childID}_b`,
+                      promptDigest: "v2-b",
+                    },
+                  },
+                },
+                timestamp + 3,
+              )
+              await publish(
+                SessionTaskEvent.ArchivedUnknown,
+                {
+                  sessionID: childID,
+                  inputID: first,
+                  operationID: `archive_${command.childID}`,
+                  actorID: "sync-test-user",
+                  timestamp: timestamp + 4,
+                },
+                timestamp + 4,
+              )
+              await publish(
+                SessionTaskEvent.Reconciled,
+                {
+                  sessionID: childID,
+                  inputID: next,
+                  operationID: `resume_${command.childID}`,
+                  actorKind: "user",
+                  actorID: "sync-test-user",
+                  disposition: "resume_pending",
+                  capacityState: "available",
+                  timestamp: timestamp + 5,
+                },
+                timestamp + 5,
+                command.holdEvent === "reconciled",
+              )
+              if (command.holdEvent === "reconciled") {
+                emit({ type: "response", id: command.id, ok: true })
+                continue
+              }
+              await publish(
+                SessionEvent.Prompted,
+                {
+                  sessionID: childID,
+                  messageID: next,
+                  timestamp: DateTime.makeUnsafe(timestamp + 3),
+                  prompt: Prompt.make({ text: "B" }),
+                  delivery: "queue",
+                },
+                timestamp + 6,
+              )
+              await publish(
+                SessionTaskEvent.Settled,
+                {
+                  sessionID: childID,
+                  inputID: next,
+                  outcome: "completed",
+                  resultMessageID: `msg_v2_result_${command.childID}`,
+                  timestamp: timestamp + 7,
+                },
+                timestamp + 7,
+              )
+              emit({ type: "response", id: command.id, ok: true })
               continue
             }
             if (command.op === "task") {

@@ -22,6 +22,19 @@ type Message = {
       readonly outcome?: string
       readonly resultID?: string
     }[]
+    readonly v2Tasks?: readonly {
+      readonly inputID: string
+      readonly state: string
+      readonly eligibility: string
+      readonly backend: string
+      readonly abandoned: boolean
+    }[]
+    readonly steers?: readonly { readonly inputID: string; readonly state: string; readonly reason?: string }[]
+    readonly operations?: readonly {
+      readonly inputID: string
+      readonly disposition: string
+      readonly capacityState: string
+    }[]
     readonly durable?: readonly { readonly seq: number; readonly type: string }[]
     readonly deletion?: boolean
     readonly cursors: readonly { readonly device_id: string; readonly cursor: number }[]
@@ -91,7 +104,10 @@ function spawnWorker(input: { workerID: string; deviceID: string; deviceRoot: st
     const id = `${input.workerID}:${++sequence}`
     child.stdin.write(JSON.stringify({ id, ...body }) + "\n")
     const response = await waitFor((message) => message.type === "response" && message.id === id)
-    if (!response.ok) throw new Error(response.error ?? `${input.workerID} request failed`)
+    if (!response.ok)
+      throw new Error(
+        `${response.error ?? `${input.workerID} request failed`}; recent: ${JSON.stringify(messages.slice(-10))}`,
+      )
     return response
   }
   return {
@@ -440,3 +456,95 @@ test("syncs Task facts both ways and keeps deleted root and child projections ab
     await Promise.all([a.stop(), b.stop()])
   }
 }, 45_000)
+
+test("syncs V2 steer, frozen follow-up and reconcile facts both ways without reviving deleted projections", async () => {
+  await using tmp = await tmpdir()
+  const cloudRoot = path.join(tmp.path, "cloud")
+  const a = spawnWorker({ workerID: "v2-a", deviceID: "v2-device-a", deviceRoot: path.join(tmp.path, "a"), cloudRoot })
+  const b = spawnWorker({ workerID: "v2-b", deviceID: "v2-device-b", deviceRoot: path.join(tmp.path, "b"), cloudRoot })
+  try {
+    await Promise.all([a.ready(), b.ready()])
+    const root = "ses_sync_v2_root"
+    await a.request({ op: "create", sessionID: root, title: "V2 Task root" })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: root })).result?.session?.id === root,
+      "V2 root on device B",
+    )
+    for (const [source, destination, child] of [
+      [a, b, "ses_sync_v2_from_a"],
+      [b, a, "ses_sync_v2_from_b"],
+    ] as const) {
+      await source.request({ op: "task-v2", sessionID: root, childID: child })
+      await waitUntilAsync(async () => {
+        const facts = (await destination.request({ op: "query", sessionID: child })).result
+        return (
+          facts?.v2Tasks?.length === 2 &&
+          facts.v2Tasks[0]?.abandoned === true &&
+          facts.v2Tasks[1]?.state === "settled" &&
+          facts.v2Tasks[1]?.eligibility === "eligible" &&
+          facts.steers?.[0]?.state === "not_delivered" &&
+          facts.steers[0]?.reason === "owner_lost" &&
+          facts.operations?.[0]?.disposition === "resume_pending"
+        )
+      }, `V2 Task receipts for ${child} on the other device`)
+      const facts = (await destination.request({ op: "query", sessionID: child })).result
+      expect(facts?.v2Tasks?.map((task) => task.backend)).toEqual(["v2", "v2"])
+      expect(facts?.operations).toEqual([
+        { inputID: `msg_v2_${child}_b`, disposition: "resume_pending", capacityState: "available" },
+      ])
+    }
+
+    const deletedChild = "ses_sync_v2_deleted_child"
+    await a.request({ op: "task-v2", sessionID: root, childID: deletedChild, holdEvent: "steer" })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: deletedChild })).result?.v2Tasks?.[0]?.state === "active",
+      "V2 child before child deletion",
+    )
+    await b.request({ op: "delete", sessionID: deletedChild })
+    await b.request({ op: "sync" })
+    await waitUntilAsync(
+      async () => (await a.request({ op: "query", sessionID: deletedChild })).result?.deletion === true,
+      "V2 child tombstone on source",
+    )
+    await a.request({ op: "flush-task", childID: deletedChild })
+    await a.request({ op: "sync" })
+    for (const worker of [a, b]) {
+      const facts = (await worker.request({ op: "query", sessionID: deletedChild })).result
+      expect(facts?.session).toBeUndefined()
+      expect(facts?.v2Tasks).toEqual([])
+      expect(facts?.steers).toEqual([])
+    }
+
+    const deletedRootChild = "ses_sync_v2_deleted_root_child"
+    await b.request({ op: "task-v2", sessionID: root, childID: deletedRootChild, holdEvent: "reconciled" })
+    await waitUntilAsync(
+      async () =>
+        (await a.request({ op: "query", sessionID: deletedRootChild })).result?.v2Tasks?.[1]?.eligibility === "frozen",
+      "V2 frozen follow-up before root deletion",
+    )
+    await a.request({ op: "delete", sessionID: root })
+    await a.request({ op: "sync" })
+    await waitUntilAsync(
+      async () => (await b.request({ op: "query", sessionID: root })).result?.deletion === true,
+      "V2 root tombstone on source",
+    )
+    await b.request({ op: "flush-task", childID: deletedRootChild })
+    await b.request({ op: "sync" })
+    await waitUntilAsync(
+      async () =>
+        (await a.request({ op: "query", sessionID: deletedRootChild })).result?.durable?.some(
+          (event) => event.type === "session.task.reconciled.1",
+        ) === true,
+      "delayed V2 reconcile arrival",
+    )
+    for (const worker of [a, b]) {
+      expect((await worker.request({ op: "query", sessionID: root })).result?.session).toBeUndefined()
+      const facts = (await worker.request({ op: "query", sessionID: deletedRootChild })).result
+      expect(facts?.v2Tasks).toEqual([])
+      expect(facts?.steers).toEqual([])
+      expect(facts?.operations).toEqual([])
+    }
+  } finally {
+    await Promise.all([a.stop(), b.stop()])
+  }
+}, 60_000)
