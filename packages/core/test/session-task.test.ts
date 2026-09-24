@@ -639,6 +639,91 @@ describe("SessionTask admission", () => {
     )
   })
 
+  test("child summary follows active A while B and C queue and keeps result references on their invocations", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db, root } = yield* fixture
+        const child = SessionSchema.ID.create()
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: child,
+            project_id: Project.ID.global,
+            parent_id: root,
+            slug: "queued-child",
+            directory: "/project/private",
+            title: "queued-child",
+            version: "test",
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const entries = ["a", "b", "c"]
+        for (const [index, suffix] of entries.entries()) {
+          yield* db
+            .insert(SessionTaskTable)
+            .values({
+              input_id: `msg_summary_${suffix}`,
+              root_session_id: root,
+              parent_session_id: root,
+              parent_message_id: `msg_parent_${suffix}`,
+              call_id: `call-${suffix}`,
+              prompt_digest: `digest-${suffix}`,
+              child_session_id: child,
+              description: suffix,
+              agent_id: "build",
+              location_revision: 0,
+              state: index === 0 ? "active" : "queued",
+              backend: "legacy",
+              time_created: index + 1,
+            })
+            .run()
+            .pipe(Effect.orDie)
+        }
+        const database = { db, filename: ":memory:" }
+        const first = yield* SessionTaskView.read(database, { parentSessionID: root, childSessionID: child })
+        expect(first.target.invocation?.call_id).toBe("call-a")
+        expect(first.active_invocation?.call_id).toBe("call-a")
+        expect(first.queued_count).toBe(2)
+        expect(first.result).toBeUndefined()
+        yield* db.run(sql`UPDATE session_task SET state = 'settled', outcome = 'completed',
+          result_message_id = 'msg_result_a' WHERE input_id = 'msg_summary_a'`)
+        const pending = yield* SessionTaskView.read(database, { parentSessionID: root, childSessionID: child })
+        expect(pending.target.invocation?.call_id).toBe("call-b")
+        expect(pending.phase).toBe("queued")
+        expect(pending.queued_count).toBe(2)
+        expect(pending.result).toBeUndefined()
+        yield* db.run(sql`UPDATE session_task SET state = 'active' WHERE input_id = 'msg_summary_b'`)
+        const second = yield* SessionTaskView.read(database, { parentSessionID: root, childSessionID: child })
+        expect(second.target.invocation?.call_id).toBe("call-b")
+        expect(second.queued_count).toBe(1)
+        expect(second.result).toBeUndefined()
+        const prior = yield* SessionTaskView.read(database, {
+          parentSessionID: root,
+          childSessionID: child,
+          invocation: { parent_session_id: root, parent_message_id: "msg_parent_a", call_id: "call-a" },
+        })
+        expect(prior.result?.message_id).toBe("msg_result_a")
+        yield* db.run(sql`UPDATE session_task SET state = 'settled', outcome = 'completed',
+          result_message_id = 'msg_result_b' WHERE input_id = 'msg_summary_b'`)
+        yield* db.run(sql`UPDATE session_task SET state = 'active' WHERE input_id = 'msg_summary_c'`)
+        const third = yield* SessionTaskView.read(database, { parentSessionID: root, childSessionID: child })
+        expect(third.target.invocation?.call_id).toBe("call-c")
+        expect(third.result).toBeUndefined()
+        const b = yield* SessionTaskView.read(database, {
+          parentSessionID: root,
+          childSessionID: child,
+          invocation: { parent_session_id: root, parent_message_id: "msg_parent_b", call_id: "call-b" },
+        })
+        expect(b.result?.message_id).toBe("msg_result_b")
+        yield* db.run(sql`UPDATE session_task SET state = 'settled', outcome = 'completed',
+          result_message_id = 'msg_result_c' WHERE input_id = 'msg_summary_c'`)
+        const completed = yield* SessionTaskView.read(database, { parentSessionID: root, childSessionID: child })
+        expect(completed.target.invocation?.call_id).toBe("call-c")
+        expect(completed.result?.message_id).toBe("msg_result_c")
+      }),
+    )
+  })
+
   eventIt.effect("keeps archived invocation progress separate from a later run on the same child", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service

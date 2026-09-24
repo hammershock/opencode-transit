@@ -283,6 +283,35 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
     .limit(1)
     .get()
     .pipe(Effect.orDie)
+  const active = yield* db
+    .select()
+    .from(SessionTaskTable)
+    .where(
+      and(
+        eq(SessionTaskTable.child_session_id, child.id),
+        eq(SessionTaskTable.parent_session_id, input.parentSessionID),
+        or(eq(SessionTaskTable.state, "active"), eq(SessionTaskTable.state, "admitted")),
+        eq(SessionTaskTable.abandoned_unknown, false),
+      ),
+    )
+    .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.input_id))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  const pendingHead = yield* db
+    .select()
+    .from(SessionTaskTable)
+    .where(
+      and(
+        eq(SessionTaskTable.child_session_id, child.id),
+        eq(SessionTaskTable.parent_session_id, input.parentSessionID),
+        eq(SessionTaskTable.state, "queued"),
+      ),
+    )
+    .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.input_id))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
   const row = input.invocation
     ? yield* db
         .select()
@@ -297,7 +326,7 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
         )
         .get()
         .pipe(Effect.orDie)
-    : latest
+    : (active ?? pendingHead ?? latest)
   if (input.invocation && (!row || input.invocation.parent_session_id !== input.parentSessionID))
     return yield* Effect.fail(new TargetUnavailable())
   const location = {
@@ -415,19 +444,6 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
         ? { started_at: (part.data as SessionV1.ToolPart & { state: SessionV1.ToolStateRunning }).state.time.start }
         : {}),
     }))
-  const active = yield* db
-    .select()
-    .from(SessionTaskTable)
-    .where(
-      and(
-        eq(SessionTaskTable.child_session_id, child.id),
-        or(eq(SessionTaskTable.state, "active"), eq(SessionTaskTable.state, "admitted")),
-      ),
-    )
-    .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.input_id))
-    .limit(1)
-    .get()
-    .pipe(Effect.orDie)
   const activeObserved = active && observed?.owner_generation === active.owner_generation
   const resultSummary =
     input.includeResults && row.result_message_id
