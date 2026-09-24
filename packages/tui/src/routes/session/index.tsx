@@ -1756,7 +1756,7 @@ export function Session() {
         <box flexDirection="row" flexGrow={1} minHeight={0}>
           <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
             <Show when={route.taskDescription}>
-              <text fg={theme.textMuted}>Task invocation: {route.taskDescription}</text>
+              <text fg={theme.textMuted}>Opened from task: {route.taskDescription} · Session history</text>
             </Show>
             <Show when={!session()}>
               <text fg={theme.textMuted}>Loading session…</text>
@@ -2976,7 +2976,7 @@ function Task(props: ToolProps) {
   })
 
   const current = createMemo(() =>
-    tools().findLast((x) => (x.state.status === "running" || x.state.status === "completed") && x.state.title),
+    tools().findLast((x) => x.state.status === "running" || x.state.status === "pending"),
   )
 
   const status = createMemo(() => sync.data.session_status[sessionID() ?? ""])
@@ -3034,9 +3034,8 @@ function Task(props: ToolProps) {
     } else if (isRunning() && tools().length > 0) {
       if (current()) {
         const state = current()!.state
-        const title = state.status === "running" || state.status === "completed" ? state.title : undefined
-        content.push(`↳ ${Locale.titlecase(current()!.tool)} ${title}`)
-      } else content.push(`↳ ${formatSubagentToolcalls(tools().length)}`)
+        content.push(`↳ ${Locale.titlecase(current()!.tool)} ${state.status} · observed`)
+      } else content.push(`↳ ${formatSubagentToolcalls(tools().length)} recorded · no running tool observed`)
     }
 
     if (!isRunning() && props.part.state.status === "completed") {

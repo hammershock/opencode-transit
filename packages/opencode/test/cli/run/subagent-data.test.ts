@@ -600,8 +600,10 @@ test("separate invocations survive reordered progress, cancellation and replay",
   expect(state.tabs.find((tab) => tab.key === "second")).toMatchObject({ description: "second", status: "running" })
   expect(state.tabs.find((tab) => tab.key === "first")).toMatchObject({ description: "first", status: "cancelled" })
   expect(state.details.second?.commits).toEqual([])
+  expect(state.details.second?.observedAt).toBeUndefined()
   expect(state.details.second?.history?.some((commit) => commit.text === "Earlier work")).toBe(true)
   expect(state.details.first?.commits.some((commit) => commit.text === "Earlier work")).toBe(true)
+  expect(state.details.first?.observedAt).toBeGreaterThan(0)
   const replay = createSubagentData()
   bootstrapSubagentData({
     data: replay,
@@ -622,4 +624,5 @@ test("separate invocations survive reordered progress, cancellation and replay",
       .tabs.map((tab) => [tab.key, tab.status])
       .sort(),
   ).toEqual(state.tabs.map((tab) => [tab.key, tab.status]).sort())
+  expect(snapshotSubagentData(replay).details.first?.observedAt).toBeUndefined()
 })
