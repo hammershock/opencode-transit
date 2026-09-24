@@ -1,6 +1,7 @@
 export * as Ripgrep from "./ripgrep"
 
 import { Context, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import path from "path"
 import { ChildProcess } from "effect/unstable/process"
 import { Entry, Match } from "@opencode-ai/schema/filesystem"
 import { makeGlobalNode } from "./effect/app-node"
@@ -88,6 +89,10 @@ const failure = (message: string, cause?: unknown) => new Error({ message, cause
 const isInvalidPattern = (stderr: string) =>
   stderr.includes("regex parse error") || stderr.includes("error parsing regex")
 
+// --glob matches paths relative to ripgrep's cwd. An absolute filter silently
+// misses files and can force a full walk of the wrong directory tree.
+const isAbsoluteGlob = (pattern: string) => path.posix.isAbsolute(pattern) || path.win32.isAbsolute(pattern)
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -101,10 +106,13 @@ const layer = Layer.effect(
       readonly signal?: AbortSignal
       readonly parse: (line: string) => Effect.Effect<A | undefined, Error>
       readonly pattern?: string
+      readonly glob?: string
       readonly onItem?: (item: A) => Effect.Effect<void>
     }) => {
       const program = Effect.scoped(
         Effect.gen(function* () {
+          if (input.glob && isAbsoluteGlob(input.glob))
+            return yield* failure("ripgrep glob filters must be relative to cwd; set cwd to the target directory")
           const handle = yield* process.spawn(
             ChildProcess.make(yield* binary.filepath, input.args, { cwd: input.cwd, extendEnv: true, stdin: "ignore" }),
           )
@@ -154,6 +162,7 @@ const layer = Layer.effect(
       glob: (input) =>
         run<string>({
           cwd: input.cwd,
+          glob: input.pattern,
           limit: input.limit,
           signal: input.signal,
           args: [
@@ -186,6 +195,7 @@ const layer = Layer.effect(
       find: (input) =>
         run<Entry>({
           cwd: input.cwd,
+          glob: input.pattern,
           limit: input.limit,
           signal: input.signal,
           args: [
@@ -217,6 +227,7 @@ const layer = Layer.effect(
       grep: (input) =>
         run<RawMatchData>({
           ...input,
+          glob: input.include,
           args: [
             "--no-config",
             "--json",
