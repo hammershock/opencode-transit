@@ -9,6 +9,10 @@ import { SessionTask } from "./task"
 import { MessageTable, PartTable, SessionTable, SessionTaskTable } from "./sql"
 import { SessionSchema } from "./schema"
 import { SessionV1 } from "../v1/session"
+import { LocationServiceMap } from "../location-service-map"
+import { PermissionV2 } from "../permission"
+import { QuestionV2 } from "../question"
+import { SessionPolicyStore } from "./policy"
 
 export class TargetUnavailable extends Error {
   readonly code = "task_target_unavailable"
@@ -428,7 +432,7 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
   const resultSummary =
     input.includeResults && row.result_message_id
       ? yield* db
-          .select({ text: sql<string>`substr(json_extract(${PartTable.data}, '$.text'), 1, 1201)` })
+          .select({ text: sql<string>`substr(json_extract(${PartTable.data}, '$.text'), 1, 2049)` })
           .from(PartTable)
           .where(
             and(
@@ -442,11 +446,23 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
           .all()
           .pipe(Effect.orDie)
       : []
-  const summary = resultSummary
+  const resultText = resultSummary
     .slice(0, 8)
     .map((part) => part.text)
     .join("\n")
-    .slice(0, 1200)
+  const resultBytes = Buffer.from(resultText, "utf8")
+  const summary =
+    resultBytes.length <= 2048
+      ? resultText
+      : (Array.from({ length: 4 }, (_, index) => 2048 - index)
+          .map((length) => {
+            try {
+              return new TextDecoder("utf-8", { fatal: true }).decode(resultBytes.subarray(0, length))
+            } catch {
+              return undefined
+            }
+          })
+          .find((value) => value !== undefined) ?? "")
   const view: TaskSchema.View = {
     target: { task_id: child.id, invocation },
     description: row.description,
@@ -514,10 +530,7 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
           result: {
             message_id: row.result_message_id,
             ...(input.includeResults && summary ? { summary } : {}),
-            truncated: Boolean(
-              input.includeResults &&
-                (resultSummary.length > 8 || resultSummary.some((part) => part.text.length >= 1201)),
-            ),
+            truncated: Boolean(input.includeResults && (resultSummary.length > 8 || resultBytes.length > 2048)),
           },
         }
       : {}),
@@ -576,4 +589,30 @@ export const withLivePhase = Effect.fn("SessionTaskView.withLivePhase")(function
   const owned = new Set<string>(tools.map((tool) => `${tool.messageID}\u0000${tool.callID}`))
   const phase = sources.find((source) => owned.has(`${source.messageID}\u0000${source.callID}`))?.phase
   return phase ? { ...view, phase } : view
+})
+
+/** HTTP and model status reads use the same actual Location-owned interaction services. */
+export const withObservedPhase = Effect.fn("SessionTaskView.withObservedPhase")(function* (
+  database: Database.Interface,
+  view: TaskSchema.View,
+  locations: LocationServiceMap.Interface,
+) {
+  if (view.runtime !== "observed") return view
+  return yield* Effect.gen(function* () {
+    const child = yield* database.db
+      .select()
+      .from(SessionTable)
+      .where(eq(SessionTable.id, view.target.task_id))
+      .get()
+      .pipe(Effect.orDie)
+    if (!child) return view
+    return yield* Effect.gen(function* () {
+      const permission = yield* PermissionV2.Service
+      const question = yield* QuestionV2.Service
+      return yield* withLivePhase(database, view, {
+        permissions: yield* permission.forSession(view.target.task_id),
+        questions: yield* question.list(),
+      })
+    }).pipe(Effect.provide(locations.get(SessionPolicyStore.locationFromRow(child))))
+  }).pipe(Effect.catch(() => Effect.succeed(view)))
 })

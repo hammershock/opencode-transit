@@ -157,6 +157,27 @@ describe("tool.registry", () => {
     }),
   )
 
+  withTaskBackend.instance("returns one bounded error for missing and foreign status targets", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const status = (yield* registry.all()).find((item) => item.id === "task_status")
+      expect(status).toBeDefined()
+      const ctx: Tool.Context = {
+        sessionID: SessionID.make("ses_status_parent"),
+        messageID: MessageID.make("msg_status_parent"),
+        agent: "build",
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+      const first = yield* status!.execute({ target: { task_id: SessionID.make("ses_missing_a") } }, ctx)
+      const second = yield* status!.execute({ target: { task_id: SessionID.make("ses_missing_b") } }, ctx)
+      expect(first.output).toBe("task_target_unavailable")
+      expect(second.output).toBe(first.output)
+    }),
+  )
+
   it.instance("does not expose execute unless code mode is enabled", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service

@@ -21,8 +21,6 @@ import { Database } from "@opencode-ai/core/database/database"
 import { SessionTaskView } from "@opencode-ai/core/session/task-view"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
-import { PermissionV2 } from "@opencode-ai/core/permission"
-import { QuestionV2 } from "@opencode-ai/core/question"
 
 const DefaultSessionsLimit = 50
 const DefaultSessionHistoryLimit = 50
@@ -625,20 +623,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     limit: request.limit,
                     includeResults: request.include_results,
                   })
-          const data = yield* Effect.forEach(page.data, (view) => {
-            if (view.runtime !== "observed") return Effect.succeed(view)
-            return Effect.gen(function* () {
-              const child = yield* session.get(view.target.task_id)
-              return yield* Effect.gen(function* () {
-                const permission = yield* PermissionV2.Service
-                const question = yield* QuestionV2.Service
-                return yield* SessionTaskView.withLivePhase(database, view, {
-                  permissions: yield* permission.forSession(view.target.task_id),
-                  questions: yield* question.list(),
-                })
-              }).pipe(Effect.provide(locations.get(child.location)))
-            }).pipe(Effect.catch(() => Effect.succeed(view)))
-          })
+          const data = yield* Effect.forEach(page.data, (view) =>
+            SessionTaskView.withObservedPhase(database, view, locations),
+          )
           return { ...page, data }
         }).pipe(
           Effect.mapError((error) =>

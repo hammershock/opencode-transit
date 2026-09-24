@@ -369,7 +369,7 @@ describe("SessionTask admission", () => {
             directory: "/project/private",
             title: "replacement",
             version: "test",
-            time_created: 5,
+            time_created: 4,
           })
           .run()
           .pipe(Effect.orDie)
@@ -441,6 +441,42 @@ describe("SessionTask admission", () => {
         })
         expect(later.data.map((item) => item.target.invocation?.call_id)).toEqual(["call-status-2"])
         expect(later.next).toBeUndefined()
+        const deletionHistory = yield* SessionTaskView.invocations(database, {
+          parentSessionID: root,
+          childSessionID: ids[0],
+          limit: 1,
+        })
+        yield* db.delete(SessionTaskTable).where(eq(SessionTaskTable.input_id, "msg_status_3")).run().pipe(Effect.orDie)
+        yield* db
+          .insert(SessionTaskTable)
+          .values({
+            input_id: "msg_status_4",
+            root_session_id: root,
+            parent_session_id: root,
+            parent_message_id: "msg_parent_status_4",
+            call_id: "call-status-4",
+            prompt_digest: "status",
+            child_session_id: ids[0],
+            description: "inspect",
+            agent_id: "build",
+            location_revision: 0,
+            state: "settled",
+            backend: "legacy",
+            outcome: "completed",
+            time_created: 4,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const afterHistoryDeletion = yield* SessionTaskView.invocations(database, {
+          parentSessionID: root,
+          childSessionID: ids[0],
+          cursor: deletionHistory.next,
+          limit: 4,
+        })
+        expect(afterHistoryDeletion.data.map((item) => item.target.invocation?.call_id)).toEqual([
+          "call-status-1",
+          "call-status-2",
+        ])
       }),
     )
   })
@@ -545,6 +581,60 @@ describe("SessionTask admission", () => {
           childSessionID: child,
         }).pipe(Effect.exit)
         expect(Exit.isFailure(forbidden)).toBe(true)
+      }),
+    )
+  })
+
+  test("bounds result summaries by UTF-8 bytes without splitting characters", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db, root } = yield* fixture
+        const child = SessionSchema.ID.create()
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: child,
+            project_id: Project.ID.global,
+            parent_id: root,
+            slug: "result-child",
+            directory: "/project/private",
+            title: "result-child",
+            version: "test",
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* SessionTask.admit(db, {
+          inputID: "msg_utf8_input",
+          rootSessionID: root,
+          parentSessionID: root,
+          parentMessageID: "msg_utf8_parent",
+          callID: "call-utf8",
+          promptDigest: "digest",
+          childSessionID: child,
+          description: "inspect",
+          agentID: "build",
+          locationRevision: 0,
+          backend: "legacy",
+        })
+        yield* db.run(
+          sql`UPDATE session_task SET result_message_id = 'msg_utf8_result' WHERE input_id = 'msg_utf8_input'`,
+        )
+        yield* db.run(sql`INSERT INTO message (id, session_id, time_created, time_updated, data)
+          VALUES ('msg_utf8_result', ${child}, 1, 1, '{"role":"assistant","parentID":"msg_utf8_input"}')`)
+        yield* db.run(sql`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+          VALUES ('prt_utf8_result', 'msg_utf8_result', ${child}, 1, 1, ${JSON.stringify({ type: "text", text: "界".repeat(1000) })})`)
+        const view = yield* SessionTaskView.read(
+          { db, filename: ":memory:" },
+          {
+            parentSessionID: root,
+            childSessionID: child,
+            includeResults: true,
+          },
+        )
+        expect(view.result?.truncated).toBe(true)
+        expect(Buffer.byteLength(view.result?.summary ?? "", "utf8")).toBeLessThanOrEqual(2048)
+        expect(view.result?.summary).not.toContain("�")
+        expect(view.result?.summary).toBe("界".repeat(682))
       }),
     )
   })

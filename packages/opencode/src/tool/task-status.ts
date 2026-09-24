@@ -5,6 +5,7 @@ import { SessionTask } from "@opencode-ai/schema/session-task"
 import { ConfigExperimental } from "@opencode-ai/core/config/experimental"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import { Effect, Option } from "effect"
 import { Tool } from "./tool"
 
@@ -14,6 +15,7 @@ export const TaskStatusTool = Tool.define(
     const database = yield* Database.Service
     const config = yield* Config.Service
     const flags = yield* RuntimeFlags.Service
+    const locations = yield* LocationServiceMap.Service
     const backend = Option.getOrElse(
       yield* Effect.serviceOption(SessionTaskCapability.Service),
       () => SessionTaskCapability.legacyTaskPromptOps,
@@ -82,8 +84,23 @@ export const TaskStatusTool = Tool.define(
                     limit: input.limit,
                     includeResults: input.include_results,
                   })
-          return { title: "Task status", output: JSON.stringify(page), metadata: {} }
-        }).pipe(Effect.orDie),
+          const data = yield* Effect.forEach(page.data, (view) =>
+            SessionTaskView.withObservedPhase(database, view, locations),
+          )
+          return { title: "Task status", output: JSON.stringify({ ...page, data }), metadata: {} }
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.succeed({
+              title: "Task status unavailable",
+              output:
+                error instanceof SessionTaskView.InvalidCursor
+                  ? "task_status_invalid_cursor"
+                  : "task_target_unavailable",
+              metadata: {},
+            }),
+          ),
+          Effect.orDie,
+        ),
     }
   }),
 )
