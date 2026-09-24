@@ -1574,3 +1574,81 @@ test("subagent inspector keeps the selected call and exposes history on demand",
     app.renderer.destroy()
   }
 })
+
+test("subagent inspector labels a blocked tool and advancing observation age", async () => {
+  const [clock, setClock] = createSignal(10_000)
+  const [detail, setDetail] = createSignal<FooterSubagentState["details"][string]>({
+    sessionID: "child-a",
+    observedAt: 9_000,
+    commits: [
+      {
+        kind: "tool",
+        source: "tool",
+        phase: "start",
+        text: "Reading file",
+        partID: "tool-a",
+        tool: "read",
+        toolState: "running",
+        part: {
+          id: "tool-a",
+          sessionID: "child-a",
+          messageID: "assistant-a",
+          type: "tool",
+          callID: "call-a",
+          tool: "read",
+          state: { status: "running", input: { filePath: "secret-file" }, time: { start: 8_000 } },
+        },
+      },
+    ],
+  })
+  const app = await testRender(
+    () => (
+      <box width={100} height={14}>
+        <RunFooterSubagentBody
+          active={() => true}
+          theme={() => RUN_THEME_FALLBACK}
+          tab={() => subagent({ sessionID: "child-a", label: "Explore", description: "Inspect child A" })}
+          index={() => 1}
+          total={() => 1}
+          otherActive={() => 0}
+          detail={detail}
+          width={() => 100}
+          clock={clock}
+          onCycle={() => {}}
+          onClose={() => {}}
+        />
+      </box>
+    ),
+    { width: 100, height: 14 },
+  )
+  try {
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("Observed tool: read · running · elapsed 2s")
+    expect(app.captureCharFrame()).toContain("Last event observed 1s ago")
+    setClock(12_000)
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("elapsed 4s")
+    expect(app.captureCharFrame()).toContain("Last event observed 3s ago")
+    setDetail({
+      ...detail(),
+      commits: [
+        ...detail().commits,
+        {
+          kind: "tool",
+          source: "tool",
+          phase: "final",
+          text: "Done",
+          partID: "tool-a",
+          tool: "read",
+          toolState: "completed",
+        },
+        detail().commits[0]!,
+      ],
+    })
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("No pending or running tool observed")
+    expect(app.captureCharFrame()).toContain("Recent: read completed")
+  } finally {
+    app.renderer.destroy()
+  }
+})

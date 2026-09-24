@@ -53,6 +53,7 @@ export function RunFooterSubagentBody(props: {
   otherActive: () => number
   detail: () => FooterSubagentDetail | undefined
   width: () => number
+  clock?: () => number
   diffStyle?: RunDiffStyle
   onCycle: (dir: -1 | 1) => void
   onClose: () => void
@@ -62,7 +63,12 @@ export function RunFooterSubagentBody(props: {
   const tab = createMemo(() => props.tab())
   const [history, setHistory] = createSignal(false)
   const [now, setNow] = createSignal(Date.now())
-  createEffect(on(() => tab()?.key ?? tab()?.sessionID, () => setHistory(false)))
+  createEffect(
+    on(
+      () => tab()?.key ?? tab()?.sessionID,
+      () => setHistory(false),
+    ),
+  )
   onMount(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000)
     onCleanup(() => clearInterval(timer))
@@ -97,7 +103,7 @@ export function RunFooterSubagentBody(props: {
     const state = currentTool()?.part?.state
     return state?.status === "running" ? state.time.start : undefined
   })
-  const age = (time: number) => `${Math.max(0, Math.floor((now() - time) / 1000))}s`
+  const age = (time: number) => `${Math.max(0, Math.floor(((props.clock?.() ?? now()) - time) / 1000))}s`
   const opts = createMemo(() => ({ diffStyle: props.diffStyle }))
   const scrollbar = createMemo(() => ({
     trackOptions: {
