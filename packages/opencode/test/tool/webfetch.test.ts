@@ -48,8 +48,9 @@ describe("tool.webfetch", () => {
     Effect.sync(() => {
       const decode = Schema.decodeUnknownSync(Parameters)
       expect(() => decode({ url: "https://example.com", timeout: 0 })).toThrow()
-      expect(() => decode({ url: "https://example.com", timeout: 121 })).toThrow()
-      expect(decode({ url: "https://example.com", timeout: 120 }).timeout).toBe(120)
+      expect(() => decode({ url: "https://example.com", timeout: 120 })).toThrow()
+      expect(() => decode({ url: "https://example.com", timeout: 120_001 })).toThrow()
+      expect(decode({ url: "https://example.com", timeout: 120_000 }).timeout).toBe(120_000)
     }),
   )
 
@@ -68,7 +69,7 @@ describe("tool.webfetch", () => {
         ),
       (url) =>
         Effect.gen(function* () {
-          const exit = yield* exec({ url: url.toString(), format: "text", timeout: 0.05 }).pipe(Effect.exit)
+          const exit = yield* exec({ url: url.toString(), format: "text", timeout: 1_000 }).pipe(Effect.exit)
           expect(Exit.isFailure(exit)).toBe(true)
           if (Exit.isFailure(exit)) expect(String(Cause.squash(exit.cause))).toContain("Request timed out")
         }),

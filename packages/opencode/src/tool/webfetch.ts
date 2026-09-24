@@ -18,9 +18,14 @@ export const Parameters = Schema.Struct({
       default: "markdown",
     })
     .pipe(Schema.withDecodingDefault(Effect.succeed("markdown" as const))),
-  timeout: Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(MAX_TIMEOUT / 1000))
+  // Milliseconds match other Agent tool timeouts. Reject old second-sized values instead of silently shortening them.
+  timeout: Schema.Number.check(
+    Schema.isInt(),
+    Schema.isGreaterThanOrEqualTo(1_000),
+    Schema.isLessThanOrEqualTo(MAX_TIMEOUT),
+  )
     .pipe(Schema.optional)
-    .annotate({ description: "Optional timeout in seconds (default 120, max 120)" }),
+    .annotate({ description: "Optional timeout in milliseconds (default 120000, max 120000)" }),
 })
 
 export const WebFetchTool = Tool.define(
@@ -49,7 +54,7 @@ export const WebFetchTool = Tool.define(
             },
           })
 
-          const timeout = (params.timeout ?? DEFAULT_TIMEOUT / 1000) * 1000
+          const timeout = params.timeout ?? DEFAULT_TIMEOUT
 
           // Build Accept header based on requested format with q parameters for fallbacks
           let acceptHeader = "*/*"
