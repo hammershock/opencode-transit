@@ -22,6 +22,8 @@ import { SessionTaskView } from "@opencode-ai/core/session/task-view"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { SessionTaskDelivery } from "@opencode-ai/core/session/task-delivery"
 import { SessionTask } from "@opencode-ai/core/session/task"
+import { EventV2 } from "@opencode-ai/core/event"
+import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 
 const DefaultSessionsLimit = 50
@@ -31,6 +33,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
   Effect.gen(function* () {
     const session = yield* SessionV2.Service
     const database = yield* Database.Service
+    const events = yield* EventV2.Service
+    const execution = yield* SessionExecution.Service
     const locations = yield* LocationServiceMap.Service
     const taskBackend = Option.getOrElse(
       yield* Effect.serviceOption(SessionTaskCapability.Service),
@@ -669,7 +673,11 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             },
             operationID: ctx.payload.operation_id,
             text: ctx.payload.text,
-          })
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.provideService(EventV2.Service, events),
+            Effect.provideService(SessionExecution.Service, execution),
+          )
           return { input_id: receipt.inputID, state: receipt.state, reason: receipt.reason }
         }).pipe(
           Effect.mapError((error) =>
@@ -726,7 +734,11 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             operationID: ctx.payload.operation_id,
             actor: { kind: "user", id: "instance-user" },
             disposition: ctx.payload.disposition,
-          })
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.provideService(EventV2.Service, events),
+            Effect.provideService(SessionExecution.Service, execution),
+          )
           return {
             input_id: receipt.inputID,
             disposition: receipt.disposition,
