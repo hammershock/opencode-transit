@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "2ebf9c7e-8ca0-4b8f-b51c-c8e820601016",
+  "id": "294a6d29-46dd-458b-87b3-b2f1c6c7a4a2",
   "prevIds": [
-    "96a4d45d-3cd5-4c06-a087-9269ca2a17e1"
+    "2ebf9c7e-8ca0-4b8f-b51c-c8e820601016"
   ],
   "ddl": [
     {
@@ -100,6 +100,10 @@
     },
     {
       "name": "session_task_steer",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_task_stop",
       "entityType": "tables"
     },
     {
@@ -1840,6 +1844,96 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "operation_id",
+      "entityType": "columns",
+      "table": "session_task_stop"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "root_session_id",
+      "entityType": "columns",
+      "table": "session_task_stop"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "parent_session_id",
+      "entityType": "columns",
+      "table": "session_task_stop"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "child_session_id",
+      "entityType": "columns",
+      "table": "session_task_stop"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "actor_kind",
+      "entityType": "columns",
+      "table": "session_task_stop"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "actor_id",
+      "entityType": "columns",
+      "table": "session_task_stop"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "intent",
+      "entityType": "columns",
+      "table": "session_task_stop"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "members",
+      "entityType": "columns",
+      "table": "session_task_stop"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_task_stop"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "input_id",
       "entityType": "columns",
       "table": "session_task"
@@ -2520,6 +2614,21 @@
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
+      "name": "fk_session_task_stop_child_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_task_stop"
+    },
+    {
+      "columns": [
+        "child_session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
       "name": "fk_session_task_child_session_id_session_id_fk",
       "entityType": "fks",
       "table": "session_task"
@@ -2784,6 +2893,15 @@
       "nameExplicit": false,
       "name": "session_task_steer_pk",
       "table": "session_task_steer",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "operation_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_task_stop_pk",
+      "table": "session_task_stop",
       "entityType": "pks"
     },
     {

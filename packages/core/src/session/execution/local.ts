@@ -24,6 +24,8 @@ const layer = Layer.effect(
     const database = yield* Database.Service
     // The coordinator cannot schedule its successor until construction completes.
     let wake: (sessionID: SessionSchema.ID) => Effect.Effect<void> = () => Effect.void
+    const exact: { bind?: SessionRunCoordinator.Coordinator<SessionSchema.ID, SessionRunner.RunError>["bindExact"] } =
+      {}
     const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError>({
       drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, force) {
         const session = yield* store.get(sessionID)
@@ -55,7 +57,14 @@ const layer = Layer.effect(
         if (!next) return yield* run
         const owned = SessionTaskOwner.withLease(
           database,
-          { childSessionID: sessionID, inputID: next.input_id },
+          {
+            childSessionID: sessionID,
+            inputID: next.input_id,
+            onAcquired: (ownerGeneration) => {
+              if (!exact.bind) throw new Error("Session coordinator is not ready")
+              return exact.bind(sessionID, next.input_id, ownerGeneration)
+            },
+          },
           run,
         ).pipe(
           Effect.catch((error) =>
@@ -82,10 +91,13 @@ const layer = Layer.effect(
       }),
     })
     wake = coordinator.wake
+    exact.bind = coordinator.bindExact
 
     return SessionExecution.Service.of({
       active: coordinator.active,
       interrupt: coordinator.interrupt,
+      requestInterruptExact: (sessionID, inputID, ownerGeneration) =>
+        Effect.sync(() => coordinator.requestInterruptExact(sessionID, inputID, ownerGeneration)),
       resume: coordinator.run,
       wake: coordinator.wake,
       wakeAndWait: coordinator.wakeAndWait,

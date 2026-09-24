@@ -204,7 +204,12 @@ async function waitForExit(exited: Promise<number>): Promise<number | undefined>
  */
 export const withLease = <A, E, R>(
   database: Database.Interface,
-  input: { readonly childSessionID: string; readonly inputID: string; readonly onLost?: () => void },
+  input: {
+    readonly childSessionID: string
+    readonly inputID: string
+    readonly onLost?: () => void
+    readonly onAcquired?: (ownerGeneration: string) => () => void
+  },
   work: Effect.Effect<A, E, R>,
 ) =>
   Effect.acquireUseRelease(
@@ -279,6 +284,7 @@ export const withLease = <A, E, R>(
         const key = lockPath(database.filename!, input.childSessionID)
         active.set(key, lease)
         notify(key)
+        const unbind = input.onAcquired?.(lease.generation)
         void lease.exited.then(() => notify(key))
         const lost = Effect.callback<never, LeaseLost>((resume) => {
           let listening = true
@@ -291,7 +297,7 @@ export const withLease = <A, E, R>(
             listening = false
           })
         })
-        return yield* Effect.raceFirst(work, lost)
+        return yield* Effect.raceFirst(work, lost).pipe(Effect.ensuring(Effect.sync(() => unbind?.())))
       }),
     (lease) =>
       Effect.tryPromise({

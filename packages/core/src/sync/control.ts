@@ -368,7 +368,7 @@ const make = (input: LayerOptions) =>
                     .values({ session_id: sessionID })
                     .onConflictDoNothing()
                     .run()
-                  yield* tx.delete(SessionTaskTable).where(SessionTask.deletionPredicate(sessionID)).run()
+                  yield* SessionTask.deleteProjectionForSession(tx, sessionID)
                   yield* tx
                     .delete(SessionTable)
                     .where(eq(SessionTable.id, SessionV2.ID.make(sessionID)))

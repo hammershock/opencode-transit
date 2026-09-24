@@ -273,6 +273,21 @@ export const SessionTaskOperationTable = sqliteTable(
   (table) => [index("session_task_operation_input_idx").on(table.input_id, table.time_created)],
 )
 
+/** Projection of a durable fixed-scope stop event; retry never takes a new snapshot. */
+export const SessionTaskStopTable = sqliteTable("session_task_stop", {
+  operation_id: text().primaryKey(),
+  root_session_id: text().notNull(),
+  parent_session_id: text().notNull(),
+  child_session_id: text()
+    .notNull()
+    .references(() => SessionTable.id, { onDelete: "cascade" }),
+  actor_kind: text().$type<"user" | "parent">().notNull(),
+  actor_id: text().notNull(),
+  intent: text().$type<"interrupt" | "stop">().notNull(),
+  members: text({ mode: "json" }).$type<readonly { inputID: string; state: "active" | "pending" }[]>().notNull(),
+  time_created: integer().notNull(),
+})
+
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   session_id: text()
     .$type<SessionSchema.ID>()

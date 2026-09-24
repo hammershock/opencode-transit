@@ -74,6 +74,7 @@ const executionLayer = Layer.succeed(
     wake: () => Effect.sync(() => void executionState.wakes++),
     wakeAndWait: () => Effect.sync(() => void executionState.wakes++),
     interrupt: () => Effect.void,
+    requestInterruptExact: () => Effect.succeed(false),
   }),
 )
 const syntheticRexd: LocationProvider = {

@@ -16,9 +16,11 @@ import {
   SessionTable,
   SessionTaskOperationTable,
   SessionTaskSteerTable,
+  SessionTaskStopTable,
   SessionTaskTable,
 } from "@opencode-ai/core/session/sql"
 import { SessionTask } from "@opencode-ai/core/session/task"
+import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { BaiduSyncProvider } from "@opencode-ai/core/sync/baidu-provider"
 import { BaiduCredential } from "@opencode-ai/core/sync/baidu-credential"
@@ -57,6 +59,7 @@ type Command =
       readonly holdSettlement?: boolean
     }
   | { readonly id: string; readonly op: "admit-task"; readonly sessionID: string; readonly childID: string }
+  | { readonly id: string; readonly op: "task-stop"; readonly sessionID: string; readonly childID: string; readonly holdStop?: boolean }
   | {
       readonly id: string
       readonly op: "task-v2"
@@ -381,6 +384,7 @@ await Effect.runPromise(
               )
               const steers = await Effect.runPromise(database.select().from(SessionTaskSteerTable).all())
               const operations = await Effect.runPromise(database.select().from(SessionTaskOperationTable).all())
+              const stopOperations = await Effect.runPromise(database.select().from(SessionTaskStopTable).all())
               const durable = await Effect.runPromise(
                 database
                   .select({ seq: EventTable.seq, type: EventTable.type })
@@ -433,6 +437,9 @@ await Effect.runPromise(
                       disposition: operation.disposition,
                       capacityState: operation.capacity_state,
                     })),
+                  stopOperations: stopOperations
+                    .filter((operation) => operation.child_session_id === sessionID)
+                    .map((operation) => ({ operationID: operation.operation_id, members: operation.members })),
                   durable,
                   deletion: Boolean(deletion),
                   controlProjection: controlProjection?.generation,
@@ -440,6 +447,89 @@ await Effect.runPromise(
                   lease,
                 },
               })
+              continue
+            }
+            if (command.op === "task-stop") {
+              const rootID = SessionV2.ID.make(command.sessionID)
+              const childID = SessionV2.ID.make(command.childID)
+              const root = await Effect.runPromise(
+                database.select().from(SessionTable).where(eq(SessionTable.id, rootID)).get(),
+              )
+              if (!root) throw new Error(`Parent Session not found: ${rootID}`)
+              const timestamp = Date.now()
+              const first = SessionMessage.ID.make(`msg_stop_${command.childID}_a`)
+              const second = SessionMessage.ID.make(`msg_stop_${command.childID}_b`)
+              const admission = {
+                inputID: first,
+                rootSessionID: rootID,
+                parentSessionID: rootID,
+                parentMessageID: `msg_parent_stop_${command.childID}_a`,
+                callID: `call_stop_${command.childID}_a`,
+                promptDigest: "stop-a",
+                childSessionID: childID,
+                description: "stop sync work",
+                agentID: "build",
+                locationRevision: 0,
+                backend: "v2" as const,
+              }
+              const created = await Effect.runPromise(
+                events.publish(SessionV1.Event.Created, {
+                  sessionID: childID,
+                  info: {
+                    id: childID,
+                    slug: command.childID,
+                    projectID: root.project_id,
+                    parentID: rootID,
+                    directory: root.directory,
+                    syncSpaceID: spaceID,
+                    title: "Stopped V2 sync child",
+                    version: "test",
+                    time: { created: timestamp, updated: timestamp },
+                  },
+                  task: admission,
+                  taskInput: { messageID: first, prompt: Prompt.make({ text: "A" }), delivery: "queue" },
+                }),
+              )
+              await Effect.runPromise(SessionSync.capture(store, created, timestamp))
+              const queued = await Effect.runPromise(
+                events.publish(SessionEvent.PromptAdmitted, {
+                  sessionID: childID,
+                  messageID: second,
+                  timestamp: DateTime.makeUnsafe(timestamp + 1),
+                  prompt: Prompt.make({ text: "B" }),
+                  delivery: "queue",
+                  task: {
+                    kind: "invocation",
+                    admission: {
+                      ...admission,
+                      inputID: second,
+                      parentMessageID: `msg_parent_stop_${command.childID}_b`,
+                      callID: `call_stop_${command.childID}_b`,
+                      promptDigest: "stop-b",
+                    },
+                  },
+                }),
+              )
+              await Effect.runPromise(SessionSync.capture(store, queued, timestamp + 1))
+              const stopped = await Effect.runPromise(
+                events.publish(SessionTaskEvent.Stopped, {
+                  sessionID: childID,
+                  rootSessionID: rootID,
+                  parentSessionID: rootID,
+                  operationID: `stop_${command.childID}`,
+                  intent: "stop",
+                  actorKind: "user",
+                  actorID: "sync-test-user",
+                  members: [
+                    { inputID: first, state: "pending" },
+                    { inputID: second, state: "pending" },
+                  ],
+                  timestamp: timestamp + 2,
+                }),
+              )
+              if (command.holdStop) heldTaskEvents.set(command.childID, stopped)
+              else await Effect.runPromise(SessionSync.capture(store, stopped, timestamp + 2))
+              emit({ type: "response", id: command.id, ok: true })
               continue
             }
             if (command.op === "task-v2") {

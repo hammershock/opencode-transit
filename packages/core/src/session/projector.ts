@@ -333,6 +333,19 @@ const layer = Layer.effectDiscard(
         timestamp: event.data.timestamp,
       }),
     )
+    yield* events.project(SessionTaskEvent.Stopped, (event) =>
+      SessionTask.projectStopped(db, {
+        childSessionID: event.data.sessionID,
+        rootSessionID: event.data.rootSessionID,
+        parentSessionID: event.data.parentSessionID,
+        operationID: event.data.operationID,
+        intent: event.data.intent,
+        actorKind: event.data.actorKind,
+        actorID: event.data.actorID,
+        members: event.data.members,
+        timestamp: event.data.timestamp,
+      }),
+    )
     yield* events.project(SessionV1.Event.Updated, (event) => {
       const {
         directory: _directory,
@@ -449,11 +462,7 @@ const layer = Layer.effectDiscard(
           .onConflictDoNothing()
           .run()
           .pipe(Effect.orDie)
-        yield* db
-          .delete(SessionTaskTable)
-          .where(SessionTask.deletionPredicate(event.data.sessionID))
-          .run()
-          .pipe(Effect.orDie)
+        yield* SessionTask.deleteProjectionForSession(db, event.data.sessionID)
         yield* db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie)
       }),
     )
