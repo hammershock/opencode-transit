@@ -5,6 +5,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import DESCRIPTION from "./grep.txt"
+import { Timeout, enforce } from "./search-timeout"
 import * as Tool from "./tool"
 
 export const Parameters = Schema.Struct({
@@ -15,6 +16,7 @@ export const Parameters = Schema.Struct({
   include: Schema.optional(Schema.String).annotate({
     description: 'File pattern relative to the search path (e.g. "*.js", "*.{ts,tsx}")',
   }),
+  timeout: Timeout,
 })
 
 export const GrepTool = Tool.define(
@@ -25,7 +27,7 @@ export const GrepTool = Tool.define(
     return {
       description: DESCRIPTION,
       parameters: Parameters,
-      execute: (params: { pattern: string; path?: string; include?: string }, ctx: Tool.Context) =>
+      execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
         Effect.gen(function* () {
           const empty = {
             title: params.pattern,
@@ -44,6 +46,7 @@ export const GrepTool = Tool.define(
               pattern: params.pattern,
               path: params.path,
               include: params.include,
+              timeout: params.timeout,
             },
           })
 
@@ -61,14 +64,19 @@ export const GrepTool = Tool.define(
           const search = FSUtil.resolve(requested)
           const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
           const cwd = info?.type === "Directory" ? search : path.dirname(search)
-          const result = yield* ripgrep.grep({
-            cwd,
-            file: info?.type === "Directory" ? undefined : path.basename(search),
-            pattern: params.pattern,
-            include: params.include,
-            limit: 100,
-            signal: ctx.abort,
-          })
+          const result = yield* enforce(
+            (signal) =>
+              ripgrep.grep({
+                cwd,
+                file: info?.type === "Directory" ? undefined : path.basename(search),
+                pattern: params.pattern,
+                include: params.include,
+                limit: 100,
+                signal,
+              }),
+            params.timeout,
+            ctx.abort,
+          )
           if (result.length === 0) return empty
 
           const rows = result.map((item) => ({
