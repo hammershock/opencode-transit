@@ -4,6 +4,7 @@ import { TestLLMServer, reply } from "./lib/llm-server"
 import { tmpdir } from "./fixture/fixture"
 import net from "node:net"
 import { Database } from "bun:sqlite"
+import { Terminal } from "@xterm/headless"
 
 const binary = process.env.OPENCODE_PACKAGED_BINARY
 const packagedTest = binary ? test : test.skip
@@ -175,6 +176,11 @@ packagedTest("packaged server admits six real provider Task calls and steers 1/3
         if (process.env.OPENCODE_CAPTURE_TUI === "1") {
           let output = ""
           const columns = Number(process.env.OPENCODE_TUI_COLUMNS ?? "96")
+          const visible = async () => {
+            const screen = new Terminal({ cols: columns, rows: 30, allowProposedApi: true })
+            await new Promise<void>((resolve) => screen.write(output, resolve))
+            return Array.from({ length: 30 }, (_, row) => screen.buffer.active.getLine(row)?.translateToString(true) ?? "").join("\n")
+          }
           const terminal = new Bun.Terminal({
             cols: columns,
             rows: 30,
@@ -203,11 +209,11 @@ packagedTest("packaged server admits six real provider Task calls and steers 1/3
             terminal.write("\r")
             await waitFor(async () => output.includes("Background Tasks") ? true : undefined, "TUI Tasks dialog", 150)
             await Bun.sleep(150)
-            expect(output).toContain("2 queued · packaged task 3")
+            expect(await visible()).toContain("2 queued · packaged task 3")
             await Bun.write(`/tmp/opencode-pr-598-tasks-${columns}.ansi`, output)
             terminal.write("\r")
             await waitFor(async () => output.includes("Location ") ? true : undefined, "TUI Task detail", 150)
-            expect(output).toContain("Root capacity 6/8 active, 2/64 pending")
+            expect(await visible()).toContain("Root capacity 6/8 active, 2/64 pending")
             await Bun.write(`/tmp/opencode-pr-598-task-detail-${columns}.ansi`, output)
             terminal.write("\x1b")
             await Bun.sleep(100)

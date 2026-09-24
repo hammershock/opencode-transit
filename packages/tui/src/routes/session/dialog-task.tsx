@@ -334,7 +334,6 @@ export function DialogTaskList(props: { sessionID: string }) {
         ...rows().map((view) => ({
           title: `${taskStatusLabel(view)}${view.queued_count ? ` · ${view.queued_count} queued` : ""} · ${view.description}`,
           value: view,
-          description: view.agent_id,
         })),
         ...(next() ? [{ title: "Load more Tasks", value: "more" as const }] : []),
         { title: "Refresh", value: "refresh" as const },
