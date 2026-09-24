@@ -56,12 +56,18 @@ function groupByServer(mcpTools: Record<string, MCP.McpTool>, servers: readonly 
 }
 
 export function describeCatalog(mcpTools: Record<string, MCP.McpTool>, servers: readonly string[]): string {
-  return CodeMode.make({
-    tools: toolTree(
-      [...groupByServer(mcpTools, servers).values()].flat(),
-      () => () => Effect.fail(toolError("Tool preview is not executable.")),
-    ),
+  const catalog = [...groupByServer(mcpTools, servers).values()].flat()
+  const instructions = CodeMode.make({
+    tools: toolTree(catalog, () => () => Effect.fail(toolError("Tool preview is not executable."))),
   }).instructions()
+  const overrides = [
+    ...new Map(
+      catalog.filter((entry) => entry.tool.timeout).map((entry) => [entry.server, entry.tool.timeout]),
+    ).entries(),
+  ]
+    .map(([server, timeout]) => `${server}: ${timeout} ms`)
+    .join(", ")
+  return `${instructions}\n\nMCP tool call timeout: ${McpCatalog.DEFAULT_TOOL_TIMEOUT} ms by default${overrides ? `; overrides: ${overrides}` : ""}. These are absolute deadlines, including progress updates.`
 }
 
 const lastSegment = (uri: string) => {
@@ -122,7 +128,7 @@ function toolTree(catalog: readonly CatalogEntry[], run: (entry: CatalogEntry) =
   for (const entry of catalog) {
     const namespace = (tree[entry.server] ??= {})
     namespace[entry.local] = SandboxTool.make({
-      description: entry.tool.def.description ?? "",
+      description: McpCatalog.toolDescription(entry.tool.def.description, entry.tool.timeout),
       input: entry.tool.def.inputSchema as SandboxTool.JsonSchema,
       output: entry.tool.def.outputSchema as SandboxTool.JsonSchema | undefined,
       run: run(entry),
@@ -150,13 +156,7 @@ const invokeChildTool = Effect.fn("CodeMode.invokeChildTool")(function* (input: 
       const raw = await input.entry.tool.client.callTool(
         { name: input.entry.tool.def.name, arguments: input.args },
         CallToolResultSchema,
-        {
-          resetTimeoutOnProgress: true,
-          signal: input.ctx.abort,
-          timeout: input.entry.tool.timeout,
-          // The MCP SDK only sends a progress token when this hook is present, enabling timeout resets.
-          onprogress: () => {},
-        },
+        McpCatalog.toolCallOptions(input.ctx.abort, input.entry.tool.timeout),
       )
       if (raw.isError)
         throw new Error(

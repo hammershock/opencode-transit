@@ -4,6 +4,7 @@ import type { Tool as MCPToolDef } from "@modelcontextprotocol/sdk/types.js"
 import type { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Agent } from "@/agent/agent"
 import { MCP } from "@/mcp"
+import { McpCatalog } from "@/mcp/catalog"
 import { Permission } from "@/permission"
 import { Plugin } from "@/plugin"
 import { Session } from "@/session/session"
@@ -134,6 +135,14 @@ describe("code mode execute", () => {
     expect(description).toContain(
       "tools.weather.current(input: {\n  city: string,\n}): Promise<{\n  tempC: number,\n}>",
     )
+    expect(description).toContain("MCP tool call timeout: 120000 ms by default")
+  })
+
+  test("describeCatalog shows configured server deadlines", () => {
+    const description = describeFor({ weather_current: { ...mcpTool("current", () => ""), timeout: 5000 } }, [
+      "weather",
+    ])
+    expect(description).toContain("overrides: weather: 5000 ms")
   })
 
   test("the static base description carries no catalog; the registry appends it", async () => {
@@ -288,6 +297,32 @@ describe("code mode execute", () => {
     expect(output.metadata.toolCalls).toEqual([
       { tool: "greeter.hello", status: "completed", input: { name: "world" } },
     ])
+  })
+
+  test("uses the same absolute MCP deadline for nested calls", async () => {
+    let observed: ReturnType<typeof McpCatalog.toolCallOptions> | undefined
+    const entry = mcpTool("hello", () => "")
+    const tool = await build({
+      greeter_hello: {
+        ...entry,
+        timeout: 75,
+        client: {
+          callTool: async (
+            _request: unknown,
+            _schema: unknown,
+            options: ReturnType<typeof McpCatalog.toolCallOptions>,
+          ) => {
+            observed = options
+            return { content: [{ type: "text" as const, text: "hello" }] }
+          },
+        } as unknown as MCP.McpTool["client"],
+      },
+    })
+    const output = await Effect.runPromise(tool.execute({ code: "return await tools.greeter.hello({})" }, ctx))
+    expect(output.output).toBe("hello")
+    expect(observed?.timeout).toBe(75)
+    expect(observed?.resetTimeoutOnProgress).toBe(false)
+    expect(observed?.signal.aborted).toBe(false)
   })
 
   test("exposes structured content as native data and composes multiple calls", async () => {
