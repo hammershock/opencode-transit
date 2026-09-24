@@ -22,7 +22,7 @@ export const Input = Schema.Struct({
     description: "Relative directory to search. Defaults to the active Location.",
   }),
   include: FileSystem.GrepInput.fields.include.annotate({
-    description: 'File glob to include in the search (for example, "*.js" or "*.{ts,tsx}")',
+    description: 'File glob relative to the search path (for example, "*.js" or "*.{ts,tsx}")',
   }),
   limit: FileSystem.GrepInput.fields.limit.annotate({
     description: "Maximum matches to return",
@@ -75,6 +75,8 @@ const layer = Layer.effectDiscard(
           ],
           execute: (input, context) =>
             Effect.gen(function* () {
+              if (input.include && (path.posix.isAbsolute(input.include) || path.win32.isAbsolute(input.include)))
+                return yield* new ToolFailure({ message: "Grep include glob must be relative to the search path" })
               yield* permission.assert({
                 action: name,
                 resources: [input.pattern],
@@ -95,7 +97,13 @@ const layer = Layer.effectDiscard(
                 include: input.include,
                 limit: input.limit ?? Number.MAX_SAFE_INTEGER,
               })
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to grep for ${input.pattern}` }))),
+            }).pipe(
+              Effect.mapError((error) =>
+                error instanceof ToolFailure
+                  ? error
+                  : new ToolFailure({ message: `Unable to grep for ${input.pattern}` }),
+              ),
+            ),
         }),
       })
       .pipe(Effect.orDie)
