@@ -18,6 +18,7 @@ type Flow =
 type Hit = {
   url: URL
   body: Record<string, unknown>
+  observedAt: number
 }
 
 type Match = (hit: Hit) => boolean
@@ -601,6 +602,7 @@ function hit(url: string, body: unknown) {
   return {
     url: new URL(url, "http://localhost"),
     body: body && typeof body === "object" ? (body as Record<string, unknown>) : {},
+    observedAt: Date.now(),
   } satisfies Hit
 }
 

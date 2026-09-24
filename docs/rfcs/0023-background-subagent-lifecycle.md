@@ -5,8 +5,16 @@ status: accepted
 authors:
   - hammershock
 created: 2026-09-24
-updated: 2026-09-24
-implemented-by: []
+updated: 2026-09-25
+implemented-by:
+  - https://github.com/hammershock/opencode-transit/pull/589
+  - https://github.com/hammershock/opencode-transit/pull/591
+  - https://github.com/hammershock/opencode-transit/pull/593
+  - https://github.com/hammershock/opencode-transit/pull/594
+  - https://github.com/hammershock/opencode-transit/pull/595
+  - https://github.com/hammershock/opencode-transit/pull/596
+  - https://github.com/hammershock/opencode-transit/pull/597
+  - https://github.com/hammershock/opencode-transit/pull/598
 depends-on:
   - 0001
   - 0002
