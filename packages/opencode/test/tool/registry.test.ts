@@ -142,6 +142,8 @@ describe("tool.registry", () => {
       const ids = yield* registry.ids()
 
       expect(ids).not.toContain("task_status")
+      expect(ids).not.toContain("task_send")
+      expect(ids).not.toContain("task_reconcile")
     }),
   )
 
@@ -149,6 +151,8 @@ describe("tool.registry", () => {
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       expect(yield* registry.ids()).not.toContain("task_status")
+      expect(yield* registry.ids()).not.toContain("task_send")
+      expect(yield* registry.ids()).not.toContain("task_reconcile")
     }),
   )
 
@@ -156,6 +160,8 @@ describe("tool.registry", () => {
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       expect(yield* registry.ids()).toContain("task_status")
+      expect(yield* registry.ids()).toContain("task_send")
+      expect(yield* registry.ids()).toContain("task_reconcile")
     }),
   )
 

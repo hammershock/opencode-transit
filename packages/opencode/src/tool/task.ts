@@ -12,14 +12,23 @@ import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import { Subagent } from "../agent/subagent"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
-import { Effect, Exit, Option, Schema, Scope } from "effect"
+import { Deferred, Duration, Effect, Exit, Option, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
 import { SessionTask } from "@opencode-ai/core/session/task"
 import { SessionTaskOwner } from "@opencode-ai/core/session/task-owner"
-import { SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
+import { SessionTaskDelivery } from "@opencode-ai/core/session/task-delivery"
+import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionMessage } from "@opencode-ai/core/session/message"
+import { Prompt } from "@opencode-ai/core/session/prompt"
+import { EventV2 } from "@opencode-ai/core/event"
+import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
+import { ModelV2 } from "@opencode-ai/core/model"
+import { SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { eq } from "drizzle-orm"
 import path from "path"
@@ -474,6 +483,10 @@ export const TaskTool = Tool.define(
     const fs = yield* FSUtil.Service
     const locations = yield* LocationServiceMap.Service
     const locationAccess = yield* SessionLocationAccess.Service
+    const taskBackend = Option.getOrElse(
+      yield* Effect.serviceOption(SessionTaskCapability.Service),
+      () => SessionTaskCapability.legacyTaskPromptOps,
+    )
 
     const resolveParentPolicy = Effect.fn("TaskTool.resolveParentPolicy")(function* (
       sessionID: SessionID,
@@ -737,8 +750,198 @@ export const TaskTool = Tool.define(
         }
       })
       if (previous) {
+        if (taskBackend.id === "session_v2" && previous.backend !== "v2")
+          return yield* Effect.fail(
+            new TaskPlacementError("task_control_unsupported", "Legacy Task child has no V2 inbox"),
+          )
         if (!matchesPrior(previous)) return yield* Effect.fail(new SessionTask.AdmissionConflict())
         return yield* priorReceipt(previous)
+      }
+      if (taskBackend.id === "session_v2") {
+        const capability = SessionTaskCapability.evaluate(taskBackend)
+        if (capability.status === "unsupported")
+          return yield* Effect.fail(new SessionTaskCapability.Unsupported(capability.missing))
+        if (!ctx.callID)
+          return yield* Effect.fail(new TaskPlacementError("task_invocation_required", "Task call ID is required"))
+        if (resumed) {
+          const existingBackend = yield* database.db
+            .select({ backend: SessionTaskTable.backend })
+            .from(SessionTaskTable)
+            .where(eq(SessionTaskTable.child_session_id, resumed.id))
+            .orderBy(SessionTaskTable.time_created)
+            .limit(1)
+            .get()
+            .pipe(Effect.orDie)
+          if (!existingBackend || existingBackend.backend !== "v2")
+            return yield* Effect.fail(
+              new TaskPlacementError("task_control_unsupported", "Legacy Task child has no V2 inbox"),
+            )
+        }
+        const sessionV2 = Option.getOrUndefined(yield* Effect.serviceOption(SessionV2.Service))
+        const execution = Option.getOrUndefined(yield* Effect.serviceOption(SessionExecution.Service))
+        if (!sessionV2 || !execution)
+          return yield* Effect.fail(new TaskPlacementError("task_unavailable", "V2 Task execution is unavailable"))
+        const childID = SessionV2.ID.make(resumed?.id ?? SessionID.descending())
+        const inputID = SessionMessage.ID.create()
+        const invocation = {
+          parentSessionID: SessionV2.ID.make(ctx.sessionID),
+          parentMessageID: ctx.messageID,
+          callID: ctx.callID,
+        }
+        const admissionEffect = resumed
+          ? SessionTaskDelivery.followup({
+              childSessionID: childID,
+              invocation,
+              description: params.description,
+              agentID: childAgentID,
+              text: params.prompt,
+            }).pipe(
+              Effect.provideService(EventV2.Service, events),
+              Effect.provideService(Database.Service, database),
+              Effect.provideService(SessionExecution.Service, execution),
+            )
+          : Effect.gen(function* () {
+              yield* sessionV2.create({
+                id: childID,
+                parentID: invocation.parentSessionID,
+                location: destinationRef,
+                agent: AgentV2.ID.make(destAgentID),
+                model: { id: ModelV2.ID.make(model.modelID), providerID: model.providerID },
+                permission: [
+                  ...childPolicy.permission,
+                  ...childToolDenies.filter(
+                    (deny) =>
+                      !childPolicy.permission.some(
+                        (rule) =>
+                          rule.permission === deny.permission &&
+                          rule.pattern === deny.pattern &&
+                          rule.action === deny.action,
+                      ),
+                  ),
+                ],
+                permissionBoundary: childPolicy.boundary,
+                task: {
+                  inputID,
+                  rootSessionID: SessionV2.ID.make(current.id),
+                  ...invocation,
+                  promptDigest,
+                  childSessionID: childID,
+                  description: params.description,
+                  agentID: childAgentID,
+                  locationRevision: 0,
+                  backend: "v2",
+                },
+                taskInput: { messageID: inputID, prompt: Prompt.make({ text: params.prompt }), delivery: "queue" },
+              })
+              return { inputID, state: "admitted" as const }
+            })
+        const accepted = yield* admissionEffect.pipe(
+          Effect.map((value) => ({ value }) as const),
+          Effect.catchDefect((defect) => {
+            if (defect instanceof SessionTask.AdmissionConflict)
+              return SessionTask.findInvocation(database.db, {
+                parentMessageID: ctx.messageID,
+                callID: ctx.callID!,
+              }).pipe(
+                Effect.flatMap((row) =>
+                  row && row.backend === "v2" && matchesPrior(row)
+                    ? Effect.succeed({ prior: row } as const)
+                    : Effect.fail(new TaskPlacementError(defect.code, defect.message)),
+                ),
+              )
+            if (defect instanceof SessionTask.CapacityError || defect instanceof SessionTask.OwnerUnknown)
+              return Effect.fail(new TaskPlacementError(defect.code, defect.message))
+            return Effect.die(defect)
+          }),
+        )
+        if ("prior" in accepted) return yield* priorReceipt(accepted.prior)
+        const admitted = accepted.value
+        const metadata = {
+          parentSessionId: ctx.sessionID,
+          invocation: {
+            parentMessageID: ctx.messageID,
+            callID: ctx.callID,
+            childMessageID: MessageID.make(admitted.inputID),
+          },
+          sessionId: SessionID.make(childID),
+          model,
+          target: planned.targetID,
+          targetName: planned.targetName,
+          directory: planned.directory,
+          ...(runInBackground ? { background: true } : {}),
+        }
+        yield* ctx.metadata({ title: params.description, metadata })
+        if (runInBackground) {
+          yield* execution.wake(childID)
+          return {
+            title: params.description,
+            metadata,
+            output: renderOutput({
+              sessionID: SessionID.make(childID),
+              state: "running",
+              summary: `Queued invocation ${admitted.inputID}; admission does not mean promotion`,
+              text: "",
+              location: { id: planned.targetID, name: planned.targetName, directory: planned.directory },
+            }),
+          }
+        }
+        const completed = yield* Deferred.make<void>()
+        return yield* Effect.acquireUseRelease(
+          events.listen((event) =>
+            event.type === SessionTaskEvent.Settled.type &&
+            typeof event.data === "object" &&
+            event.data !== null &&
+            "inputID" in event.data &&
+            event.data.inputID === admitted.inputID
+              ? Deferred.succeed(completed, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+          ),
+          () =>
+            Effect.gen(function* () {
+              yield* execution.wake(childID)
+              if ((yield* SessionTask.find(database.db, admitted.inputID))?.state !== "settled") {
+                const terminal = yield* Deferred.await(completed).pipe(Effect.timeoutOption(Duration.minutes(5)))
+                if (Option.isNone(terminal))
+                  return {
+                    title: params.description,
+                    metadata,
+                    output: renderOutput({
+                      sessionID: SessionID.make(childID),
+                      state: "running",
+                      summary: `Invocation ${admitted.inputID} is still pending or its owner is unknown; inspect task_status`,
+                      text: "No terminal result was observed within five minutes.",
+                      location: { id: planned.targetID, name: planned.targetName, directory: planned.directory },
+                    }),
+                  }
+              }
+              const result = yield* SessionTask.find(database.db, admitted.inputID)
+              const message = result?.result_message_id
+                ? yield* sessionV2.message({
+                    sessionID: childID,
+                    messageID: SessionMessage.ID.make(result.result_message_id),
+                  })
+                : undefined
+              const text =
+                message?.type === "assistant"
+                  ? message.content
+                      .filter((part) => part.type === "text")
+                      .map((part) => part.text)
+                      .join("\n")
+                  : ""
+              return {
+                title: params.description,
+                metadata,
+                output: renderOutput({
+                  sessionID: SessionID.make(childID),
+                  state: result?.outcome === "completed" ? "completed" : "error",
+                  summary: `Invocation ${admitted.inputID}: ${result?.outcome ?? "unavailable"}`,
+                  text,
+                  location: { id: planned.targetID, name: planned.targetName, directory: planned.directory },
+                }),
+              }
+            }),
+          (unsubscribe) => unsubscribe,
+        )
       }
       const childMessageID = MessageID.ascending()
       const childSessionID = resumed?.id ?? SessionID.descending()
@@ -901,12 +1104,20 @@ export const TaskTool = Tool.define(
             Effect.onExit((exit) =>
               !admission || !promoted || ownerLost
                 ? Effect.void
-                : SessionTask.settle(database.db, events, {
-                    inputID: childMessageID,
-                    childSessionID: nextSession.id,
-                    outcome: Exit.isSuccess(exit) ? "completed" : Exit.hasInterrupts(exit) ? "cancelled" : "failed",
-                    resultMessageID,
-                  }).pipe(Effect.asVoid),
+                : Effect.gen(function* () {
+                    yield* SessionTask.settle(database.db, events, {
+                      inputID: childMessageID,
+                      childSessionID: nextSession.id,
+                      outcome: Exit.isSuccess(exit) ? "completed" : Exit.hasInterrupts(exit) ? "cancelled" : "failed",
+                      resultMessageID,
+                    })
+                    const execution = Option.getOrUndefined(yield* Effect.serviceOption(SessionExecution.Service))
+                    if (!execution) return
+                    yield* SessionTaskDelivery.reassessRoot(database, SessionV2.ID.make(admission.rootSessionID)).pipe(
+                      Effect.provideService(SessionExecution.Service, execution),
+                      Effect.catch((error) => Effect.logWarning("Task root reassessment failed", error)),
+                    )
+                  }),
             ),
           ),
         )

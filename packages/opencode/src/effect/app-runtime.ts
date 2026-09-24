@@ -58,6 +58,9 @@ import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionPolicyAccess } from "@opencode-ai/core/session/policy-access"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
+import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
+import { TargetRegistry } from "@opencode-ai/core/target-registry"
 import { ProviderUsage } from "@/provider/usage"
 import { SyncSetup } from "@opencode-ai/core/sync/setup"
 import { SessionSync } from "@opencode-ai/core/sync/session"
@@ -99,6 +102,10 @@ export const AppLayer = AppNodeBuilderV1.build(
     Permission.node,
     Todo.node,
     Session.node,
+    SessionV2.node,
+    SessionExecution.node,
+    SessionLocationAccess.node,
+    TargetRegistry.node,
     SessionProjector.node,
     SessionPolicyAccess.node,
     SessionStatus.node,
