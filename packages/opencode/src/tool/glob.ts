@@ -35,6 +35,8 @@ export const GlobTool = Tool.define(
             },
           })
 
+          // ripgrep matches --glob against paths relative to cwd. Passing an absolute
+          // pattern with the Session cwd silently scans that tree and matches nothing.
           const requested = params.path ?? ins.directory
           const absolute = path.isAbsolute(params.pattern)
           const wildcard = params.pattern.search(/[*?[\]{}]/u)
