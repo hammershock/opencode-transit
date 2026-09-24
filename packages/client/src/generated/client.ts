@@ -45,6 +45,8 @@ import type {
   SessionsSendOutput,
   SessionsReconcileInput,
   SessionsReconcileOutput,
+  SessionsTaskWaitInput,
+  SessionsTaskWaitOutput,
   SessionsMessageInput,
   SessionsMessageOutput,
   MessagesListInput,
@@ -637,6 +639,18 @@ export function make(options: ClientOptions) {
             body: { target: input["target"], operation_id: input["operation_id"], disposition: input["disposition"] },
             successStatus: 200,
             declaredStatuses: [404, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      taskWait: (input: SessionsTaskWaitInput, requestOptions?: RequestOptions) =>
+        request<SessionsTaskWaitOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/task/wait`,
+            body: { targets: input["targets"], until: input["until"], timeout_ms: input["timeout_ms"] },
+            successStatus: 200,
+            declaredStatuses: [404, 400, 503, 401],
             empty: false,
           },
           requestOptions,

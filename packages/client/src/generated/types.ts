@@ -3084,6 +3084,106 @@ export type SessionsReconcileOutput = {
   readonly capacity_state: "available" | "capacity_unavailable" | "not_applicable"
 }
 
+export type SessionsTaskWaitInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly targets: {
+    readonly targets: ReadonlyArray<{
+      readonly task_id: string
+      readonly invocation: {
+        readonly parent_session_id: string
+        readonly parent_message_id: string
+        readonly call_id: string
+      }
+      readonly input_id: string
+    }>
+    readonly until?: "terminal" | "change" | undefined
+    readonly timeout_ms?: number | undefined
+  }["targets"]
+  readonly until?: {
+    readonly targets: ReadonlyArray<{
+      readonly task_id: string
+      readonly invocation: {
+        readonly parent_session_id: string
+        readonly parent_message_id: string
+        readonly call_id: string
+      }
+      readonly input_id: string
+    }>
+    readonly until?: "terminal" | "change" | undefined
+    readonly timeout_ms?: number | undefined
+  }["until"]
+  readonly timeout_ms?: {
+    readonly targets: ReadonlyArray<{
+      readonly task_id: string
+      readonly invocation: {
+        readonly parent_session_id: string
+        readonly parent_message_id: string
+        readonly call_id: string
+      }
+      readonly input_id: string
+    }>
+    readonly until?: "terminal" | "change" | undefined
+    readonly timeout_ms?: number | undefined
+  }["timeout_ms"]
+}
+
+export type SessionsTaskWaitOutput = {
+  readonly reason: "terminal" | "state_changed" | "needs_input" | "unavailable" | "parent_input" | "timeout"
+  readonly timed_out: boolean
+  readonly data: ReadonlyArray<{
+    readonly target: {
+      readonly task_id: string
+      readonly invocation?:
+        | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+        | undefined
+    }
+    readonly description: string
+    readonly agent_id: string
+    readonly location: {
+      readonly target_id?: string | undefined
+      readonly target_name?: string | undefined
+      readonly directory?: string | undefined
+    }
+    readonly lifecycle: "admitted" | "active" | "settled" | "unscoped_legacy"
+    readonly outcome?: "completed" | "failed" | "cancelled" | undefined
+    readonly runtime: "observed" | "unknown" | "unavailable"
+    readonly phase: "queued" | "model" | "tool" | "permission" | "question" | "unknown"
+    readonly eligibility?: "eligible" | "frozen" | "none" | undefined
+    readonly cancellation: "none" | "requested" | "observed"
+    readonly lifecycle_source: "durable" | "legacy_projection"
+    readonly input_id?: string | undefined
+    readonly disposition?: "none" | "abandoned_unknown" | undefined
+    readonly owner_safety?: "confirmed_local_lease" | "unknown" | "not_required" | undefined
+    readonly root_quota?:
+      | {
+          readonly active_used: number
+          readonly active_limit: number
+          readonly pending_used: number
+          readonly pending_limit: number
+        }
+      | undefined
+    readonly runtime_observation?:
+      | { readonly source: "execution_owner"; readonly owner_generation: string; readonly observed_at: number }
+      | undefined
+    readonly read_at: number
+    readonly last_progress_at?: number | undefined
+    readonly active_tools: ReadonlyArray<{
+      readonly name: string
+      readonly call_id: string
+      readonly started_at?: number | undefined
+    }>
+    readonly active_tool_count: number
+    readonly active_invocation?:
+      | { readonly parent_session_id: string; readonly parent_message_id: string; readonly call_id: string }
+      | undefined
+    readonly queued_count: number
+    readonly abandoned_unknown?: boolean | undefined
+    readonly result?:
+      | { readonly message_id?: string | undefined; readonly summary?: string | undefined; readonly truncated: boolean }
+      | undefined
+  }>
+}
+
 export type SessionsMessageInput = {
   readonly sessionID: { readonly sessionID: string; readonly messageID: string }["sessionID"]
   readonly messageID: { readonly sessionID: string; readonly messageID: string }["messageID"]

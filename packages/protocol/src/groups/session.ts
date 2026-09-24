@@ -522,6 +522,20 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
       ),
     )
     .add(
+      HttpApiEndpoint.post("session.taskWait", "/api/session/:sessionID/task/wait", {
+        params: { sessionID: Session.ID },
+        payload: SessionTask.WaitRequest,
+        success: SessionTask.WaitReceipt,
+        error: [SessionNotFoundError, InvalidRequestError, ServiceUnavailableError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.task.wait",
+          summary: "Wait for exact direct child Task changes",
+          description: "Wait for a bounded Task change or new parent user input without cancelling child execution.",
+        }),
+      ),
+    )
+    .add(
       HttpApiEndpoint.get("session.message", "/api/session/:sessionID/message/:messageID", {
         params: { sessionID: Session.ID, messageID: SessionMessage.ID },
         success: Schema.Struct({ data: SessionMessage.Message }),

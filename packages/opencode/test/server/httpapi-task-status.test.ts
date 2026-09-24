@@ -48,6 +48,19 @@ describe("Task status HttpApi capability boundary", () => {
           disposition: "cancel_pending",
         },
       ],
+      [
+        "wait",
+        {
+          targets: [
+            {
+              task_id: "ses_hidden",
+              invocation: { parent_session_id: "ses_missing", parent_message_id: "msg_parent", call_id: "call-task" },
+              input_id: "msg_input",
+            },
+          ],
+          timeout_ms: 100,
+        },
+      ],
     ] as const) {
       const response = await HttpApiApp.webHandler().handler(
         new Request(`http://localhost/api/session/ses_missing/task/${route}`, {
@@ -159,5 +172,37 @@ describe("Task status HttpApi capability boundary", () => {
       expect(forbidden.status).toBe(unknown.status)
       expect(await forbidden.text()).toBe(await unknown.text())
     }
+    const waitTarget = (taskID: string) => ({
+      task_id: taskID,
+      input_id: "msg_missing",
+      invocation: { parent_session_id: parent.id, parent_message_id: "msg_parent", call_id: "call-task" },
+    })
+    const unknownWait = await request(`/api/session/${parent.id}/task/wait`, {
+      targets: [waitTarget("ses_missing")],
+      timeout_ms: 10,
+    })
+    const foreignWait = await request(`/api/session/${parent.id}/task/wait`, {
+      targets: [waitTarget(foreign.id)],
+      timeout_ms: 10,
+    })
+    const forgedWait = await request(`/api/session/${parent.id}/task/wait`, {
+      targets: [
+        {
+          ...waitTarget(child.id),
+          invocation: { ...waitTarget(child.id).invocation, parent_session_id: foreignParent.id },
+        },
+      ],
+      timeout_ms: 10,
+    })
+    expect(unknownWait.status, await unknownWait.clone().text()).toBe(404)
+    expect(foreignWait.status).toBe(unknownWait.status)
+    expect(forgedWait.status).toBe(unknownWait.status)
+    expect(await foreignWait.text()).toBe(await unknownWait.clone().text())
+    expect(await forgedWait.text()).toBe(await unknownWait.text())
+    const excessive = await request(`/api/session/${parent.id}/task/wait`, {
+      targets: [waitTarget(child.id)],
+      timeout_ms: 120_001,
+    })
+    expect(excessive.status, await excessive.clone().text()).toBe(400)
   })
 })
