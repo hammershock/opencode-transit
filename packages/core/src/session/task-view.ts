@@ -67,7 +67,6 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
     ...(child.target?.type === "rexd" ? { target_id: child.target.targetID } : {}),
     ...(child.last_known_target_name ? { target_name: child.last_known_target_name } : {}),
   }
-  const read_at = Date.now()
   if (!row) {
     const view: TaskSchema.View = {
       target: { task_id: child.id },
@@ -80,7 +79,7 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
       eligibility: "none" as const,
       cancellation: "none" as const,
       lifecycle_source: "legacy_projection" as const,
-      read_at,
+      read_at: Date.now(),
       active_tools: [],
       active_tool_count: 0,
       queued_count: 0,
@@ -186,7 +185,7 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
           },
         }
       : {}),
-    read_at,
+    read_at: Date.now(),
     ...(lastPart ? { last_progress_at: lastPart.updated } : {}),
     active_tools,
     active_tool_count: count?.value ?? 0,

@@ -148,12 +148,14 @@ describe("SessionTask local owner lease", () => {
         })
         expect(first.runtime).toBe("observed")
         expect(first.runtime_observation?.owner_generation).toBe(owner.owner_generation)
+        expect(first.read_at).toBeGreaterThanOrEqual(first.runtime_observation?.observed_at ?? 0)
         yield* Effect.sleep("2 millis")
         const second = yield* SessionTaskView.read(yield* Database.Service, {
           parentSessionID: root,
           childSessionID: child,
         })
         expect(second.runtime_observation?.observed_at).toBeGreaterThan(first.runtime_observation?.observed_at ?? 0)
+        expect(second.read_at).toBeGreaterThanOrEqual(second.runtime_observation?.observed_at ?? 0)
         expect(second.last_progress_at).toBe(first.last_progress_at)
         process.kill(owner.holder_pid, "SIGKILL")
         expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true)
