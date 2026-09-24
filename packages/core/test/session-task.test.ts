@@ -1066,7 +1066,7 @@ describe("SessionTask admission", () => {
         callID: "call-progress-b",
         promptDigest: "digest-b",
         description: "second run",
-        backend: "v2" as const,
+        backend: "legacy" as const,
       }
       yield* events.publish(SessionTaskEvent.Admitted, {
         sessionID: child,

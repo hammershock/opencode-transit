@@ -80,11 +80,39 @@ export const send = Effect.fn("SessionTaskDelivery.send")(function* (input: {
       return yield* Effect.fail(new UnknownOrForbidden())
     return { inputID: existing.input_id, state: existing.state, reason: existing.reason }
   }
+  const target = yield* SessionTask.find(db, input.invocationInputID)
+  if (
+    !target ||
+    target.child_session_id !== input.childSessionID ||
+    target.parent_session_id !== input.invocation.parentSessionID ||
+    target.parent_message_id !== input.invocation.parentMessageID ||
+    target.call_id !== input.invocation.callID ||
+    target.backend !== "v2"
+  )
+    return yield* Effect.fail(new UnknownOrForbidden())
   if (!database.filename || database.filename === ":memory:") return yield* Effect.fail(new Unavailable())
-  const observed = yield* Effect.promise(() => SessionTaskOwner.observe(database.filename!, input.childSessionID))
-  if (!observed) return yield* Effect.fail(new Unavailable())
   const admitted = yield* SessionTask.withOwner(input.childSessionID)(
     Effect.gen(function* () {
+      const duplicate = yield* db
+        .select()
+        .from(SessionTaskSteerTable)
+        .where(eq(SessionTaskSteerTable.operation_id, input.operationID))
+        .get()
+        .pipe(Effect.orDie)
+      if (duplicate) {
+        if (duplicate.invocation_input_id !== input.invocationInputID || duplicate.prompt_digest !== promptDigest)
+          return yield* Effect.fail(new SessionTask.AdmissionConflict())
+        const target = yield* SessionTask.find(db, duplicate.invocation_input_id)
+        if (
+          !target ||
+          target.child_session_id !== input.childSessionID ||
+          target.parent_session_id !== input.invocation.parentSessionID ||
+          target.parent_message_id !== input.invocation.parentMessageID ||
+          target.call_id !== input.invocation.callID
+        )
+          return yield* Effect.fail(new UnknownOrForbidden())
+        return { inputID: duplicate.input_id, state: duplicate.state, reason: duplicate.reason, fresh: false }
+      }
       const task = yield* SessionTask.find(db, input.invocationInputID)
       if (
         !task ||
@@ -96,6 +124,8 @@ export const send = Effect.fn("SessionTaskDelivery.send")(function* (input: {
       )
         return yield* Effect.fail(new UnknownOrForbidden())
       if (task.state !== "active" || task.abandoned_unknown) return yield* Effect.fail(new NotRunning())
+      const observed = yield* Effect.promise(() => SessionTaskOwner.observe(database.filename!, input.childSessionID))
+      if (!observed) return yield* Effect.fail(new Unavailable())
       if (task.owner_generation !== observed.owner_generation) return yield* Effect.fail(new Unavailable())
       const child = yield* db
         .select({ revision: SessionTable.location_revision })
@@ -138,11 +168,11 @@ export const send = Effect.fn("SessionTaskDelivery.send")(function* (input: {
               return yield* Effect.die(new NotRunning())
           }),
       })
-      return id
+      return { inputID: id, state: "admitted" as const, reason: null, fresh: true }
     }),
   )
-  yield* execution.wake(input.childSessionID)
-  return { inputID: admitted, state: "admitted" as const, reason: null }
+  if (admitted.fresh) yield* execution.wake(input.childSessionID)
+  return { inputID: admitted.inputID, state: admitted.state, reason: admitted.reason }
 })
 
 /** Record a distinct follow-up in the same child's durable queue. */
@@ -564,7 +594,7 @@ export const archiveUnknown = Effect.fn("SessionTaskDelivery.archiveUnknown")(fu
   return receipt
 })
 
-const reassessRoot = Effect.fn("SessionTaskDelivery.reassessRoot")(function* (
+export const reassessRoot = Effect.fn("SessionTaskDelivery.reassessRoot")(function* (
   database: Database.Interface,
   rootSessionID: SessionSchema.ID,
 ) {

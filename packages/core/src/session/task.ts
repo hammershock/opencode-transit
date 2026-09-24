@@ -1,6 +1,6 @@
 export * as SessionTask from "./task"
 
-import { and, asc, eq, inArray, or, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, ne, or, sql } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
 import { Effect } from "effect"
 import type { Database } from "../database/database"
@@ -154,7 +154,11 @@ export const admit = Effect.fn("SessionTask.admit")(function* (
     return yield* Effect.die(new OwnerUnknown())
   const childPending = yield* count(
     db,
-    and(eq(SessionTaskTable.child_session_id, input.childSessionID), eq(SessionTaskTable.state, "queued")),
+    and(
+      eq(SessionTaskTable.child_session_id, input.childSessionID),
+      eq(SessionTaskTable.state, "queued"),
+      ne(SessionTaskTable.eligibility, "cancelled"),
+    ),
   )
   const state = childRunning === 0 && childPending === 0 ? "admitted" : "queued"
   if (options?.validate !== false) {
@@ -174,7 +178,11 @@ export const admit = Effect.fn("SessionTask.admit")(function* (
         return yield* Effect.die(new CapacityError("child_pending", childPending, CHILD_PENDING_LIMIT))
       const rootPending = yield* count(
         db,
-        and(eq(SessionTaskTable.root_session_id, input.rootSessionID), eq(SessionTaskTable.state, "queued")),
+        and(
+          eq(SessionTaskTable.root_session_id, input.rootSessionID),
+          eq(SessionTaskTable.state, "queued"),
+          ne(SessionTaskTable.eligibility, "cancelled"),
+        ),
       )
       if (rootPending >= ROOT_PENDING_LIMIT)
         return yield* Effect.die(new CapacityError("root_pending", rootPending, ROOT_PENDING_LIMIT))
@@ -214,13 +222,21 @@ export const validate = Effect.fn("SessionTask.validate")(function* (db: DB, inp
   if (row.state === "queued") {
     const child = yield* count(
       db,
-      and(eq(SessionTaskTable.child_session_id, row.child_session_id), eq(SessionTaskTable.state, "queued")),
+      and(
+        eq(SessionTaskTable.child_session_id, row.child_session_id),
+        eq(SessionTaskTable.state, "queued"),
+        ne(SessionTaskTable.eligibility, "cancelled"),
+      ),
     )
     if (child > CHILD_PENDING_LIMIT)
       return yield* Effect.die(new CapacityError("child_pending", child - 1, CHILD_PENDING_LIMIT))
     const root = yield* count(
       db,
-      and(eq(SessionTaskTable.root_session_id, row.root_session_id), eq(SessionTaskTable.state, "queued")),
+      and(
+        eq(SessionTaskTable.root_session_id, row.root_session_id),
+        eq(SessionTaskTable.state, "queued"),
+        ne(SessionTaskTable.eligibility, "cancelled"),
+      ),
     )
     if (root > ROOT_PENDING_LIMIT)
       return yield* Effect.die(new CapacityError("root_pending", root - 1, ROOT_PENDING_LIMIT))
@@ -326,7 +342,13 @@ export const projectPromoted = Effect.fn("SessionTask.projectPromoted")(function
     const head = yield* db
       .select({ id: SessionTaskTable.input_id })
       .from(SessionTaskTable)
-      .where(and(eq(SessionTaskTable.child_session_id, input.childSessionID), eq(SessionTaskTable.state, "queued")))
+      .where(
+        and(
+          eq(SessionTaskTable.child_session_id, input.childSessionID),
+          eq(SessionTaskTable.state, "queued"),
+          ne(SessionTaskTable.eligibility, "cancelled"),
+        ),
+      )
       .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.input_id))
       .limit(1)
       .get()
@@ -613,7 +635,13 @@ export const projectArchivedUnknown = Effect.fn("SessionTask.projectArchivedUnkn
   yield* db
     .update(SessionTaskTable)
     .set({ eligibility: "frozen" })
-    .where(and(eq(SessionTaskTable.child_session_id, input.childSessionID), eq(SessionTaskTable.state, "queued")))
+    .where(
+      and(
+        eq(SessionTaskTable.child_session_id, input.childSessionID),
+        eq(SessionTaskTable.state, "queued"),
+        ne(SessionTaskTable.eligibility, "cancelled"),
+      ),
+    )
     .run()
     .pipe(Effect.orDie)
   yield* db

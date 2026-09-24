@@ -62,6 +62,8 @@ import { SkillGuidance } from "./skill/guidance"
 import { SessionSkillCatalog } from "./session/skill-catalog"
 import { InstructionContext } from "./instruction-context"
 import { ToolRegistry } from "./tool/registry"
+import { PermissionV1 } from "./v1/permission"
+import type { SessionPolicy } from "@opencode-ai/schema/session-policy"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -110,6 +112,8 @@ type CreateInput = {
   model?: ModelV2.Ref
   location: Location.Ref
   approvalMode?: ApprovalMode.Mode
+  permission?: PermissionV1.Ruleset
+  permissionBoundary?: SessionPolicy.Boundary
 }
 
 type CompactInput = {
@@ -645,6 +649,8 @@ const layer = Layer.effect(
               workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
               title: `New session - ${new Date(now).toISOString()}`,
               approvalMode: input.approvalMode ?? "normal",
+              permission: input.permission,
+              permissionBoundary: input.permissionBoundary,
               agent: input.agent,
               model: input.model
                 ? {

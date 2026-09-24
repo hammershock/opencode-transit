@@ -1,6 +1,6 @@
 export * as SessionInput from "./input"
 
-import { and, asc, eq, isNull, lte, notExists, sql } from "drizzle-orm"
+import { and, asc, eq, isNull, lte, notExists, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
 import { Admitted, Delivery } from "@opencode-ai/schema/session-input"
 import type { Database } from "../database/database"
@@ -61,7 +61,12 @@ const withoutSettlement = (db: DatabaseService) =>
       db
         .select({ id: SessionTaskTable.input_id })
         .from(SessionTaskTable)
-        .where(and(eq(SessionTaskTable.input_id, SessionInputTable.id), eq(SessionTaskTable.state, "settled"))),
+        .where(
+          and(
+            eq(SessionTaskTable.input_id, SessionInputTable.id),
+            or(eq(SessionTaskTable.state, "settled"), eq(SessionTaskTable.eligibility, "cancelled")),
+          ),
+        ),
     ),
   )
 

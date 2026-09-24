@@ -37,7 +37,9 @@ const layer = Layer.effect(
           .all()
           .pipe(Effect.orDie)
         const v2 = tasks.filter((task) => task.backend === "v2")
-        const next = v2.find((task) => task.state === "admitted" || task.state === "queued")
+        const next = v2.find(
+          (task) => task.state === "admitted" || (task.state === "queued" && task.eligibility !== "cancelled"),
+        )
         if (v2.length > 0 && (!next || next.eligibility !== "eligible")) return
         if (next && next.location_revision !== session.locationRevision) return
         const run = SessionRunner.Service.use((runner) =>

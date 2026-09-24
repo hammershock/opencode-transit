@@ -1,12 +1,13 @@
 export * as SessionTaskView from "./task-view"
 
-import { and, asc, desc, eq, gt, inArray, lte, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, lt, lte, ne, or, sql } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import type { Database } from "../database/database"
 import { SessionTask as TaskSchema } from "@opencode-ai/schema/session-task"
 import { SessionTaskOwner } from "./task-owner"
 import { SessionTask } from "./task"
-import { MessageTable, PartTable, SessionTable, SessionTaskTable } from "./sql"
+import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, SessionTable, SessionTaskTable } from "./sql"
+import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionV1 } from "../v1/session"
 import { LocationServiceMap } from "../location-service-map"
@@ -306,6 +307,7 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
         eq(SessionTaskTable.child_session_id, child.id),
         eq(SessionTaskTable.parent_session_id, input.parentSessionID),
         eq(SessionTaskTable.state, "queued"),
+        ne(SessionTaskTable.eligibility, "cancelled"),
       ),
     )
     .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.input_id))
@@ -361,7 +363,13 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
   const queued_count = yield* db
     .select({ value: sql<number>`count(*)` })
     .from(SessionTaskTable)
-    .where(and(eq(SessionTaskTable.child_session_id, child.id), eq(SessionTaskTable.state, "queued")))
+    .where(
+      and(
+        eq(SessionTaskTable.child_session_id, child.id),
+        eq(SessionTaskTable.state, "queued"),
+        ne(SessionTaskTable.eligibility, "cancelled"),
+      ),
+    )
     .get()
     .pipe(Effect.orDie)
   const root_active = yield* db
@@ -379,7 +387,13 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
   const root_pending = yield* db
     .select({ value: sql<number>`count(*)` })
     .from(SessionTaskTable)
-    .where(and(eq(SessionTaskTable.root_session_id, row.root_session_id), eq(SessionTaskTable.state, "queued")))
+    .where(
+      and(
+        eq(SessionTaskTable.root_session_id, row.root_session_id),
+        eq(SessionTaskTable.state, "queued"),
+        ne(SessionTaskTable.eligibility, "cancelled"),
+      ),
+    )
     .get()
     .pipe(Effect.orDie)
   const observed =
@@ -387,6 +401,62 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
       ? yield* Effect.promise(() => SessionTaskOwner.observe(database.filename!, child.id))
       : undefined
   const live = row.state === "active" && observed?.owner_generation === row.owner_generation
+  // V2 message sequence is the durable aggregate event sequence. A queued B can
+  // be admitted while A still runs, so its admission time is not a boundary.
+  const currentInput =
+    row.backend === "v2"
+      ? yield* db
+          .select({ promoted: SessionInputTable.promoted_seq })
+          .from(SessionInputTable)
+          .where(eq(SessionInputTable.id, SessionMessage.ID.make(row.input_id)))
+          .get()
+          .pipe(Effect.orDie)
+      : undefined
+  const nextPromotion =
+    currentInput?.promoted === null || currentInput?.promoted === undefined
+      ? undefined
+      : yield* db
+          .select({ promoted: SessionInputTable.promoted_seq })
+          .from(SessionTaskTable)
+          .innerJoin(SessionInputTable, eq(SessionTaskTable.input_id, SessionInputTable.id))
+          .where(
+            and(
+              eq(SessionTaskTable.child_session_id, child.id),
+              gt(SessionInputTable.promoted_seq, currentInput.promoted),
+            ),
+          )
+          .orderBy(asc(SessionInputTable.promoted_seq))
+          .limit(1)
+          .get()
+          .pipe(Effect.orDie)
+  const v2Assistant =
+    currentInput?.promoted === null || currentInput?.promoted === undefined
+      ? undefined
+      : yield* db
+          .select({ data: SessionMessageTable.data, updated: SessionMessageTable.time_updated })
+          .from(SessionMessageTable)
+          .where(
+            and(
+              eq(SessionMessageTable.session_id, child.id),
+              eq(SessionMessageTable.type, "assistant"),
+              gt(SessionMessageTable.seq, currentInput.promoted),
+              ...(nextPromotion?.promoted ? [lt(SessionMessageTable.seq, nextPromotion.promoted)] : []),
+            ),
+          )
+          .orderBy(desc(SessionMessageTable.seq))
+          .limit(1)
+          .get()
+          .pipe(Effect.orDie)
+  const v2Content =
+    v2Assistant?.data && "content" in v2Assistant.data
+      ? (v2Assistant.data.content as SessionMessage.Assistant["content"])
+      : []
+  const v2Running =
+    live && row.backend === "v2"
+      ? v2Content.filter(
+          (part): part is SessionMessage.AssistantTool => part.type === "tool" && part.state.status === "running",
+        )
+      : []
   const partOwner = and(
     eq(PartTable.session_id, child.id),
     eq(MessageTable.session_id, child.id),
@@ -399,15 +469,18 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
       ),
     ),
   )
-  const lastPart = yield* db
-    .select({ updated: PartTable.time_updated })
-    .from(PartTable)
-    .innerJoin(MessageTable, eq(PartTable.message_id, MessageTable.id))
-    .where(partOwner)
-    .orderBy(desc(PartTable.time_updated))
-    .limit(1)
-    .get()
-    .pipe(Effect.orDie)
+  const lastPart =
+    row.backend === "v2"
+      ? undefined
+      : yield* db
+          .select({ updated: PartTable.time_updated })
+          .from(PartTable)
+          .innerJoin(MessageTable, eq(PartTable.message_id, MessageTable.id))
+          .where(partOwner)
+          .orderBy(desc(PartTable.time_updated))
+          .limit(1)
+          .get()
+          .pipe(Effect.orDie)
   const running = live
     ? and(
         partOwner,
@@ -435,18 +508,28 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
         .all()
         .pipe(Effect.orDie)
     : []
-  const active_tools = parts
-    .filter((part) => part.data.type === "tool")
-    .map((part) => ({
-      name: (part.data as SessionV1.ToolPart).tool,
-      call_id: (part.data as SessionV1.ToolPart).callID,
-      ...((part.data as SessionV1.ToolPart).state.status === "running"
-        ? { started_at: (part.data as SessionV1.ToolPart & { state: SessionV1.ToolStateRunning }).state.time.start }
-        : {}),
-    }))
+  const active_tools =
+    row.backend === "v2"
+      ? v2Running.slice(0, 16).map((part) => ({
+          name: part.name,
+          call_id: part.id,
+          ...(part.time.ran ? { started_at: part.time.ran.epochMilliseconds } : {}),
+        }))
+      : parts
+          .filter((part) => part.data.type === "tool")
+          .map((part) => ({
+            name: (part.data as SessionV1.ToolPart).tool,
+            call_id: (part.data as SessionV1.ToolPart).callID,
+            ...((part.data as SessionV1.ToolPart).state.status === "running"
+              ? {
+                  started_at: (part.data as SessionV1.ToolPart & { state: SessionV1.ToolStateRunning }).state.time
+                    .start,
+                }
+              : {}),
+          }))
   const activeObserved = active && observed?.owner_generation === active.owner_generation
   const resultSummary =
-    input.includeResults && row.result_message_id
+    input.includeResults && row.result_message_id && row.backend === "legacy"
       ? yield* db
           .select({ text: sql<string>`substr(json_extract(${PartTable.data}, '$.text'), 1, 2049)` })
           .from(PartTable)
@@ -462,10 +545,32 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
           .all()
           .pipe(Effect.orDie)
       : []
-  const resultText = resultSummary
-    .slice(0, 8)
-    .map((part) => part.text)
-    .join("\n")
+  const v2Result =
+    input.includeResults && row.result_message_id && row.backend === "v2"
+      ? yield* db
+          .select({ data: SessionMessageTable.data })
+          .from(SessionMessageTable)
+          .where(
+            and(
+              eq(SessionMessageTable.id, SessionMessage.ID.make(row.result_message_id)),
+              eq(SessionMessageTable.session_id, child.id),
+              eq(SessionMessageTable.type, "assistant"),
+            ),
+          )
+          .get()
+          .pipe(Effect.orDie)
+      : undefined
+  const resultText =
+    v2Result?.data && "content" in v2Result.data
+      ? (v2Result.data.content as SessionMessage.Assistant["content"])
+          .filter((part) => part.type === "text")
+          .slice(0, 8)
+          .map((part) => part.text)
+          .join("\n")
+      : resultSummary
+          .slice(0, 8)
+          .map((part) => part.text)
+          .join("\n")
   const resultBytes = Buffer.from(resultText, "utf8")
   const summary =
     resultBytes.length <= 2048
@@ -527,9 +632,13 @@ export const read = Effect.fn("SessionTaskView.read")(function* (
         }
       : {}),
     read_at: Date.now(),
-    ...(lastPart ? { last_progress_at: lastPart.updated } : {}),
+    ...(row.backend === "v2" && v2Assistant
+      ? { last_progress_at: v2Assistant.updated }
+      : lastPart
+        ? { last_progress_at: lastPart.updated }
+        : {}),
     active_tools,
-    active_tool_count: count?.value ?? 0,
+    active_tool_count: row.backend === "v2" ? v2Running.length : (count?.value ?? 0),
     ...(active
       ? {
           active_invocation: {

@@ -43,9 +43,10 @@ export const reassess = Effect.fn("SessionTaskScheduler.reassess")(function* (
           .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.input_id))
           .all()
           .pipe(Effect.orDie)
-        const heads = queued.filter(
+        const pending = queued.filter((row) => row.eligibility !== "cancelled")
+        const heads = pending.filter(
           (row, index) =>
-            queued.findIndex((candidate) => candidate.child_session_id === row.child_session_id) === index,
+            pending.findIndex((candidate) => candidate.child_session_id === row.child_session_id) === index,
         )
         const active = yield* database.db
           .select({ childID: SessionTaskTable.child_session_id })

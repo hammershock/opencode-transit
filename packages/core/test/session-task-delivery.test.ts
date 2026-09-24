@@ -163,13 +163,32 @@ describe("SessionTaskDelivery", () => {
           expect(receipt.inputID).toBe(second)
           expect((yield* SessionTaskDelivery.reconcile(operation)).inputID).toBe(second)
           expect((yield* SessionInput.promoteNextQueued(db, events, child))?.id).toBe(second)
+          const fourth = SessionMessage.ID.create()
+          yield* SessionInput.admit(db, events, {
+            id: fourth,
+            sessionID: child,
+            prompt: Prompt.make({ text: "D" }),
+            delivery: "queue",
+            task: {
+              kind: "invocation",
+              admission: {
+                ...base,
+                inputID: fourth,
+                parentMessageID: "msg_parent_d",
+                callID: "call-d",
+                promptDigest: "d",
+              },
+            },
+          })
+          yield* SessionTask.settle(db, events, { inputID: second, childSessionID: child, outcome: "completed" })
+          expect((yield* SessionInput.promoteNextQueued(db, events, child))?.id).toBe(fourth)
         }).pipe(Effect.provide(layer), Effect.scoped),
       )
     } finally {
       if (controller.exitCode === null) controller.kill()
       await controller.exited
     }
-  })
+  }, 30_000)
 
   test("guards steer and queued follow-up with a real local owner lease", async () => {
     await using temp = await tmpdir()
@@ -243,21 +262,16 @@ describe("SessionTaskDelivery", () => {
               prompt: Prompt.make({ text: "initial" }),
               delivery: "queue",
             })
-            const receipt = yield* SessionTaskDelivery.send({
-              childSessionID: child,
-              invocationInputID: inputID,
-              invocation,
-              operationID: "send-1",
-              text: "more context",
-            })
+            const send = () =>
+              SessionTaskDelivery.send({
+                childSessionID: child,
+                invocationInputID: inputID,
+                invocation,
+                operationID: "send-1",
+                text: "more context",
+              })
+            const [receipt, duplicate] = yield* Effect.all([send(), send()], { concurrency: "unbounded" })
             expect(receipt.state).toBe("admitted")
-            const duplicate = yield* SessionTaskDelivery.send({
-              childSessionID: child,
-              invocationInputID: inputID,
-              invocation,
-              operationID: "send-1",
-              text: "more context",
-            })
             expect(duplicate.inputID).toBe(receipt.inputID)
             const conflict = yield* SessionTaskDelivery.send({
               childSessionID: child,

@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { sql } from "drizzle-orm"
 import {
   LLMClient,
   LLMError,
@@ -26,6 +27,7 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { Snapshot } from "@opencode-ai/core/snapshot"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionTaskView } from "@opencode-ai/core/session/task-view"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
@@ -578,7 +580,8 @@ describe("SessionRunnerLLM", () => {
   it.effect("executes three Task inbox invocations in separate ordered turns with exact results", () =>
     Effect.gen(function* () {
       yield* setup
-      const db = (yield* Database.Service).db
+      const database = yield* Database.Service
+      const db = database.db
       const events = yield* EventV2.Service
       const runner = yield* SessionRunner.Service
       const child = SessionV2.ID.create()
@@ -650,6 +653,25 @@ describe("SessionRunnerLLM", () => {
       const rows = yield* Effect.forEach(inputs, (id) => SessionTask.find(db, id))
       expect(rows.map((row) => row?.state)).toEqual(["settled", "settled", "settled"])
       expect(new Set(rows.map((row) => row?.result_message_id)).size).toBe(3)
+      yield* db.run(sql`UPDATE session_task SET time_started = 100 WHERE child_session_id = ${child}`)
+      yield* Effect.forEach(rows, (row, index) =>
+        db.run(sql`UPDATE session_message SET time_created = 100, time_updated = ${101 + index}
+          WHERE id = ${row!.result_message_id}`),
+      )
+      const views = yield* Effect.forEach([0, 1, 2], (index) =>
+        SessionTaskView.read(database, {
+          parentSessionID: sessionID,
+          childSessionID: child,
+          invocation: {
+            parent_session_id: sessionID,
+            parent_message_id: admission(index).parentMessageID,
+            call_id: admission(index).callID,
+          },
+          includeResults: true,
+        }),
+      )
+      expect(views.map((view) => view.result?.summary)).toEqual(["A done", "B done", "C done"])
+      expect(views.map((view) => view.last_progress_at)).toEqual([101, 102, 103])
     }),
   )
 
