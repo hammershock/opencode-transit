@@ -3184,6 +3184,40 @@ export type SessionsTaskWaitOutput = {
   }>
 }
 
+export type SessionsTaskInterruptInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly target: {
+    readonly target: {
+      readonly task_id: string
+      readonly invocation: {
+        readonly parent_session_id: string
+        readonly parent_message_id: string
+        readonly call_id: string
+      }
+      readonly input_id: string
+    }
+  }["target"]
+}
+
+export type SessionsTaskInterruptOutput = {
+  readonly input_id: string
+  readonly state: "requested" | "cancelled_pending" | "already_settled" | "unavailable"
+}
+
+export type SessionsTaskStopInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly task_id: { readonly task_id: string; readonly operation_id: string }["task_id"]
+  readonly operation_id: { readonly task_id: string; readonly operation_id: string }["operation_id"]
+}
+
+export type SessionsTaskStopOutput = {
+  readonly operation_id: string
+  readonly data: ReadonlyArray<{
+    readonly input_id: string
+    readonly state: "requested" | "cancelled_pending" | "already_settled" | "unavailable"
+  }>
+}
+
 export type SessionsMessageInput = {
   readonly sessionID: { readonly sessionID: string; readonly messageID: string }["sessionID"]
   readonly messageID: { readonly sessionID: string; readonly messageID: string }["messageID"]

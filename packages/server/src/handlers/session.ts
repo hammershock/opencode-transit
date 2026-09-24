@@ -23,6 +23,7 @@ import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability
 import { SessionTaskDelivery } from "@opencode-ai/core/session/task-delivery"
 import { SessionTask } from "@opencode-ai/core/session/task"
 import { SessionTaskWait } from "@opencode-ai/core/session/task-wait"
+import { SessionTaskControl } from "@opencode-ai/core/session/task-control"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
@@ -820,6 +821,98 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   }),
             )
           }),
+        ),
+      )
+      .handle("session.taskInterrupt", (ctx) =>
+        Effect.gen(function* () {
+          if (SessionTaskCapability.evaluate(taskBackend).status === "unsupported")
+            return yield* new ServiceUnavailableError({
+              service: "task_control_unsupported",
+              message: "Task control unsupported",
+            })
+          yield* session
+            .get(ctx.params.sessionID)
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", () =>
+                Effect.fail(new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })),
+              ),
+            )
+          if (ctx.payload.target.invocation.parent_session_id !== ctx.params.sessionID)
+            return yield* new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })
+          const receipt = yield* SessionTaskControl.interrupt({
+            childSessionID: ctx.payload.target.task_id,
+            inputID: ctx.payload.target.input_id,
+            invocation: {
+              parentSessionID: ctx.params.sessionID,
+              parentMessageID: ctx.payload.target.invocation.parent_message_id,
+              callID: ctx.payload.target.invocation.call_id,
+            },
+            actor: { kind: "user", id: "instance-user" },
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.provideService(EventV2.Service, events),
+            Effect.provideService(SessionExecution.Service, execution),
+          )
+          return { input_id: receipt.inputID, state: receipt.state }
+        }).pipe(
+          Effect.mapError((error) =>
+            error instanceof SessionTaskControl.UnknownOrForbidden
+              ? new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })
+              : error instanceof SessionTaskControl.Conflict
+                ? new ConflictError({ message: "Task invocation conflict" })
+                : error instanceof SessionNotFoundError || error instanceof ServiceUnavailableError
+                  ? error
+                  : new ServiceUnavailableError({
+                      service: "task_control_unavailable",
+                      message: "Task control unavailable",
+                    }),
+          ),
+        ),
+      )
+      .handle("session.taskStop", (ctx) =>
+        Effect.gen(function* () {
+          if (SessionTaskCapability.evaluate(taskBackend).status === "unsupported")
+            return yield* new ServiceUnavailableError({
+              service: "task_control_unsupported",
+              message: "Task control unsupported",
+            })
+          yield* session
+            .get(ctx.params.sessionID)
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", () =>
+                Effect.fail(new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })),
+              ),
+            )
+          if (!ctx.payload.operation_id) return yield* new InvalidRequestError({ message: "Missing operation ID" })
+          const receipt = yield* SessionTaskControl.stop({
+            parentSessionID: ctx.params.sessionID,
+            childSessionID: ctx.payload.task_id,
+            operationID: ctx.payload.operation_id,
+            actor: { kind: "user", id: "instance-user" },
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.provideService(EventV2.Service, events),
+            Effect.provideService(SessionExecution.Service, execution),
+          )
+          return {
+            operation_id: receipt.operationID,
+            data: receipt.data.map((member) => ({ input_id: member.inputID, state: member.state })),
+          }
+        }).pipe(
+          Effect.mapError((error) =>
+            error instanceof SessionTaskControl.UnknownOrForbidden
+              ? new SessionNotFoundError({ sessionID: "", message: "Task target unavailable" })
+              : error instanceof SessionTaskControl.Conflict
+                ? new ConflictError({ message: "Task invocation conflict" })
+                : error instanceof SessionNotFoundError ||
+                    error instanceof InvalidRequestError ||
+                    error instanceof ServiceUnavailableError
+                  ? error
+                  : new ServiceUnavailableError({
+                      service: "task_control_unavailable",
+                      message: "Task control unavailable",
+                    }),
+          ),
         ),
       )
       .handle(

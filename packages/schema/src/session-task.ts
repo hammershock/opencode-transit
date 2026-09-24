@@ -124,3 +124,15 @@ export const WaitReceipt = Schema.Struct({
   timed_out: Schema.Boolean,
   data: Schema.Array(View),
 })
+
+export const InterruptRequest = Schema.Struct({ target: ExactTarget })
+export const InterruptReceipt = Schema.Struct({
+  input_id: Schema.String,
+  state: Schema.Literals(["requested", "cancelled_pending", "already_settled", "unavailable"]),
+})
+
+export const StopRequest = Schema.Struct({ task_id: SessionID, operation_id: Schema.String })
+export const StopReceipt = Schema.Struct({
+  operation_id: Schema.String,
+  data: Schema.Array(InterruptReceipt),
+})

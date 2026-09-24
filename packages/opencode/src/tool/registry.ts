@@ -20,6 +20,8 @@ import { TaskStatusTool } from "./task-status"
 import { TaskSendTool } from "./task-send"
 import { TaskReconcileTool } from "./task-reconcile"
 import { TaskWaitTool } from "./task-wait"
+import { TaskInterruptTool } from "./task-interrupt"
+import { TaskStopTool } from "./task-stop"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { ConfigExperimental } from "@opencode-ai/core/config/experimental"
 import { Database } from "@opencode-ai/core/database/database"
@@ -124,6 +126,8 @@ const layer = Layer.effect(
     const taskSend = yield* TaskSendTool
     const taskReconcile = yield* TaskReconcileTool
     const taskWait = yield* TaskWaitTool
+    const taskInterrupt = yield* TaskInterruptTool
+    const taskStop = yield* TaskStopTool
     const read = yield* ReadTool
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
@@ -246,6 +250,8 @@ const layer = Layer.effect(
           taskSend: Tool.init(taskSend),
           taskReconcile: Tool.init(taskReconcile),
           taskWait: Tool.init(taskWait),
+          taskInterrupt: Tool.init(taskInterrupt),
+          taskStop: Tool.init(taskStop),
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
           search: Tool.init(websearch),
@@ -270,7 +276,9 @@ const layer = Layer.effect(
             tool.write,
             tool.task,
             ...(taskStatusEnabled ? [tool.taskStatus] : []),
-            ...(taskStatusEnabled ? [tool.taskSend, tool.taskReconcile, tool.taskWait] : []),
+            ...(taskStatusEnabled
+              ? [tool.taskSend, tool.taskReconcile, tool.taskWait, tool.taskInterrupt, tool.taskStop]
+              : []),
             tool.fetch,
             tool.todo,
             tool.search,

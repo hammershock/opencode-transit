@@ -8,6 +8,7 @@ import { SessionTaskTable } from "@opencode-ai/core/session/sql"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionTaskDelivery } from "@opencode-ai/core/session/task-delivery"
+import { SessionTaskControl } from "@opencode-ai/core/session/task-control"
 import { SessionTaskSteerTable } from "@opencode-ai/core/session/sql"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -19,6 +20,8 @@ import { Catalog } from "@opencode-ai/core/catalog"
 import { LocationServiceMap } from "@opencode-ai/core/location-services"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { TaskTool } from "@/tool/task"
+import { TaskInterruptTool } from "@/tool/task-interrupt"
+import { TaskStopTool } from "@/tool/task-stop"
 import { MessageID } from "@/session/schema"
 import { asc, eq } from "drizzle-orm"
 import { Duration, Effect } from "effect"
@@ -105,6 +108,236 @@ const result = await AppRuntime.runPromise(
         }),
       ).pipe(Effect.provide(locations.get(location)))
       const execution = yield* SessionExecution.Service
+      if (process.env.TASK_V2_TEST_INTERRUPT === "1") {
+        const child = SessionV2.ID.make(receipt.metadata.sessionId)
+        const active = yield* Effect.gen(function* () {
+          for (let attempt = 0; attempt < 200; attempt++) {
+            const row = yield* database.db
+              .select()
+              .from(SessionTaskTable)
+              .where(eq(SessionTaskTable.child_session_id, child))
+              .get()
+            if (row?.state === "active" && row.owner_generation) return row
+            yield* Effect.sleep(Duration.millis(25))
+          }
+          return yield* Effect.die("Task never acquired an active owner")
+        })
+        const followups = yield* Effect.forEach(["B", "C"], (letter) =>
+          def.execute(
+            {
+              description: `follow-up ${letter}`,
+              prompt: `work ${letter}`,
+              subagent_type: "general",
+              task_id: child,
+              background: true,
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              callID: `call-v2-interrupt-${letter}`,
+              agent: "build",
+              abort: new AbortController().signal,
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          ),
+        )
+        yield* Effect.promise(() => Bun.write(`${directory}/task-v2-interrupt-admitted`, "ready"))
+        for (let attempt = 0; attempt < 400; attempt++) {
+          if (yield* Effect.promise(() => Bun.file(`${directory}/task-v2-interrupt-go`).exists())) break
+          if (attempt === 399) return yield* Effect.die("Task interrupt fixture was never released")
+          yield* Effect.sleep(Duration.millis(25))
+        }
+        const events = yield* EventV2Bridge.Service
+        const interrupt = yield* TaskInterruptTool.pipe(Effect.provideService(SessionTaskCapability.Service, backend))
+        const interruptedOutput = yield* (yield* interrupt.init()).execute(
+          {
+            target: {
+              task_id: child,
+              input_id: active.input_id,
+              invocation: {
+                parent_session_id: SessionV2.ID.make(chat.id),
+                parent_message_id: assistant.id,
+                call_id: "call-v2-consume",
+              },
+            },
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID: "call-v2-interrupt-control",
+            agent: "build",
+            abort: new AbortController().signal,
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        const interruptedReceipt = JSON.parse(interruptedOutput.output) as { input_id: string; state: string }
+        const interrupted = { inputID: interruptedReceipt.input_id, state: interruptedReceipt.state }
+        yield* Effect.promise(() =>
+          Bun.write(
+            `${directory}/task-v2-interrupt-ready.json`,
+            JSON.stringify({
+              interrupted,
+              active: active.input_id,
+              followups: followups.map((item) => item.metadata.invocation.childMessageID),
+            }),
+          ),
+        )
+        for (let attempt = 0; attempt < 200; attempt++) {
+          const rows = yield* database.db
+            .select()
+            .from(SessionTaskTable)
+            .where(eq(SessionTaskTable.child_session_id, child))
+            .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.input_id))
+            .all()
+          if (rows.length === 3 && rows.every((row) => row.state === "settled"))
+            return {
+              child,
+              rows: rows.map((row) => ({ input: row.input_id, state: row.state, outcome: row.outcome })),
+              old: yield* SessionTaskControl.interrupt({
+                childSessionID: child,
+                inputID: active.input_id,
+                invocation: {
+                  parentSessionID: SessionV2.ID.make(chat.id),
+                  parentMessageID: assistant.id,
+                  callID: "call-v2-consume",
+                },
+                actor: { kind: "parent", id: chat.id },
+              }).pipe(
+                Effect.provideService(EventV2.Service, events),
+                Effect.provideService(Database.Service, database),
+                Effect.provideService(SessionExecution.Service, execution),
+              ),
+            }
+          yield* Effect.sleep(Duration.millis(25))
+        }
+        return yield* Effect.die("Interrupted Task queue did not settle")
+      }
+      if (process.env.TASK_V2_TEST_STOP === "1") {
+        const child = SessionV2.ID.make(receipt.metadata.sessionId)
+        const active = yield* Effect.gen(function* () {
+          for (let attempt = 0; attempt < 200; attempt++) {
+            const row = yield* database.db
+              .select()
+              .from(SessionTaskTable)
+              .where(eq(SessionTaskTable.child_session_id, child))
+              .get()
+            if (row?.state === "active" && row.owner_generation) return row
+            yield* Effect.sleep(Duration.millis(25))
+          }
+          return yield* Effect.die("Task never acquired an active owner")
+        })
+        const followups = yield* Effect.forEach(["B", "C"], (letter) =>
+          def.execute(
+            {
+              description: `follow-up ${letter}`,
+              prompt: `work ${letter}`,
+              subagent_type: "general",
+              task_id: child,
+              background: true,
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              callID: `call-v2-stop-${letter}`,
+              agent: "build",
+              abort: new AbortController().signal,
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          ),
+        )
+        yield* Effect.promise(() =>
+          Bun.write(`${directory}/task-v2-stop-admitted.json`, JSON.stringify({ active: active.input_id })),
+        )
+        for (let attempt = 0; attempt < 400; attempt++) {
+          if (yield* Effect.promise(() => Bun.file(`${directory}/task-v2-stop-go`).exists())) break
+          if (attempt === 399) return yield* Effect.die("Task stop fixture was never released")
+          yield* Effect.sleep(Duration.millis(25))
+        }
+        const events = yield* EventV2Bridge.Service
+        const stop = yield* TaskStopTool.pipe(Effect.provideService(SessionTaskCapability.Service, backend))
+        const stoppedOutput = yield* (yield* stop.init()).execute(
+          { task_id: child },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID: "call-v2-stop-control",
+            agent: "build",
+            abort: new AbortController().signal,
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        const stoppedReceipt = JSON.parse(stoppedOutput.output) as {
+          operation_id: string
+          data: { input_id: string; state: string }[]
+        }
+        const stopped = {
+          operationID: stoppedReceipt.operation_id,
+          data: stoppedReceipt.data.map((item) => ({ inputID: item.input_id, state: item.state })),
+        }
+        const later = yield* def.execute(
+          {
+            description: "follow-up D",
+            prompt: "work D",
+            subagent_type: "general",
+            task_id: child,
+            background: true,
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID: "call-v2-stop-D",
+            agent: "build",
+            abort: new AbortController().signal,
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        yield* Effect.promise(() =>
+          Bun.write(
+            `${directory}/task-v2-stop-ready.json`,
+            JSON.stringify({
+              stopped,
+              active: active.input_id,
+              followups: followups.map((item) => item.metadata.invocation.childMessageID),
+              later: later.metadata.invocation.childMessageID,
+            }),
+          ),
+        )
+        for (let attempt = 0; attempt < 200; attempt++) {
+          const rows = yield* database.db
+            .select()
+            .from(SessionTaskTable)
+            .where(eq(SessionTaskTable.child_session_id, child))
+            .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.input_id))
+            .all()
+          if (rows.length === 4 && rows.every((row) => row.state === "settled"))
+            return {
+              child,
+              rows: rows.map((row) => ({ input: row.input_id, state: row.state, outcome: row.outcome })),
+              retry: yield* SessionTaskControl.stop({
+                parentSessionID: SessionV2.ID.make(chat.id),
+                childSessionID: child,
+                operationID: stopped.operationID,
+                actor: { kind: "parent", id: chat.id },
+              }).pipe(
+                Effect.provideService(EventV2.Service, events),
+                Effect.provideService(Database.Service, database),
+                Effect.provideService(SessionExecution.Service, execution),
+              ),
+            }
+          yield* Effect.sleep(Duration.millis(25))
+        }
+        return yield* Effect.die("Stopped Task did not settle")
+      }
       if (process.env.TASK_V2_TEST_SEQUENCE === "1") {
         const child = SessionV2.ID.make(receipt.metadata.sessionId)
         const active = yield* Effect.gen(function* () {

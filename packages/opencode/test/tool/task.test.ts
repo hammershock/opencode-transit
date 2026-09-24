@@ -572,6 +572,190 @@ test("V2 Task process promotes an active steer before two ordered queued follow-
   )
 }, 60_000)
 
+test("V2 Task stop interrupts active A and cancels queued B/C without a provider continuation", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const temp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true, config: { experimental: { background_subagents: true } } })),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      let release: () => void = () => {}
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      yield* llm.hold("A first", held)
+      yield* llm.text("D done")
+      const child = Bun.spawn([process.execPath, "test/fixture/task-v2-process.ts"], {
+        cwd: import.meta.dir + "/../..",
+        env: {
+          ...process.env,
+          OPENCODE_DB: temp.path + "/task-v2.sqlite",
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            experimental: { background_subagents: true },
+          }),
+          TASK_V2_TEST_DIRECTORY: temp.path,
+          TASK_V2_TEST_LLM_URL: llm.url,
+          TASK_V2_TEST_STOP: "1",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      try {
+        yield* Effect.promise(async () => {
+          const deadline = Date.now() + 30_000
+          while (Date.now() < deadline) {
+            if (await Bun.file(temp.path + "/task-v2-stop-admitted.json").exists()) return
+            if (child.exitCode !== null) throw new Error(`Task process exited before stop admission: ${child.exitCode}`)
+            await Bun.sleep(25)
+          }
+          throw new Error("Task process did not admit stop follow-ups")
+        })
+        for (let attempt = 0; attempt < 200; attempt++) {
+          if ((yield* llm.inputs).length === 1) break
+          if (attempt === 199) return yield* Effect.die("Provider did not receive active Task request")
+          yield* Effect.sleep("25 millis")
+        }
+        yield* Effect.promise(() => Bun.write(temp.path + "/task-v2-stop-go", "go"))
+        const ready = (yield* Effect.promise(async () => {
+          const deadline = Date.now() + 30_000
+          while (Date.now() < deadline) {
+            if (await Bun.file(temp.path + "/task-v2-stop-ready.json").exists())
+              return await Bun.file(temp.path + "/task-v2-stop-ready.json").json()
+            if (child.exitCode !== null) throw new Error(`Task process exited before stop receipt: ${child.exitCode}`)
+            await Bun.sleep(25)
+          }
+          throw new Error("Task process did not produce a stop receipt")
+        })) as {
+          stopped: { data: { inputID: string; state: string }[] }
+          active: string
+          followups: string[]
+          later: string
+        }
+        expect(ready.stopped.data.map((item) => item.state)).toEqual([
+          "requested",
+          "cancelled_pending",
+          "cancelled_pending",
+        ])
+        expect(ready.stopped.data.map((item) => item.inputID)).toEqual([ready.active, ...ready.followups])
+        const [stdout, stderr, code] = yield* Effect.promise(() =>
+          Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
+        )
+        expect(code, stderr).toBe(0)
+        const line = stdout.split("\n").find((item) => item.startsWith("TASK_V2_RESULT:"))
+        expect(line, stderr).toBeDefined()
+        const result = JSON.parse(line!.slice("TASK_V2_RESULT:".length)) as {
+          rows: { input: string; state: string; outcome: string }[]
+          retry: { data: { inputID: string; state: string }[] }
+        }
+        expect(result.rows.map((row) => row.outcome)).toEqual(["cancelled", "cancelled", "cancelled", "completed"])
+        expect(result.rows[3]?.input).toBe(ready.later)
+        expect(result.retry.data.map((item) => item.state)).toEqual([
+          "already_settled",
+          "cancelled_pending",
+          "cancelled_pending",
+        ])
+        expect(yield* llm.inputs).toHaveLength(2)
+      } finally {
+        release()
+        if (child.exitCode === null) child.kill()
+        yield* Effect.promise(() => child.exited)
+      }
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
+  )
+}, 60_000)
+
+test("V2 Task precise interrupt cancels A while B/C continue in order", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const temp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true, config: { experimental: { background_subagents: true } } })),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      let release: () => void = () => {}
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      yield* llm.hold("A first", held)
+      yield* llm.text("B done")
+      yield* llm.text("C done")
+      const child = Bun.spawn([process.execPath, "test/fixture/task-v2-process.ts"], {
+        cwd: import.meta.dir + "/../..",
+        env: {
+          ...process.env,
+          OPENCODE_DB: temp.path + "/task-v2.sqlite",
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            experimental: { background_subagents: true },
+          }),
+          TASK_V2_TEST_DIRECTORY: temp.path,
+          TASK_V2_TEST_LLM_URL: llm.url,
+          TASK_V2_TEST_INTERRUPT: "1",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      try {
+        yield* Effect.promise(async () => {
+          const deadline = Date.now() + 30_000
+          while (Date.now() < deadline) {
+            if (await Bun.file(temp.path + "/task-v2-interrupt-admitted").exists()) return
+            if (child.exitCode !== null)
+              throw new Error(`Task process exited before interrupt admission: ${child.exitCode}`)
+            await Bun.sleep(25)
+          }
+          throw new Error("Task process did not admit follow-ups")
+        })
+        for (let attempt = 0; attempt < 200; attempt++) {
+          if ((yield* llm.inputs).length === 1) break
+          if (attempt === 199) return yield* Effect.die("Provider did not receive active Task request")
+          yield* Effect.sleep("25 millis")
+        }
+        yield* Effect.promise(() => Bun.write(temp.path + "/task-v2-interrupt-go", "go"))
+        const ready = (yield* Effect.promise(async () => {
+          const deadline = Date.now() + 30_000
+          while (Date.now() < deadline) {
+            if (await Bun.file(temp.path + "/task-v2-interrupt-ready.json").exists())
+              return await Bun.file(temp.path + "/task-v2-interrupt-ready.json").json()
+            if (child.exitCode !== null)
+              throw new Error(`Task process exited before interrupt receipt: ${child.exitCode}`)
+            await Bun.sleep(25)
+          }
+          throw new Error("Task process did not produce interrupt receipt")
+        })) as {
+          interrupted: { inputID: string; state: string }
+          active: string
+          followups: string[]
+        }
+        expect(ready.interrupted).toEqual({ inputID: ready.active, state: "requested" })
+        const [stdout, stderr, code] = yield* Effect.promise(() =>
+          Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
+        )
+        expect(code, stderr).toBe(0)
+        const line = stdout.split("\n").find((item) => item.startsWith("TASK_V2_RESULT:"))
+        expect(line, stderr).toBeDefined()
+        const result = JSON.parse(line!.slice("TASK_V2_RESULT:".length)) as {
+          rows: { input: string; state: string; outcome: string }[]
+          old: { inputID: string; state: string }
+        }
+        expect(result.rows.map((row) => row.outcome)).toEqual(["cancelled", "completed", "completed"])
+        expect(result.rows.slice(1).map((row) => row.input)).toEqual(ready.followups)
+        expect(result.old).toEqual({ inputID: ready.active, state: "already_settled" })
+        const inputs = yield* llm.inputs
+        expect(inputs).toHaveLength(3)
+        expect(JSON.stringify(inputs[1])).toContain("work B")
+        expect(JSON.stringify(inputs[2])).toContain("work C")
+      } finally {
+        release()
+        if (child.exitCode === null) child.kill()
+        yield* Effect.promise(() => child.exited)
+      }
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
+  )
+}, 60_000)
+
 function stubOps(opts?: {
   onPrompt?: (input: SessionPrompt.PromptInput) => void
   text?: string
