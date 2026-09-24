@@ -1,7 +1,7 @@
 ---
 id: 0023
 title: Background Subagent Lifecycle and Coordination
-status: draft
+status: accepted
 authors:
   - hammershock
 created: 2026-09-24
@@ -24,9 +24,9 @@ superseded-by: []
 
 ## 状态与决策范围
 
-**Draft。** 本文提出 OpenCode Transit 后台 subagent 从启动到终结的完整产品契约。它不宣称这些能力已经实现，也不授权修改运行时、用户配置或现有 Session。设计任务为 [#558](https://github.com/hammershock/opencode-transit/issues/558)。RFC 接受后按独立 issue 交付；此前不能把本文当作可用功能说明。
+**Accepted。** 本文定义 OpenCode Transit 后台 subagent 从启动到终结的产品契约。接受设计不表示这些能力已经实现，也不授权修改用户配置或现有 Session。设计任务为 [#558](https://github.com/hammershock/opencode-transit/issues/558)；实施须由各独立 issue 达到 Ready 后交付。
 
-[Draft RFC-0015 / PR #437](https://github.com/hammershock/opencode-transit/pull/437) 已提出父会话控制工具、调用身份、投递与等待的详细方案，但尚未接受，也未覆盖后台执行存活和本次实测的消失场景。本文将其控制面决策纳入更完整的生命周期，评审时应把 RFC-0015 草案与本 RFC 对照并关闭或改为指向本 RFC 的设计记录。两篇草案不能各自进入实施状态。已接受的 RFC-0014、0016、0018、0021 仍分别约束 economics、可调用 Agent、执行位置和权限；本文不替代它们。
+[未接受的 RFC-0015 草案 / PR #437](https://github.com/hammershock/opencode-transit/pull/437) 曾提出父会话控制工具、调用身份、投递与等待的详细方案。本文实质纳入其控制、结果和 legacy 接入契约，并取代它成为唯一实施依据；RFC-0015 草案退休，不单独实施。已接受的 RFC-0014、0016、0018、0021 仍分别约束 economics、可调用 Agent、执行位置和权限；本文不替代它们。
 
 ## 1. 问题、证据与功能参照
 
@@ -139,7 +139,7 @@ type TaskView = {
 
 v1 不承诺 child 在应用退出后继续运行。若用户需求是真正跨进程持续执行，应另立具备 durable ownership、外部副作用对账和恢复策略的 RFC；本 RFC 只要求重启后准确报告未结算状态、保存已发生的消息，并提供用户主动检查或新建调用的途径。不得仅凭旧输入自动重放模型或工具。
 
-委派输入有显式 execution eligibility。运行中 A 的 steer S 绑定 A 的 input 与 owner generation；A 失去 owner 后，S 转为 `not_delivered(owner_lost)`，不能混入新调用。A 之后已接纳的 queued B/C 保持可见但冻结；普通 wake 不晋升旧输入，新的询问 D 在 B/C 未处置或旧 owner 排他终止未确认时拒绝接纳。A 保持 `unknown`，不伪造失败/取消。只有控制机同设备的有序 shutdown 证据，或核实旧进程身份已退出且当前进程独占本地 Session 存储，才可确认旧本机 owner 已终止；Rexd 断线、另一控制机失联、owner token 更换或用户点击继续都不是证据。无法确认时，同一 child 的新执行持续拒绝；状态必须给出可操作的等待/处置原因。查询、sync 导入及 record-only 对账不调用模型。
+委派输入有显式 execution eligibility。运行中 A 尚未 promoted 的 steer S 绑定 A 的 input 与 owner generation；A 失去 owner 后，这类未晋升 S 转为 `not_delivered(owner_lost)`，不能混入新调用。已 promoted 的输入保留晋升事实，不因后续 owner 丢失改写为未投递。A 之后已接纳的 queued B/C 保持可见但冻结；普通 wake 不晋升旧输入，新的询问 D 在 B/C 未处置或旧 owner 排他终止未确认时拒绝接纳。A 保持 `unknown`，不伪造失败/取消。只有控制机同设备的有序 shutdown 证据，或核实旧进程身份已退出且当前进程独占本地 Session 存储，才可确认旧本机 owner 已终止；Rexd 断线、另一控制机失联、owner token 更换或用户点击继续都不是证据。无法确认时，同一 child 的新执行持续拒绝；状态必须给出可操作的等待/处置原因。查询、sync 导入及 record-only 对账不调用模型。
 
 `task_reconcile` 是同一控制服务的显式恢复入口。已授权的直属父 Agent 或有 child Session 访问权的用户可提交 `operation_id`、精确 child input/invocation 和 `resume_pending` 或 `cancel_pending`；只读 legacy 记录不可作为目标。`resume_pending` 在确认旧 owner 已终止、适用 Location revision 仍有效且 unknown A 已管理性归档后，将**原 input**从 frozen 改为 eligible，不创建第二个 invocation；`cancel_pending` 记录不可逆取消，不执行它。操作及 `{ input_id, invocation, disposition, eligibility, capacity_state }` receipt 持久化；精确重试返回同一处置，冲突复用失败。继续仍需在晋升时原子取得 root 额度，额度不足则原 input 保持 eligible 但不执行，返回 `capacity_unavailable`。用户可逐项处理 B/C，再提交 D；保留的 B/C 依原委派顺序执行。
 
@@ -164,7 +164,7 @@ v1 不承诺 child 在应用退出后继续运行。若用户需求是真正跨�
 
 模型工具、TUI 和 Server/Client 消费同一控制服务和状态 schema。TUI 可以提供“查看、补充、等待、精确中断、停止全部”的用户入口；其操作遵守用户本身的权限，不伪装成 Agent 工具调用。
 
-`task_status` 无目标时分页列出直属 child，每项包含 active invocation、queued count 和最新结算摘要；指定 child 时可按持久顺序分页列出该 child 的全部 active、pending 和历史 invocation，或精确查询 invocation；显式目标最多 32 项。结果列表按持久委派顺序而非轮询时间排序。`include_results` 默认为 false。显式目标必须全部校验授权后再返回；未知与无权使用相同外部错误，避免枚举 Session。跨页使用固定枚举上界的 opaque cursor，新任务不插入旧分页。状态查询不消费结果或通知，也不唤醒模型；若发现 child 已终结但父结果缺失，只允许执行 §5 的幂等 record-only 对账。控制请求必须带 invocation，只有只读 legacy 响应允许缺省。
+`task_status` 无目标时分页列出直属 child，每项包含 active invocation、queued count 和最新结算摘要；指定 child 时可按持久顺序分页列出该 child 的全部 active、pending 和历史 invocation，或精确查询 invocation；显式目标最多 32 项。结果列表按持久委派顺序而非轮询时间排序。`include_results` 默认为 false。显式目标必须全部校验授权后再返回；未知与无权使用相同外部错误，避免枚举 Session。跨页使用固定枚举上界的 opaque cursor，新任务不插入旧分页。状态查询不消费结果或通知，也不唤醒模型；若发现 child 已终结但父结果缺失，只允许执行 §5 的幂等 record-only 对账。单 invocation 的发送、中断、等待和恢复操作必须带 invocation；范围操作 `task_stop` 按 §4.3 使用 child ID 与稳定 `operation_id`，由首次持久快照确定覆盖范围。只有只读 legacy 响应允许缺省 invocation。
 
 ### 4.2 Steer、follow-up 与回执
 
@@ -249,7 +249,7 @@ sequenceDiagram
 
 ## 8. 实施切分和依赖
 
-实施 issue 已先建档以便评审依赖；**RFC-0023 仍是 Draft，以下 feature issue 均明确 blocked、并非 Ready**。每项实施使用自己的 semantic branch、worktree 和 PR，issue 是任务状态的唯一实时来源。现有行为的两项 bug 可先独立处理，但不得借修 bug 偷偷启用本 RFC 的新控制语义。
+实施 issue 已先建档以便评审依赖；**RFC-0023 已接受，但各 feature issue 仍须分别满足 Ready 条件才可开始实施**。每项实施使用自己的 semantic branch、worktree 和 PR，issue 是任务状态的唯一实时来源。现有行为的两项 bug 可先独立处理，但不得借修 bug 偷偷启用本 RFC 的新控制语义。
 
 | 阶段 | Issue 与独立结果                                                                                                                                                                                                                                                      | 前置条件                                                     |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
@@ -295,13 +295,13 @@ sequenceDiagram
 
 测试先用可控 Deferred、临时数据库与隔离目录证明状态竞态和取消传播，再从精确 PR head 建立 clean Mac candidate，并实测完整 TUI 与 `run`/mini。TUI 变化需截图或录屏；执行/通知/恢复需脱敏日志。跨 Target 控制或断线行为需要真实 Rexd 目标；多设备同步/删除边界变化按 `docs/testing-workflow.md` 选择双设备验收。不能用 Mac 成功推断 WSL2 通过，也不能用进程内模拟证明重启恢复。生产 Session 只作只读诊断，不用于破坏性测试。
 
-## 待评审的产品选择
+## 已接受的产品选择
 
-1. 本 RFC 拟取代未接受的 RFC-0015 控制草案作为后台执行总契约，并实质纳入其共同接纳/结算、原子控制及结果恢复契约；增加范围停止工具。RFC-0015 在本 RFC 接受后退休，接受前仍为独立 Draft 而非已获实施授权。
+1. 本 RFC 取代未接受的 RFC-0015 控制草案作为后台执行总契约，并实质纳入其共同接纳/结算、原子控制及结果恢复契约；增加范围停止工具。RFC-0015 退休，不再独立实施。
 2. v1 后台存活范围为当前应用服务生命周期；退出后未结算工作显示 unknown，禁止自动重放。真正跨进程继续工作另立 RFC。
 3. 父 Agent 仅控制直属 child；用户 TUI 仍按已有 Session 访问范围操作。
 4. `task_send` 是 active-only steer，`task(task_id=...)` 是 queued follow-up，二者回执不得混用。
 5. 终结结果持久、幂等；当前服务生命周期中正常 idle 且保留授权资格的父可自动接回一次。用户停止撤销资格；冷恢复、重启和 sync 导入只恢复可见记录，不自动唤醒。
 6. 精确中断当前 invocation 后，child Session 和已保存历史保留；询问进展与继续工作须分别明确提交新 invocation，不承诺恢复原工具栈。其他 eligible follow-up 可继续；停止全部使用有原子快照屏障的范围操作。
 
-接受这些选择后才能把后续实现 issue 标为 Ready；如果评审改变任一项，应先更新本 RFC 的状态机、验收场景和与 RFC-0015 的关系。
+这些设计选择已经接受。实施 issue 仍须逐项满足 Ready；若后续改变其中任一契约，应先修订本 RFC 的状态机、验收场景和与 RFC-0015 的关系。
