@@ -195,6 +195,8 @@ test("opening a running Task follows new child output past the initial message w
       await Bun.sleep(10)
     }
     expect(setup.captureCharFrame()).toContain("child step 24")
+    expect(setup.captureCharFrame()).toContain("Latest call")
+    expect(setup.captureCharFrame()).toContain("no running tool observed")
 
     events.emit({
       directory,

@@ -409,9 +409,7 @@ export function RunFooterView(props: RunFooterViewProps) {
 
     const routeState = route()
     const current =
-      routeState.type === "subagent"
-        ? tabs().findIndex((item) => (item.key ?? item.sessionID) === routeState.key)
-        : -1
+      routeState.type === "subagent" ? tabs().findIndex((item) => (item.key ?? item.sessionID) === routeState.key) : -1
     const index = current === -1 ? 0 : (current + dir + tabs().length) % tabs().length
     const next = tabs()[index]
     if (!next) {
@@ -1039,6 +1037,7 @@ export function RunFooterView(props: RunFooterViewProps) {
             tab={selectedTab}
             index={selectedIndex}
             total={() => tabs().length}
+            otherActive={() => activeTabs().filter((item) => (item.key ?? item.sessionID) !== selected()).length}
             detail={detail}
             width={width}
             diffStyle={props.diffStyle}

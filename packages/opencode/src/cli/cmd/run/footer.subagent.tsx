@@ -2,7 +2,7 @@
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard } from "@opentui/solid"
 import { registerOpencodeSpinner } from "@opencode-ai/tui/component/register-spinner"
-import { Show, createMemo, indexArray } from "solid-js"
+import { Show, createEffect, createMemo, createSignal, indexArray, on, onCleanup, onMount } from "solid-js"
 import { SPINNER_FRAMES } from "@opencode-ai/tui/component/spinner"
 import { RunEntryContent, separatorRows } from "./scrollback.writer"
 import type { FooterSubagentDetail, FooterSubagentTab, RunDiffStyle } from "./types"
@@ -50,6 +50,7 @@ export function RunFooterSubagentBody(props: {
   tab: () => FooterSubagentTab | undefined
   index: () => number
   total: () => number
+  otherActive: () => number
   detail: () => FooterSubagentDetail | undefined
   width: () => number
   diffStyle?: RunDiffStyle
@@ -59,6 +60,13 @@ export function RunFooterSubagentBody(props: {
   const theme = createMemo(() => props.theme())
   const footer = createMemo(() => theme().footer)
   const tab = createMemo(() => props.tab())
+  const [history, setHistory] = createSignal(false)
+  const [now, setNow] = createSignal(Date.now())
+  createEffect(on(() => tab()?.key ?? tab()?.sessionID, () => setHistory(false)))
+  onMount(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    onCleanup(() => clearInterval(timer))
+  })
   const commits = createMemo(() => {
     const detail = props.detail()
     if (!detail) return []
@@ -69,12 +77,27 @@ export function RunFooterSubagentBody(props: {
       source: "system",
     })
     if (detail.unscoped) return [separator("History · invocation unknown"), ...detail.commits]
-    return [
-      ...(detail.history?.length ? [separator("Session history · other / unscoped calls"), ...detail.history] : []),
-      separator("Selected invocation"),
-      ...detail.commits,
-    ]
+    if (history()) return [separator("Session history · other / unscoped calls"), ...(detail.history ?? [])]
+    return [separator("Selected invocation"), ...detail.commits]
   })
+  const recent = createMemo(() => {
+    const tools = (props.detail()?.commits ?? []).filter((item) => item.kind === "tool" && item.partID)
+    const keys = [...new Set(tools.map((item) => item.partID))].slice(-6)
+    return keys.flatMap((key) => {
+      const states = tools.filter((item) => item.partID === key)
+      const item =
+        states.findLast((entry) => entry.toolState === "completed" || entry.toolState === "error") ?? states.at(-1)
+      return item ? [item] : []
+    })
+  })
+  const currentTool = createMemo(() =>
+    recent().findLast((item) => item.toolState === "running" || item.part?.state.status === "pending"),
+  )
+  const startedAt = createMemo(() => {
+    const state = currentTool()?.part?.state
+    return state?.status === "running" ? state.time.start : undefined
+  })
+  const age = (time: number) => `${Math.max(0, Math.floor((now() - time) / 1000))}s`
   const opts = createMemo(() => ({ diffStyle: props.diffStyle }))
   const scrollbar = createMemo(() => ({
     trackOptions: {
@@ -123,6 +146,13 @@ export function RunFooterSubagentBody(props: {
       return
     }
 
+    if (event.name.toLowerCase() === "h" && props.detail()?.history?.length) {
+      event.preventDefault()
+      setHistory((value) => !value)
+      scroll?.scrollTo(0)
+      return
+    }
+
     if (event.name === "up" || event.name === "k") {
       event.preventDefault()
       scroll?.scrollBy(-1)
@@ -163,6 +193,41 @@ export function RunFooterSubagentBody(props: {
               </Show>
             </box>
           )}
+        </Show>
+        <box width="100%" flexDirection="row" gap={1} paddingBottom={1} flexShrink={0}>
+          <text fg={footer().muted} wrapMode="none" truncate flexGrow={1}>
+            {history() ? "History" : "Current call"} · {tab()?.status ?? "unknown"}
+            {props.detail()?.history?.length ? " · H history/current" : ""}
+          </text>
+          <Show when={props.otherActive() > 0}>
+            <text fg={footer().highlight} wrapMode="none" truncate flexShrink={0}>
+              {props.otherActive()} other active · Tab
+            </text>
+          </Show>
+        </box>
+        <Show when={!history() && tab()?.status === "running"}>
+          <box flexDirection="column" paddingBottom={1} flexShrink={0}>
+            <text fg={footer().text} wrapMode="none" truncate>
+              {currentTool()
+                ? `Observed tool: ${currentTool()!.tool ?? "tool"} · ${currentTool()!.part?.state.status ?? "started"}`
+                : "No pending or running tool observed"}
+              {startedAt() ? ` · elapsed ${age(startedAt()!)}` : ""}
+            </text>
+            <text fg={footer().muted} wrapMode="none" truncate>
+              {props.detail()?.observedAt
+                ? `Last event observed ${age(props.detail()!.observedAt!)} ago`
+                : "Last event observation unknown"}
+            </text>
+            <Show when={recent().length > 0}>
+              <text fg={footer().muted} wrapMode="none" truncate>
+                Recent:{" "}
+                {recent()
+                  .slice(-3)
+                  .map((item) => `${item.tool ?? "tool"} ${item.toolState ?? "started"}`)
+                  .join(" · ")}
+              </text>
+            </Show>
+          </box>
         </Show>
         <scrollbox
           width="100%"
