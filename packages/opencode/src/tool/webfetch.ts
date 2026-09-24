@@ -7,7 +7,7 @@ import DESCRIPTION from "./webfetch.txt"
 import { isImageAttachment } from "@/util/media"
 
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
-const DEFAULT_TIMEOUT = 30 * 1000 // 30 seconds
+const DEFAULT_TIMEOUT = 120 * 1000 // 2 minutes
 const MAX_TIMEOUT = 120 * 1000 // 2 minutes
 
 export const Parameters = Schema.Struct({
@@ -18,7 +18,14 @@ export const Parameters = Schema.Struct({
       default: "markdown",
     })
     .pipe(Schema.withDecodingDefault(Effect.succeed("markdown" as const))),
-  timeout: Schema.optional(Schema.Number).annotate({ description: "Optional timeout in seconds (max 120)" }),
+  // Milliseconds match other Agent tool timeouts. Reject old second-sized values instead of silently shortening them.
+  timeout: Schema.Number.check(
+    Schema.isInt(),
+    Schema.isGreaterThanOrEqualTo(1_000),
+    Schema.isLessThanOrEqualTo(MAX_TIMEOUT),
+  )
+    .pipe(Schema.optional)
+    .annotate({ description: "Optional timeout in milliseconds (default 120000, max 120000)" }),
 })
 
 export const WebFetchTool = Tool.define(
@@ -47,7 +54,7 @@ export const WebFetchTool = Tool.define(
             },
           })
 
-          const timeout = Math.min((params.timeout ?? DEFAULT_TIMEOUT / 1000) * 1000, MAX_TIMEOUT)
+          const timeout = params.timeout ?? DEFAULT_TIMEOUT
 
           // Build Accept header based on requested format with q parameters for fallbacks
           let acceptHeader = "*/*"
@@ -76,32 +83,32 @@ export const WebFetchTool = Tool.define(
           const request = HttpClientRequest.get(params.url).pipe(HttpClientRequest.setHeaders(headers))
 
           // Retry with honest UA if blocked by Cloudflare bot detection (TLS fingerprint mismatch)
-          const response = yield* httpOk.execute(request).pipe(
-            Effect.catchIf(
-              (err) =>
-                err.reason._tag === "StatusCodeError" &&
-                err.reason.response.status === 403 &&
-                err.reason.response.headers["cf-mitigated"] === "challenge",
-              () =>
-                httpOk.execute(
-                  HttpClientRequest.get(params.url).pipe(
-                    HttpClientRequest.setHeaders({ ...headers, "User-Agent": "opencode" }),
+          // Headers and the entire body share one deadline; a stream may stall after headers arrive.
+          const { response, arrayBuffer } = yield* Effect.gen(function* () {
+            const response = yield* httpOk.execute(request).pipe(
+              Effect.catchIf(
+                (err) =>
+                  err.reason._tag === "StatusCodeError" &&
+                  err.reason.response.status === 403 &&
+                  err.reason.response.headers["cf-mitigated"] === "challenge",
+                () =>
+                  httpOk.execute(
+                    HttpClientRequest.get(params.url).pipe(
+                      HttpClientRequest.setHeaders({ ...headers, "User-Agent": "opencode" }),
+                    ),
                   ),
-                ),
-            ),
-            Effect.timeoutOrElse({ duration: timeout, orElse: () => Effect.die(new Error("Request timed out")) }),
-          )
-
-          // Check content length
-          const contentLength = response.headers["content-length"]
-          if (contentLength && parseInt(contentLength) > MAX_RESPONSE_SIZE) {
-            throw new Error("Response too large (exceeds 5MB limit)")
-          }
-
-          const arrayBuffer = yield* response.arrayBuffer
-          if (arrayBuffer.byteLength > MAX_RESPONSE_SIZE) {
-            throw new Error("Response too large (exceeds 5MB limit)")
-          }
+              ),
+            )
+            const contentLength = response.headers["content-length"]
+            if (contentLength && parseInt(contentLength) > MAX_RESPONSE_SIZE) {
+              throw new Error("Response too large (exceeds 5MB limit)")
+            }
+            const arrayBuffer = yield* response.arrayBuffer
+            if (arrayBuffer.byteLength > MAX_RESPONSE_SIZE) {
+              throw new Error("Response too large (exceeds 5MB limit)")
+            }
+            return { response, arrayBuffer }
+          }).pipe(Effect.timeoutOrElse({ duration: timeout, orElse: () => Effect.die(new Error("Request timed out")) }))
 
           const contentType = response.headers["content-type"] || ""
           const mime = contentType.split(";")[0]?.trim().toLowerCase() || ""

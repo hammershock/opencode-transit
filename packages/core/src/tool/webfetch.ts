@@ -15,14 +15,19 @@ import { Tools } from "./tools"
 
 export const name = "webfetch"
 export const MAX_RESPONSE_BYTES = 5 * 1024 * 1024
-export const DEFAULT_TIMEOUT_SECONDS = 30
-export const MAX_TIMEOUT_SECONDS = 120
+export const DEFAULT_TIMEOUT_MS = 120_000
+export const MAX_TIMEOUT_MS = 120_000
 
 export const description = `Fetch content from an HTTP or HTTPS URL and return it as text, markdown, or HTML. Markdown is the default.
 
 Use a more targeted tool when one is available. This tool is read-only. Large text results may be replaced with a preview while the complete output is retained in managed storage.`
 
-const Timeout = Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(MAX_TIMEOUT_SECONDS))
+// Milliseconds match other Agent tool timeouts. Reject old second-sized values instead of silently shortening them.
+const Timeout = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isGreaterThanOrEqualTo(1_000),
+  Schema.isLessThanOrEqualTo(MAX_TIMEOUT_MS),
+)
 
 export const Input = Schema.Struct({
   url: Schema.String.annotate({ description: "The HTTP or HTTPS URL to fetch content from" }),
@@ -30,7 +35,7 @@ export const Input = Schema.Struct({
     .annotate({ description: "The format to return the content in. Defaults to markdown." })
     .pipe(Schema.withDecodingDefault(Effect.succeed("markdown" as const))),
   timeout: Timeout.pipe(Schema.optional).annotate({
-    description: `Optional timeout in seconds (maximum: ${MAX_TIMEOUT_SECONDS})`,
+    description: `Optional timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS}; maximum: ${MAX_TIMEOUT_MS})`,
   }),
 })
 
@@ -158,7 +163,7 @@ const layer = Layer.effectDiscard(
                 return { body: yield* collectBody(response), contentType }
               }).pipe(
                 Effect.timeoutOrElse({
-                  duration: Duration.seconds(input.timeout ?? DEFAULT_TIMEOUT_SECONDS),
+                  duration: Duration.millis(input.timeout ?? DEFAULT_TIMEOUT_MS),
                   orElse: () => Effect.fail(new Error("Request timed out")),
                 }),
               )

@@ -65,7 +65,9 @@ describe("WebFetchTool helpers", () => {
     const decode = Schema.decodeUnknownSync(WebFetchTool.Input)
     expect(decode({ url: "https://example.com" })).toEqual({ url: "https://example.com", format: "markdown" })
     expect(() => decode({ url: "https://example.com", timeout: 0 })).toThrow()
-    expect(() => decode({ url: "https://example.com", timeout: WebFetchTool.MAX_TIMEOUT_SECONDS + 1 })).toThrow()
+    expect(() => decode({ url: "https://example.com", timeout: 120 })).toThrow()
+    expect(() => decode({ url: "https://example.com", timeout: WebFetchTool.MAX_TIMEOUT_MS + 1 })).toThrow()
+    expect(decode({ url: "https://example.com", timeout: WebFetchTool.DEFAULT_TIMEOUT_MS }).timeout).toBe(120_000)
   })
 
   test("ports HTML text and markdown conversions without active content", () => {
@@ -83,7 +85,7 @@ describe("WebFetchTool registration", () => {
       const url = "http://example.com/public"
 
       expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["webfetch"])
-      expect(yield* settleTool(registry, call({ url, format: "text", timeout: 4 }))).toEqual({
+      expect(yield* settleTool(registry, call({ url, format: "text", timeout: 4_000 }))).toEqual({
         result: { type: "text", value: "hello" },
         output: {
           structured: { url, contentType: "text/plain", format: "text", output: "hello" },
@@ -91,7 +93,13 @@ describe("WebFetchTool registration", () => {
         },
       })
       expect(assertions).toMatchObject([
-        { sessionID, action: "webfetch", resources: [url], save: ["*"], metadata: { url, format: "text", timeout: 4 } },
+        {
+          sessionID,
+          action: "webfetch",
+          resources: [url],
+          save: ["*"],
+          metadata: { url, format: "text", timeout: 4_000 },
+        },
       ])
       expect(requests).toMatchObject([{ url, headers: { accept: expect.stringContaining("text/plain;q=1.0") } }])
     }),
@@ -271,7 +279,7 @@ describe("WebFetchTool registration", () => {
       const registry = yield* ToolRegistry.Service
       const fiber = yield* executeTool(
         registry,
-        call({ url: "https://1.1.1.1/slow", format: "text", timeout: 1 }),
+        call({ url: "https://1.1.1.1/slow", format: "text", timeout: 1_000 }),
       ).pipe(Effect.forkChild)
       yield* TestClock.adjust(Duration.seconds(1))
 
