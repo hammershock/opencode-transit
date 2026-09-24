@@ -156,6 +156,12 @@ export type TuiInput = {
   headers?: RequestInit["headers"]
   events?: EventSource
   pluginHost: TuiPluginHost
+  archiveUnknown?: (input: {
+    parentSessionID: string
+    childSessionID: string
+    inputID: string
+    operationID: string
+  }) => Promise<{ inputID: string; archived: boolean }>
 }
 
 function errorMessage(error: unknown) {
@@ -313,6 +319,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                             fetch={input.fetch}
                                             headers={input.headers}
                                             events={input.events}
+                                            archiveUnknown={input.archiveUnknown}
                                           >
                                             <PermissionProvider>
                                               <ProjectProvider>

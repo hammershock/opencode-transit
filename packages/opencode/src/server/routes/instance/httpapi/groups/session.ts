@@ -326,7 +326,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: PromptPayload,
           success: described(SessionV1.WithParts, "Created message"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, HttpApiError.Conflict, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.prompt",

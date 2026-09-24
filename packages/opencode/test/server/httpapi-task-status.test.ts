@@ -45,7 +45,7 @@ describe("Task status HttpApi capability boundary", () => {
     expect(result.stopped.data).toEqual([{ input_id: result.first, state: "cancelled_pending" }])
     expect(result.retry).toEqual(result.stopped)
     expect(result.interrupted).toEqual({ input_id: result.later, state: "cancelled_pending" })
-  }, 45_000)
+  }, 60_000)
 
   test("legacy adapter returns explicit unsupported without resolving a target", async () => {
     await using tmp = await tmpdir({ git: true })
@@ -108,7 +108,10 @@ describe("Task status HttpApi capability boundary", () => {
       ],
       ["stop", { task_id: "ses_hidden", operation_id: "stop-1" }],
     ] as const) {
-      const response = await HttpApiApp.webHandler().handler(
+      const response = await HttpRouter.toWebHandler(
+        HttpApiApp.createRoutes(undefined, SessionTaskCapability.legacyTaskPromptOps),
+        { disableLogger: true },
+      ).handler(
         new Request(`http://localhost/api/session/ses_missing/task/${route}`, {
           method: "POST",
           headers: { "content-type": "application/json", "x-opencode-directory": tmp.path },

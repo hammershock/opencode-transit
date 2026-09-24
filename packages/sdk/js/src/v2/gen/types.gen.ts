@@ -23,6 +23,8 @@ export type Event =
   | EventSessionNextLocationRebound
   | EventSessionNextPrompted
   | EventSessionNextPromptAdmitted
+  | EventSessionNextDelegationResultRecorded
+  | EventSessionNextDelegationWakeRevoked
   | EventSessionNextTurnSettled
   | EventSessionNextContextUpdated
   | EventSessionNextContextGenerationEstablished
@@ -245,6 +247,13 @@ export type Session = {
     snapshot?: string
     diff?: string
   }
+}
+
+export type Prompt = {
+  text: string
+  files?: Array<PromptFileAttachment>
+  agents?: Array<PromptAgentAttachment>
+  invocations?: Array<PromptSkillInvocation>
 }
 
 export type OutputFormatText = {
@@ -665,13 +674,6 @@ export type Part =
   | RetryPart
   | CompactionPart
 
-export type Prompt = {
-  text: string
-  files?: Array<PromptFileAttachment>
-  agents?: Array<PromptAgentAttachment>
-  invocations?: Array<PromptSkillInvocation>
-}
-
 export type Pty = {
   id: string
   title: string
@@ -796,6 +798,25 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           info: Session
+          task?: {
+            inputID: string
+            rootSessionID: string
+            parentSessionID: string
+            parentMessageID: string
+            callID: string
+            promptDigest: string
+            childSessionID: string
+            description: string
+            agentID: string
+            locationRevision: number
+            backend: "legacy" | "v2"
+            background?: boolean
+          }
+          taskInput?: {
+            messageID: string
+            prompt: Prompt
+            delivery: "steer" | "queue"
+          }
         }
       }
     | {
@@ -912,6 +933,12 @@ export type GlobalEvent = {
           messageID: string
           prompt: Prompt
           delivery: "steer" | "queue"
+          origin?: {
+            kind: "delegation_result"
+            invocationInputID: string
+            terminalEventID: string
+            version: 1
+          }
         }
       }
     | {
@@ -923,6 +950,58 @@ export type GlobalEvent = {
           messageID: string
           prompt: Prompt
           delivery: "steer" | "queue"
+          task?:
+            | {
+                kind: "invocation"
+                admission: {
+                  inputID: string
+                  rootSessionID: string
+                  parentSessionID: string
+                  parentMessageID: string
+                  callID: string
+                  promptDigest: string
+                  childSessionID: string
+                  description: string
+                  agentID: string
+                  locationRevision: number
+                  backend: "legacy" | "v2"
+                  background?: boolean
+                }
+              }
+            | {
+                kind: "steer"
+                invocationInputID: string
+                operationID: string
+                promptDigest: string
+              }
+        }
+      }
+    | {
+        id: string
+        type: "session.next.delegation.result.recorded"
+        properties: {
+          timestamp: number
+          sessionID: string
+          invocationInputID: string
+          rootSessionID: string
+          childSessionID: string
+          terminalEventID: string
+          outcome: "completed" | "failed" | "cancelled"
+          resultMessageID?: string
+          summary: string
+          notificationInputID: string
+          notify: boolean
+          version: 1
+        }
+      }
+    | {
+        id: string
+        type: "session.next.delegation.wake.revoked"
+        properties: {
+          timestamp: number
+          sessionID: string
+          rootSessionID: string
+          invocationInputIDs: Array<string>
         }
       }
     | {
@@ -1748,6 +1827,8 @@ export type GlobalEvent = {
     | SyncEventSessionNextLocationRebound
     | SyncEventSessionNextPrompted
     | SyncEventSessionNextPromptAdmitted
+    | SyncEventSessionNextDelegationResultRecorded
+    | SyncEventSessionNextDelegationWakeRevoked
     | SyncEventSessionNextTurnSettled
     | SyncEventSessionNextContextUpdated
     | SyncEventSessionNextContextGenerationEstablished
@@ -2884,6 +2965,10 @@ export type SubtaskPartInput = {
   command?: string
 }
 
+export type EffectHttpApiErrorConflict = {
+  _tag: "Conflict"
+}
+
 export type SessionBusyError = {
   _tag: "SessionBusyError"
   sessionID: string
@@ -3041,6 +3126,8 @@ export type SessionDurableEvent =
   | SessionNextLocationRebound
   | SessionNextPrompted
   | SessionNextPromptAdmitted
+  | SessionNextDelegationResultRecorded
+  | SessionNextDelegationWakeRevoked
   | SessionNextTurnSettled
   | SessionNextContextUpdated
   | SessionNextContextGenerationEstablished
@@ -3179,6 +3266,8 @@ export type V2Event =
   | SessionNextLocationRebound
   | SessionNextPrompted
   | SessionNextPromptAdmitted
+  | SessionNextDelegationResultRecorded
+  | SessionNextDelegationWakeRevoked
   | SessionNextTurnSettled
   | SessionNextContextUpdated
   | SessionNextContextGenerationEstablished
@@ -3388,6 +3477,45 @@ export type PermissionV2Ruleset = Array<PermissionV2Rule>
 
 export type SessionPolicyBoundary = Array<PermissionV2Ruleset>
 
+export type PromptSource = {
+  start: number
+  end: number
+  text: string
+}
+
+export type PromptFileAttachment = {
+  uri: string
+  mime: string
+  name?: string
+  description?: string
+  source?: PromptSource
+}
+
+export type PromptAgentAttachment = {
+  name: string
+  source?: PromptSource
+}
+
+export type SessionSkillInvocationSource = {
+  kind: "built-in" | "opencode-global" | "opencode-project" | "imported" | "url"
+  label: string
+}
+
+export type SessionSkillInvocationSnapshot = {
+  id: string
+  name: string
+  description?: string
+  digest: string
+  source: SessionSkillInvocationSource
+  content: string
+  status: "loaded"
+}
+
+export type PromptSkillInvocation = {
+  source: PromptSource
+  snapshot: SessionSkillInvocationSnapshot
+}
+
 export type ModelRef = {
   id: string
   providerID: string
@@ -3458,45 +3586,6 @@ export type ModelContextGeneration = {
   digest: string
   baseline: string
   sources: ModelContextSourceState
-}
-
-export type PromptSource = {
-  start: number
-  end: number
-  text: string
-}
-
-export type PromptFileAttachment = {
-  uri: string
-  mime: string
-  name?: string
-  description?: string
-  source?: PromptSource
-}
-
-export type PromptAgentAttachment = {
-  name: string
-  source?: PromptSource
-}
-
-export type SessionSkillInvocationSource = {
-  kind: "built-in" | "opencode-global" | "opencode-project" | "imported" | "url"
-  label: string
-}
-
-export type SessionSkillInvocationSnapshot = {
-  id: string
-  name: string
-  description?: string
-  digest: string
-  source: SessionSkillInvocationSource
-  content: string
-  status: "loaded"
-}
-
-export type PromptSkillInvocation = {
-  source: PromptSource
-  snapshot: SessionSkillInvocationSnapshot
 }
 
 export type SessionErrorUnknown = {
@@ -3636,6 +3725,25 @@ export type SyncEventSessionCreated = {
     data: {
       sessionID: string
       info: Session
+      task?: {
+        inputID: string
+        rootSessionID: string
+        parentSessionID: string
+        parentMessageID: string
+        callID: string
+        promptDigest: string
+        childSessionID: string
+        description: string
+        agentID: string
+        locationRevision: number
+        backend: "legacy" | "v2"
+        background?: boolean
+      }
+      taskInput?: {
+        messageID: string
+        prompt: Prompt
+        delivery: "steer" | "queue"
+      }
     }
   }
 }
@@ -3836,6 +3944,12 @@ export type SyncEventSessionNextPrompted = {
       messageID: string
       prompt: Prompt
       delivery: "steer" | "queue"
+      origin?: {
+        kind: "delegation_result"
+        invocationInputID: string
+        terminalEventID: string
+        version: 1
+      }
     }
   }
 }
@@ -3854,6 +3968,72 @@ export type SyncEventSessionNextPromptAdmitted = {
       messageID: string
       prompt: Prompt
       delivery: "steer" | "queue"
+      task?:
+        | {
+            kind: "invocation"
+            admission: {
+              inputID: string
+              rootSessionID: string
+              parentSessionID: string
+              parentMessageID: string
+              callID: string
+              promptDigest: string
+              childSessionID: string
+              description: string
+              agentID: string
+              locationRevision: number
+              backend: "legacy" | "v2"
+              background?: boolean
+            }
+          }
+        | {
+            kind: "steer"
+            invocationInputID: string
+            operationID: string
+            promptDigest: string
+          }
+    }
+  }
+}
+
+export type SyncEventSessionNextDelegationResultRecorded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.delegation.result.recorded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      invocationInputID: string
+      rootSessionID: string
+      childSessionID: string
+      terminalEventID: string
+      outcome: "completed" | "failed" | "cancelled"
+      resultMessageID?: string
+      summary: string
+      notificationInputID: string
+      notify: boolean
+      version: 1
+    }
+  }
+}
+
+export type SyncEventSessionNextDelegationWakeRevoked = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.delegation.wake.revoked.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      rootSessionID: string
+      invocationInputIDs: Array<string>
     }
   }
 }
@@ -4483,6 +4663,7 @@ export type SkillActivation = {
 
 export type PromptInputFileAttachment = {
   uri: string
+  mime?: string
   name?: string
   description?: string
   source?: PromptSource
@@ -4502,6 +4683,12 @@ export type SessionInputAdmitted = {
   delivery: "steer" | "queue"
   timeCreated: number
   promotedSeq?: number
+  origin?: {
+    kind: "delegation_result"
+    invocationInputID: string
+    terminalEventID: string
+    version: 1
+  }
 }
 
 export type SessionMessageAgentSwitched = {
@@ -4541,6 +4728,12 @@ export type SessionMessageUser = {
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillInvocation>
   type: "user"
+  origin?: {
+    kind: "delegation_result"
+    invocationInputID: string
+    terminalEventID: string
+    version: 1
+  }
 }
 
 export type SessionMessageSynthetic = {
@@ -4848,6 +5041,12 @@ export type SessionNextPrompted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    origin?: {
+      kind: "delegation_result"
+      invocationInputID: string
+      terminalEventID: string
+      version: 1
+    }
   }
 }
 
@@ -4869,6 +5068,78 @@ export type SessionNextPromptAdmitted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    task?:
+      | {
+          kind: "invocation"
+          admission: {
+            inputID: string
+            rootSessionID: string
+            parentSessionID: string
+            parentMessageID: string
+            callID: string
+            promptDigest: string
+            childSessionID: string
+            description: string
+            agentID: string
+            locationRevision: number
+            backend: "legacy" | "v2"
+            background?: boolean
+          }
+        }
+      | {
+          kind: "steer"
+          invocationInputID: string
+          operationID: string
+          promptDigest: string
+        }
+  }
+}
+
+export type SessionNextDelegationResultRecorded = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.delegation.result.recorded"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    invocationInputID: string
+    rootSessionID: string
+    childSessionID: string
+    terminalEventID: string
+    outcome: "completed" | "failed" | "cancelled"
+    resultMessageID?: string
+    summary: string
+    notificationInputID: string
+    notify: boolean
+    version: 1
+  }
+}
+
+export type SessionNextDelegationWakeRevoked = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.delegation.wake.revoked"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    rootSessionID: string
+    invocationInputIDs: Array<string>
   }
 }
 
@@ -5906,6 +6177,25 @@ export type SessionCreated = {
   data: {
     sessionID: string
     info: Session
+    task?: {
+      inputID: string
+      rootSessionID: string
+      parentSessionID: string
+      parentMessageID: string
+      callID: string
+      promptDigest: string
+      childSessionID: string
+      description: string
+      agentID: string
+      locationRevision: number
+      backend: "legacy" | "v2"
+      background?: boolean
+    }
+    taskInput?: {
+      messageID: string
+      prompt: Prompt
+      delivery: "steer" | "queue"
+    }
   }
 }
 
@@ -7475,6 +7765,25 @@ export type EventSessionCreated = {
   properties: {
     sessionID: string
     info: Session
+    task?: {
+      inputID: string
+      rootSessionID: string
+      parentSessionID: string
+      parentMessageID: string
+      callID: string
+      promptDigest: string
+      childSessionID: string
+      description: string
+      agentID: string
+      locationRevision: number
+      backend: "legacy" | "v2"
+      background?: boolean
+    }
+    taskInput?: {
+      messageID: string
+      prompt: Prompt
+      delivery: "steer" | "queue"
+    }
   }
 }
 
@@ -7603,6 +7912,12 @@ export type EventSessionNextPrompted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    origin?: {
+      kind: "delegation_result"
+      invocationInputID: string
+      terminalEventID: string
+      version: 1
+    }
   }
 }
 
@@ -7615,6 +7930,60 @@ export type EventSessionNextPromptAdmitted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    task?:
+      | {
+          kind: "invocation"
+          admission: {
+            inputID: string
+            rootSessionID: string
+            parentSessionID: string
+            parentMessageID: string
+            callID: string
+            promptDigest: string
+            childSessionID: string
+            description: string
+            agentID: string
+            locationRevision: number
+            backend: "legacy" | "v2"
+            background?: boolean
+          }
+        }
+      | {
+          kind: "steer"
+          invocationInputID: string
+          operationID: string
+          promptDigest: string
+        }
+  }
+}
+
+export type EventSessionNextDelegationResultRecorded = {
+  id: string
+  type: "session.next.delegation.result.recorded"
+  properties: {
+    timestamp: number
+    sessionID: string
+    invocationInputID: string
+    rootSessionID: string
+    childSessionID: string
+    terminalEventID: string
+    outcome: "completed" | "failed" | "cancelled"
+    resultMessageID?: string
+    summary: string
+    notificationInputID: string
+    notify: boolean
+    version: 1
+  }
+}
+
+export type EventSessionNextDelegationWakeRevoked = {
+  id: string
+  type: "session.next.delegation.wake.revoked"
+  properties: {
+    timestamp: number
+    sessionID: string
+    rootSessionID: string
+    invocationInputIDs: Array<string>
   }
 }
 
@@ -12334,6 +12703,13 @@ export type SessionCreateData = {
     permission?: PermissionRuleset
     approvalMode?: ApprovalMode
     workspaceID?: string
+    destination?: {
+      target: LocationTarget
+      directory: string
+      workspaceID?: string
+      lastKnownTargetName?: string
+      path?: string
+    }
   }
   path?: never
   query?: {
@@ -12681,6 +13057,10 @@ export type SessionPromptErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
 }
 
 export type SessionPromptError = SessionPromptErrors[keyof SessionPromptErrors]
@@ -14606,6 +14986,47 @@ export type V2SessionSwitchModelResponses = {
 
 export type V2SessionSwitchModelResponse = V2SessionSwitchModelResponses[keyof V2SessionSwitchModelResponses]
 
+export type V2SessionPromptBackendData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/prompt/backend"
+}
+
+export type V2SessionPromptBackendErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionPromptBackendError = V2SessionPromptBackendErrors[keyof V2SessionPromptBackendErrors]
+
+export type V2SessionPromptBackendResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: "v2" | "legacy"
+  }
+}
+
+export type V2SessionPromptBackendResponse = V2SessionPromptBackendResponses[keyof V2SessionPromptBackendResponses]
+
 export type V2SessionPromptData = {
   body: {
     id?: string
@@ -14637,6 +15058,10 @@ export type V2SessionPromptErrors = {
    * ConflictError
    */
   409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type V2SessionPromptError = V2SessionPromptErrors[keyof V2SessionPromptErrors]
@@ -14949,6 +15374,7 @@ export type V2SessionModelContextResponses = {
       reason: "auto" | "manual"
       summary: string
       recent: string
+      source?: "legacy"
     }
     subagentCatalog?: {
       revision: string
@@ -15122,6 +15548,464 @@ export type V2SessionInterruptResponses = {
 }
 
 export type V2SessionInterruptResponse = V2SessionInterruptResponses[keyof V2SessionInterruptResponses]
+
+export type V2SessionTaskStatusData = {
+  body: {
+    target?: {
+      task_id: string
+      invocation?: {
+        parent_session_id: string
+        parent_message_id: string
+        call_id: string
+      }
+    }
+    targets?: Array<{
+      task_id: string
+      invocation?: {
+        parent_session_id: string
+        parent_message_id: string
+        call_id: string
+      }
+    }>
+    cursor?: string
+    limit?: number
+    include_results?: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/task/status"
+}
+
+export type V2SessionTaskStatusErrors = {
+  /**
+   * InvalidCursorError | InvalidRequestError
+   */
+  400: InvalidCursorError | InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionTaskStatusError = V2SessionTaskStatusErrors[keyof V2SessionTaskStatusErrors]
+
+export type V2SessionTaskStatusResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: Array<{
+      target: {
+        task_id: string
+        invocation?: {
+          parent_session_id: string
+          parent_message_id: string
+          call_id: string
+        }
+      }
+      description: string
+      agent_id: string
+      location: {
+        target_id?: string
+        target_name?: string
+        directory?: string
+      }
+      lifecycle: "admitted" | "active" | "settled" | "unscoped_legacy"
+      outcome?: "completed" | "failed" | "cancelled"
+      runtime: "observed" | "unknown" | "unavailable"
+      phase: "queued" | "model" | "tool" | "permission" | "question" | "unknown"
+      eligibility?: "eligible" | "frozen" | "none"
+      cancellation: "none" | "requested" | "observed"
+      lifecycle_source: "durable" | "legacy_projection"
+      input_id?: string
+      disposition?: "none" | "abandoned_unknown"
+      owner_safety?: "confirmed_local_lease" | "unknown" | "not_required"
+      root_quota?: {
+        active_used: number
+        active_limit: number
+        pending_used: number
+        pending_limit: number
+      }
+      runtime_observation?: {
+        source: "execution_owner"
+        owner_generation: string
+        observed_at: number
+      }
+      read_at: number
+      last_progress_at?: number
+      active_tools: Array<{
+        name: string
+        call_id: string
+        started_at?: number
+      }>
+      active_tool_count: number
+      active_invocation?: {
+        parent_session_id: string
+        parent_message_id: string
+        call_id: string
+      }
+      queued_count: number
+      abandoned_unknown?: boolean
+      result?: {
+        message_id?: string
+        summary?: string
+        truncated: boolean
+      }
+    }>
+    next?: string
+  }
+}
+
+export type V2SessionTaskStatusResponse = V2SessionTaskStatusResponses[keyof V2SessionTaskStatusResponses]
+
+export type V2SessionTaskSendData = {
+  body: {
+    target: {
+      task_id: string
+      invocation: {
+        parent_session_id: string
+        parent_message_id: string
+        call_id: string
+      }
+      input_id: string
+    }
+    operation_id: string
+    text: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/task/send"
+}
+
+export type V2SessionTaskSendErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionTaskSendError = V2SessionTaskSendErrors[keyof V2SessionTaskSendErrors]
+
+export type V2SessionTaskSendResponses = {
+  /**
+   * Success
+   */
+  200: {
+    input_id: string
+    state: "admitted" | "promoted" | "not_delivered"
+    reason: string
+  }
+}
+
+export type V2SessionTaskSendResponse = V2SessionTaskSendResponses[keyof V2SessionTaskSendResponses]
+
+export type V2SessionTaskReconcileData = {
+  body: {
+    target: {
+      task_id: string
+      invocation: {
+        parent_session_id: string
+        parent_message_id: string
+        call_id: string
+      }
+      input_id: string
+    }
+    operation_id: string
+    disposition: "resume_pending" | "cancel_pending"
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/task/reconcile"
+}
+
+export type V2SessionTaskReconcileErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionTaskReconcileError = V2SessionTaskReconcileErrors[keyof V2SessionTaskReconcileErrors]
+
+export type V2SessionTaskReconcileResponses = {
+  /**
+   * Success
+   */
+  200: {
+    input_id: string
+    disposition: "resume_pending" | "cancel_pending"
+    eligibility: "eligible" | "frozen" | "cancelled"
+    capacity_state: "available" | "capacity_unavailable" | "not_applicable"
+  }
+}
+
+export type V2SessionTaskReconcileResponse = V2SessionTaskReconcileResponses[keyof V2SessionTaskReconcileResponses]
+
+export type V2SessionTaskWaitData = {
+  body: {
+    targets: Array<{
+      task_id: string
+      invocation: {
+        parent_session_id: string
+        parent_message_id: string
+        call_id: string
+      }
+      input_id: string
+    }>
+    until?: "terminal" | "change"
+    timeout_ms?: number
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/task/wait"
+}
+
+export type V2SessionTaskWaitErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionTaskWaitError = V2SessionTaskWaitErrors[keyof V2SessionTaskWaitErrors]
+
+export type V2SessionTaskWaitResponses = {
+  /**
+   * Success
+   */
+  200: {
+    reason: "terminal" | "state_changed" | "needs_input" | "unavailable" | "parent_input" | "timeout"
+    timed_out: boolean
+    data: Array<{
+      target: {
+        task_id: string
+        invocation?: {
+          parent_session_id: string
+          parent_message_id: string
+          call_id: string
+        }
+      }
+      description: string
+      agent_id: string
+      location: {
+        target_id?: string
+        target_name?: string
+        directory?: string
+      }
+      lifecycle: "admitted" | "active" | "settled" | "unscoped_legacy"
+      outcome?: "completed" | "failed" | "cancelled"
+      runtime: "observed" | "unknown" | "unavailable"
+      phase: "queued" | "model" | "tool" | "permission" | "question" | "unknown"
+      eligibility?: "eligible" | "frozen" | "none"
+      cancellation: "none" | "requested" | "observed"
+      lifecycle_source: "durable" | "legacy_projection"
+      input_id?: string
+      disposition?: "none" | "abandoned_unknown"
+      owner_safety?: "confirmed_local_lease" | "unknown" | "not_required"
+      root_quota?: {
+        active_used: number
+        active_limit: number
+        pending_used: number
+        pending_limit: number
+      }
+      runtime_observation?: {
+        source: "execution_owner"
+        owner_generation: string
+        observed_at: number
+      }
+      read_at: number
+      last_progress_at?: number
+      active_tools: Array<{
+        name: string
+        call_id: string
+        started_at?: number
+      }>
+      active_tool_count: number
+      active_invocation?: {
+        parent_session_id: string
+        parent_message_id: string
+        call_id: string
+      }
+      queued_count: number
+      abandoned_unknown?: boolean
+      result?: {
+        message_id?: string
+        summary?: string
+        truncated: boolean
+      }
+    }>
+  }
+}
+
+export type V2SessionTaskWaitResponse = V2SessionTaskWaitResponses[keyof V2SessionTaskWaitResponses]
+
+export type V2SessionTaskInterruptData = {
+  body: {
+    target: {
+      task_id: string
+      invocation: {
+        parent_session_id: string
+        parent_message_id: string
+        call_id: string
+      }
+      input_id: string
+    }
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/task/interrupt"
+}
+
+export type V2SessionTaskInterruptErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionTaskInterruptError = V2SessionTaskInterruptErrors[keyof V2SessionTaskInterruptErrors]
+
+export type V2SessionTaskInterruptResponses = {
+  /**
+   * Success
+   */
+  200: {
+    input_id: string
+    state: "requested" | "cancelled_pending" | "already_settled" | "unavailable"
+  }
+}
+
+export type V2SessionTaskInterruptResponse = V2SessionTaskInterruptResponses[keyof V2SessionTaskInterruptResponses]
+
+export type V2SessionTaskStopData = {
+  body: {
+    task_id: string
+    operation_id: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/task/stop"
+}
+
+export type V2SessionTaskStopErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionTaskStopError = V2SessionTaskStopErrors[keyof V2SessionTaskStopErrors]
+
+export type V2SessionTaskStopResponses = {
+  /**
+   * Success
+   */
+  200: {
+    operation_id: string
+    data: Array<{
+      input_id: string
+      state: "requested" | "cancelled_pending" | "already_settled" | "unavailable"
+    }>
+  }
+}
+
+export type V2SessionTaskStopResponse = V2SessionTaskStopResponses[keyof V2SessionTaskStopResponses]
 
 export type V2SessionMessageData = {
   body?: never

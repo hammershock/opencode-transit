@@ -9,6 +9,34 @@ import { reply } from "../../lib/llm-server"
 import { cliIt } from "../../lib/cli-process"
 
 describe("opencode run (non-interactive subprocess)", () => {
+  cliIt.concurrent(
+    "new experimental Session uses V2 prompt and prints the provider response before exiting",
+    ({ llm, opencode }) =>
+      Effect.gen(function* () {
+        yield* llm.text("canonical run reply")
+        const result = yield* opencode.run("canonical run input", {
+          env: {
+            OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "1",
+            OPENCODE_CONFIG_CONTENT: JSON.stringify({
+              experimental: { background_subagents: true },
+              providers: {
+                test: {
+                  api: { type: "aisdk", package: "@ai-sdk/openai-compatible", url: llm.url },
+                  request: { body: { apiKey: "test-key" } },
+                  models: { "test-model": { api: { id: "test-model" } } },
+                },
+              },
+            }),
+          },
+          timeoutMs: 30_000,
+        })
+        opencode.expectExit(result, 0)
+        expect(result.stdout).toContain("canonical run reply")
+        const inputs = yield* llm.inputs
+        expect(inputs).toHaveLength(1)
+      }),
+    45_000,
+  )
   // Happy path: prompt completes, output reaches stdout, process exits 0.
   // If this fails, all the others likely will too — debug here first.
   cliIt.concurrent(

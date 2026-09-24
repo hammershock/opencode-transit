@@ -44,6 +44,7 @@ import * as SessionError from "./session-errors"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { SessionActivity } from "@opencode-ai/core/session/activity"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { Provider } from "@/provider/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -352,7 +353,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
                 ...ctx.payload,
                 sessionID: ctx.params.sessionID,
               })
-              .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+              .pipe(
+                Effect.mapError(() => new HttpApiError.BadRequest({})),
+                Effect.catchDefect((defect) =>
+                  defect instanceof SessionInput.PromptBackendConflict
+                    ? Effect.fail(new HttpApiError.Conflict({}))
+                    : Effect.die(defect),
+                ),
+              )
             return HttpServerResponse.stream(Stream.make(JSON.stringify(message)).pipe(Stream.encodeText), {
               contentType: "application/json",
             })

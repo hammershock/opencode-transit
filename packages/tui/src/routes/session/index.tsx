@@ -61,6 +61,7 @@ import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { DialogPermissionModes } from "../../component/dialog-permission-mode"
 import { Sidebar } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
+import { DialogTaskList } from "./dialog-task"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
@@ -1566,6 +1567,14 @@ export function Session() {
         }
         dialog.clear()
       },
+    },
+    {
+      title: "Tasks",
+      value: "session.tasks",
+      category: "Session",
+      // Existing child controls remain reachable after new Task advertising is disabled.
+      enabled: true,
+      run: () => dialog.push(() => <DialogTaskList sessionID={route.sessionID} />),
     },
     {
       title: "Background subagents",

@@ -154,6 +154,7 @@ import type {
   InstanceDisposeErrors,
   InstanceDisposeResponses,
   LocationRef,
+  LocationTarget,
   LspStatusErrors,
   LspStatusResponses,
   McpAddErrors,
@@ -483,6 +484,8 @@ import type {
   V2SessionPolicyInspectResponses,
   V2SessionPolicyReviewErrors,
   V2SessionPolicyReviewResponses,
+  V2SessionPromptBackendErrors,
+  V2SessionPromptBackendResponses,
   V2SessionPromptErrors,
   V2SessionPromptResponses,
   V2SessionQuestionListErrors,
@@ -501,6 +504,18 @@ import type {
   V2SessionSwitchAgentResponses,
   V2SessionSwitchModelErrors,
   V2SessionSwitchModelResponses,
+  V2SessionTaskInterruptErrors,
+  V2SessionTaskInterruptResponses,
+  V2SessionTaskReconcileErrors,
+  V2SessionTaskReconcileResponses,
+  V2SessionTaskSendErrors,
+  V2SessionTaskSendResponses,
+  V2SessionTaskStatusErrors,
+  V2SessionTaskStatusResponses,
+  V2SessionTaskStopErrors,
+  V2SessionTaskStopResponses,
+  V2SessionTaskWaitErrors,
+  V2SessionTaskWaitResponses,
   V2SessionWaitErrors,
   V2SessionWaitResponses,
   V2ShellCompleteErrors,
@@ -4189,6 +4204,13 @@ export class Session2 extends HeyApiClient {
       permission?: PermissionRuleset
       approvalMode?: ApprovalMode
       workspaceID?: string
+      destination?: {
+        target: LocationTarget
+        directory: string
+        workspaceID?: string
+        lastKnownTargetName?: string
+        path?: string
+      }
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4207,6 +4229,7 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "permission" },
             { in: "body", key: "approvalMode" },
             { in: "body", key: "workspaceID" },
+            { in: "body", key: "destination" },
           ],
         },
       ],
@@ -5463,6 +5486,292 @@ export class Revert extends HeyApiClient {
   }
 }
 
+export class Task extends HeyApiClient {
+  /**
+   * Read direct child Task status
+   *
+   * Read bounded Task status under one parent Session. Cursor enumeration never wakes child execution.
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      target?: {
+        task_id: string
+        invocation?: {
+          parent_session_id: string
+          parent_message_id: string
+          call_id: string
+        }
+      }
+      targets?: Array<{
+        task_id: string
+        invocation?: {
+          parent_session_id: string
+          parent_message_id: string
+          call_id: string
+        }
+      }>
+      cursor?: string
+      limit?: number
+      include_results?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "target" },
+            { in: "body", key: "targets" },
+            { in: "body", key: "cursor" },
+            { in: "body", key: "limit" },
+            { in: "body", key: "include_results" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2SessionTaskStatusResponses, V2SessionTaskStatusErrors, ThrowOnError>(
+      {
+        url: "/api/session/{sessionID}/task/status",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Steer an active direct child Task invocation
+   *
+   * Admit one exact steer with a durable receipt. Admission does not imply promotion or model consumption.
+   */
+  public send<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      target?: {
+        task_id: string
+        invocation: {
+          parent_session_id: string
+          parent_message_id: string
+          call_id: string
+        }
+        input_id: string
+      }
+      operation_id?: string
+      text?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "target" },
+            { in: "body", key: "operation_id" },
+            { in: "body", key: "text" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2SessionTaskSendResponses, V2SessionTaskSendErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/task/send",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Resolve one frozen direct child Task input
+   *
+   * Resume or cancel the original input by stable operation ID; this endpoint does not archive unknown owners.
+   */
+  public reconcile<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      target?: {
+        task_id: string
+        invocation: {
+          parent_session_id: string
+          parent_message_id: string
+          call_id: string
+        }
+        input_id: string
+      }
+      operation_id?: string
+      disposition?: "resume_pending" | "cancel_pending"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "target" },
+            { in: "body", key: "operation_id" },
+            { in: "body", key: "disposition" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionTaskReconcileResponses,
+      V2SessionTaskReconcileErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/task/reconcile",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Wait for exact direct child Task changes
+   *
+   * Wait for a bounded Task change or new parent user input without cancelling child execution.
+   */
+  public wait<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      targets?: Array<{
+        task_id: string
+        invocation: {
+          parent_session_id: string
+          parent_message_id: string
+          call_id: string
+        }
+        input_id: string
+      }>
+      until?: "terminal" | "change"
+      timeout_ms?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "targets" },
+            { in: "body", key: "until" },
+            { in: "body", key: "timeout_ms" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2SessionTaskWaitResponses, V2SessionTaskWaitErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/task/wait",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Interrupt one exact direct child Task invocation
+   */
+  public interrupt<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      target?: {
+        task_id: string
+        invocation: {
+          parent_session_id: string
+          parent_message_id: string
+          call_id: string
+        }
+        input_id: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "target" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionTaskInterruptResponses,
+      V2SessionTaskInterruptErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/task/interrupt",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Stop one direct child Task's fixed current and pending scope
+   */
+  public stop<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      task_id?: string
+      operation_id?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "task_id" },
+            { in: "body", key: "operation_id" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2SessionTaskStopResponses, V2SessionTaskStopErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/task/stop",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Permission2 extends HeyApiClient {
   /**
    * List session permission requests
@@ -5993,6 +6302,29 @@ export class Session3 extends HeyApiClient {
   }
 
   /**
+   * Get the compatible prompt backend
+   *
+   * A Session with historical V1 messages must continue on its legacy prompt path; an empty or canonical-only Session uses V2.
+   */
+  public promptBackend<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<
+      V2SessionPromptBackendResponses,
+      V2SessionPromptBackendErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/prompt/backend",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Send message
    *
    * Durably admit one session input and schedule agent-loop execution unless resume is false.
@@ -6272,6 +6604,11 @@ export class Session3 extends HeyApiClient {
   private _revert?: Revert
   get revert(): Revert {
     return (this._revert ??= new Revert({ client: this.client }))
+  }
+
+  private _task?: Task
+  get task(): Task {
+    return (this._task ??= new Task({ client: this.client }))
   }
 
   private _permission?: Permission2

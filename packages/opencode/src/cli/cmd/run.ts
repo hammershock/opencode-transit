@@ -25,6 +25,7 @@ import { Filesystem } from "@/util/filesystem"
 import { createOpencodeClient, type OpencodeClient, type ToolPart } from "@opencode-ai/sdk/v2"
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
+import { MessageID } from "@/session/schema"
 
 type ModelInput = Parameters<OpencodeClient["session"]["prompt"]>[0]["model"]
 
@@ -831,6 +832,45 @@ export const RunCommand = effectCmd({
         await share(client, sessionID)
 
         if (!interactive) {
+          const model = pick(args.model)
+          const { selectPromptBackend, canonicalPrompt, awaitCanonicalTurn } =
+            await import("./run/prompt-backend")
+          const capability = await client.experimental.capabilities.get()
+          if (capability.error && capability.response.status !== 404 && capability.response.status !== 501)
+            throw new Error(`Capabilities unavailable (${capability.response.status})`)
+          const backend = args.command ? "legacy" : await selectPromptBackend({
+            sdk: client,
+            sessionID,
+            backgroundSubagents: capability.data?.backgroundSubagents === true,
+          })
+          if (backend === "v2") {
+            if (agent) await client.v2.session.switchAgent({ sessionID, agent }, { throwOnError: true })
+            if (model)
+              await client.v2.session.switchModel(
+                { sessionID, model: { providerID: model.providerID, id: model.modelID, variant: args.variant } },
+                { throwOnError: true },
+              )
+            const inputID = MessageID.ascending()
+            const admission = await client.v2.session.prompt(
+              { sessionID, id: inputID, prompt: canonicalPrompt({ text: message, files, parts: [] }) },
+              { throwOnError: true },
+            )
+            const turn = await awaitCanonicalTurn({
+              sdk: client, sessionID, messageID: inputID, admittedSeq: admission.data.data.admittedSeq,
+            })
+            for (const part of turn.content) {
+              if (part.type === "reasoning" && !thinking) continue
+              if (emit(part.type, { part: { type: part.type, text: part.text } })) continue
+              const text = part.text.trim()
+              if (text) process.stdout.write((part.type === "reasoning" ? `Thinking: ${text}` : text) + EOL)
+            }
+            if (turn.outcome !== "completed") {
+              if (!emit("error", { error: { message: `Turn ${turn.outcome}` } }))
+                UI.error(`Turn ${turn.outcome}`)
+              process.exitCode = 1
+            }
+            return
+          }
           const events = await client.event.subscribe()
           const completed = loop(client, events).catch((e) => {
             console.error(e)
@@ -860,14 +900,13 @@ export const RunCommand = effectCmd({
             return
           }
 
-          const model = pick(args.model)
           const result = await client.session.prompt({
-            sessionID,
-            agent,
-            model,
-            variant: args.variant,
-            parts: [...files, { type: "text", text: message }],
-          })
+                sessionID,
+                agent,
+                model,
+                variant: args.variant,
+                parts: [...files, { type: "text", text: message }],
+              })
           if (result.error) {
             if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
             process.exitCode = 1

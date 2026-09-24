@@ -277,6 +277,45 @@ describe("layer node", () => {
     )
   })
 
+  test("coalesces equivalent hoisted nodes after dependency replacements", async () => {
+    const tags = LayerNode.tags({ location: ["global"], global: [] })
+    const global = tags.make("global")
+    const location = tags.make("location")
+    const source = global({ service: Value, layer: valueLayer, deps: [] })
+    const replacement = global({ service: Value, layer: Layer.succeed(Value, Value.of({ value: "remote" })), deps: [] })
+    const database = global({
+      service: Database,
+      layer: Layer.effect(Database, Effect.map(Value, (value) => Database.of({ name: value.value }))),
+      deps: [source],
+    })
+    const users = location({
+      service: Users,
+      layer: Layer.effect(Users, Effect.map(Database, (db) => Users.of({ list: Effect.succeed([db.name]) }))),
+      deps: [database],
+    })
+    const app = location({
+      service: App,
+      layer: Layer.effect(App, Effect.map(Database, (db) => App.of({ run: Effect.succeed([db.name]) }))),
+      deps: [database],
+    })
+    const substituted = location({ service: App, layer: app.implementation!, deps: [database] })
+
+    const result = LayerNode.hoist(LayerNode.group([users, app]), tags.values.global, [
+      [source, replacement],
+      [app, substituted],
+    ])
+    expect(result.hoisted.dependencies.filter((node) => node.name === database.name)).toHaveLength(1)
+    const layer = LayerNode.compile(result.node).pipe(
+      Layer.provide(LayerNode.compile(result.hoisted)),
+    ) as unknown as Layer.Layer<Users | App>
+    const value = await Effect.runPromise(
+      Effect.gen(function* () {
+        return [...(yield* (yield* Users).list), ...(yield* (yield* App).run)]
+      }).pipe(Effect.provide(layer)),
+    )
+    expect(value).toEqual(["remote", "remote"])
+  })
+
   test("treats dependency groups as transparent while hoisting", () => {
     const tags = LayerNode.tags({ location: ["global"], global: [] })
     const global = tags.make("global")

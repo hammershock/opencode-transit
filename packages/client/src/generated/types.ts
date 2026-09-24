@@ -532,6 +532,10 @@ export type SessionsSwitchModelInput = {
 
 export type SessionsSwitchModelOutput = void
 
+export type SessionsPromptBackendInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionsPromptBackendOutput = { readonly data: "v2" | "legacy" }["data"]
+
 export type SessionsPromptInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
   readonly id?: {
@@ -540,6 +544,7 @@ export type SessionsPromptInput = {
       readonly text: string
       readonly files?: ReadonlyArray<{
         readonly uri: string
+        readonly mime?: string
         readonly name?: string
         readonly description?: string
         readonly source?: { readonly start: number; readonly end: number; readonly text: string }
@@ -563,6 +568,7 @@ export type SessionsPromptInput = {
       readonly text: string
       readonly files?: ReadonlyArray<{
         readonly uri: string
+        readonly mime?: string
         readonly name?: string
         readonly description?: string
         readonly source?: { readonly start: number; readonly end: number; readonly text: string }
@@ -586,6 +592,7 @@ export type SessionsPromptInput = {
       readonly text: string
       readonly files?: ReadonlyArray<{
         readonly uri: string
+        readonly mime?: string
         readonly name?: string
         readonly description?: string
         readonly source?: { readonly start: number; readonly end: number; readonly text: string }
@@ -609,6 +616,7 @@ export type SessionsPromptInput = {
       readonly text: string
       readonly files?: ReadonlyArray<{
         readonly uri: string
+        readonly mime?: string
         readonly name?: string
         readonly description?: string
         readonly source?: { readonly start: number; readonly end: number; readonly text: string }
@@ -665,6 +673,12 @@ export type SessionsPromptOutput = {
     readonly delivery: "steer" | "queue"
     readonly timeCreated: number
     readonly promotedSeq?: number
+    readonly origin?: {
+      readonly kind: "delegation_result"
+      readonly invocationInputID: string
+      readonly terminalEventID: string
+      readonly version: 1
+    }
   }
 }["data"]
 
@@ -756,6 +770,12 @@ export type SessionsContextOutput = {
           }
         }>
         readonly type: "user"
+        readonly origin?: {
+          readonly kind: "delegation_result"
+          readonly invocationInputID: string
+          readonly terminalEventID: string
+          readonly version: 1
+        }
       }
     | {
         readonly id: string
@@ -1276,6 +1296,12 @@ export type SessionsHistoryOutput = {
             }>
           }
           readonly delivery: "steer" | "queue"
+          readonly origin?: {
+            readonly kind: "delegation_result"
+            readonly invocationInputID: string
+            readonly terminalEventID: string
+            readonly version: 1
+          } | null
         }
       }
     | {
@@ -1338,6 +1364,7 @@ export type SessionsHistoryOutput = {
                   readonly agentID: string
                   readonly locationRevision: number
                   readonly backend: "legacy" | "v2"
+                  readonly background?: boolean | null
                 }
               }
             | {
@@ -1347,6 +1374,50 @@ export type SessionsHistoryOutput = {
                 readonly promptDigest: string
               }
             | null
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.delegation.result.recorded"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: {
+          readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+          readonly directory: string
+          readonly workspaceID?: string
+          readonly lastKnownTargetName?: string
+        }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly invocationInputID: string
+          readonly rootSessionID: string
+          readonly childSessionID: string
+          readonly terminalEventID: string
+          readonly outcome: "completed" | "failed" | "cancelled"
+          readonly resultMessageID?: string | null
+          readonly summary: string
+          readonly notificationInputID: string
+          readonly notify: boolean
+          readonly version: 1
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.delegation.wake.revoked"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: {
+          readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+          readonly directory: string
+          readonly workspaceID?: string
+          readonly lastKnownTargetName?: string
+        }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly rootSessionID: string
+          readonly invocationInputIDs: ReadonlyArray<string>
         }
       }
     | {
@@ -2144,6 +2215,14 @@ export type SessionsEventsOutput =
           }>
         }
         readonly delivery: "steer" | "queue"
+        readonly origin?:
+          | {
+              readonly kind: "delegation_result"
+              readonly invocationInputID: string
+              readonly terminalEventID: string
+              readonly version: 1
+            }
+          | undefined
       }
     }
   | {
@@ -2206,6 +2285,7 @@ export type SessionsEventsOutput =
                 readonly agentID: string
                 readonly locationRevision: number
                 readonly backend: "legacy" | "v2"
+                readonly background?: boolean | undefined
               }
             }
           | {
@@ -2215,6 +2295,50 @@ export type SessionsEventsOutput =
               readonly promptDigest: string
             }
           | undefined
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.delegation.result.recorded"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: {
+        readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+        readonly directory: string
+        readonly workspaceID?: string
+        readonly lastKnownTargetName?: string
+      }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly invocationInputID: string
+        readonly rootSessionID: string
+        readonly childSessionID: string
+        readonly terminalEventID: string
+        readonly outcome: "completed" | "failed" | "cancelled"
+        readonly resultMessageID?: string | undefined
+        readonly summary: string
+        readonly notificationInputID: string
+        readonly notify: boolean
+        readonly version: 1
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.delegation.wake.revoked"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: {
+        readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+        readonly directory: string
+        readonly workspaceID?: string
+        readonly lastKnownTargetName?: string
+      }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly rootSessionID: string
+        readonly invocationInputIDs: ReadonlyArray<string>
       }
     }
   | {
@@ -3271,6 +3395,12 @@ export type SessionsMessageOutput = {
           }
         }>
         readonly type: "user"
+        readonly origin?: {
+          readonly kind: "delegation_result"
+          readonly invocationInputID: string
+          readonly terminalEventID: string
+          readonly version: 1
+        }
       }
     | {
         readonly id: string
@@ -3470,6 +3600,12 @@ export type MessagesListOutput = {
           }
         }>
         readonly type: "user"
+        readonly origin?: {
+          readonly kind: "delegation_result"
+          readonly invocationInputID: string
+          readonly terminalEventID: string
+          readonly version: 1
+        }
       }
     | {
         readonly id: string

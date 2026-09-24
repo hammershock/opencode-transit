@@ -59,6 +59,7 @@ import type {
   RunProvider,
   StreamCommit,
 } from "./types"
+import { awaitCanonicalTurn, canonicalPrompt, selectPromptBackend } from "./prompt-backend"
 
 type Trace = {
   write(type: string, data?: unknown): void
@@ -71,6 +72,7 @@ type StreamInput = {
   directory?: string
   sessionID: string
   thinking: boolean
+  backgroundSubagents?: boolean
   replay?: boolean
   replayLimit?: number
   limits: () => Record<string, number>
@@ -84,6 +86,7 @@ type Wait = {
   tick: number
   armed: boolean
   live: boolean
+  canonical?: boolean
   onVisibleOutput?: (anchor: LocalReplayAnchor) => void
   done: Deferred.Deferred<void, unknown>
 }
@@ -839,7 +842,7 @@ function createLayer(input: StreamInput) {
         }
 
         const complete = Effect.fn("RunStreamTransport.complete")(function* (next: Wait, fallback: boolean) {
-          if (state.wait !== next || !next.armed || !next.live) {
+          if (state.wait !== next || next.canonical || !next.armed || !next.live) {
             return
           }
 
@@ -1323,19 +1326,105 @@ function createLayer(input: StreamInput) {
                     input.trace?.write("send.prompt", req)
                   }).pipe(
                     Effect.andThen(
-                      Effect.promise(() =>
-                        input.sdk.session.promptAsync(req, {
-                          signal: turn.signal,
-                        }),
-                      ),
+                      Effect.promise(async () => {
+                        const backend = await selectPromptBackend({
+                          sdk: input.sdk,
+                          sessionID: input.sessionID,
+                          backgroundSubagents: input.backgroundSubagents === true,
+                        })
+                        if (backend === "legacy") {
+                          await input.sdk.session.promptAsync(req, { signal: turn.signal, throwOnError: true })
+                          return { backend: "legacy" as const }
+                        }
+                        item.canonical = true
+                        if (next.agent)
+                          await input.sdk.v2.session.switchAgent(
+                            { sessionID: input.sessionID, agent: next.agent },
+                            { signal: turn.signal, throwOnError: true },
+                          )
+                        if (next.model)
+                          await input.sdk.v2.session.switchModel(
+                            {
+                              sessionID: input.sessionID,
+                              model: {
+                                providerID: next.model.providerID,
+                                id: next.model.modelID,
+                                variant: next.variant,
+                              },
+                            },
+                            { signal: turn.signal, throwOnError: true },
+                          )
+                        const admitted = await input.sdk.v2.session.prompt(
+                          {
+                            sessionID: input.sessionID,
+                            id: next.prompt.messageID,
+                            prompt: canonicalPrompt({
+                              text: next.prompt.text,
+                              files: next.includeFiles ? next.files : [],
+                              parts: next.prompt.parts,
+                            }),
+                          },
+                          { signal: turn.signal, throwOnError: true },
+                        )
+                        return { backend: "v2" as const, admitted: admitted.data.data }
+                      }),
                     ),
-                    Effect.tap(() =>
+                    Effect.tap((admitted) =>
                       Effect.sync(() => {
                         input.trace?.write("send.prompt.ok", {
                           sessionID: input.sessionID,
                         })
                         item.armed = true
-                      }),
+                      }).pipe(
+                        Effect.andThen(
+                          admitted.backend === "legacy"
+                            ? Effect.void
+                            : Effect.promise(() =>
+                                awaitCanonicalTurn({
+                                  sdk: input.sdk,
+                                  sessionID: input.sessionID,
+                                  messageID: admitted.admitted.id,
+                                  admittedSeq: admitted.admitted.admittedSeq,
+                                  signal: turn.signal,
+                                }),
+                              ).pipe(
+                                Effect.flatMap((result) =>
+                                  Effect.sync(() => {
+                                    if (state.wait !== item) return
+                                    const commits: StreamCommit[] = result.content.flatMap((part, index) => {
+                                      const kind = part.type === "text" ? "assistant" : "reasoning"
+                                      const key = {
+                                        kind,
+                                        source: kind,
+                                        messageID: admitted.admitted.id,
+                                        partID: `${admitted.admitted.id}:${index}`,
+                                      } as const
+                                      return [
+                                        { ...key, text: part.text, phase: "progress" as const },
+                                        { ...key, text: "", phase: "final" as const },
+                                      ]
+                                    })
+                                    syncFooter(commits)
+                                    commits.filter((commit) => commit.phase === "progress").forEach((commit) =>
+                                      item.onVisibleOutput?.({ kind: commit.kind, text: commit.text, phase: commit.phase }),
+                                    )
+                                    state.tick = item.tick + 1
+                                    state.wait = undefined
+                                  }).pipe(
+                                    Effect.andThen(
+                                      result.outcome === "completed"
+                                        ? Deferred.succeed(item.done, undefined)
+                                        : Deferred.fail(item.done, new Error(`Canonical turn ${result.outcome}`)),
+                                    ),
+                                    Effect.asVoid,
+                                  ),
+                                ),
+                                Effect.catch((error) => Deferred.fail(item.done, error).pipe(Effect.ignore)),
+                                Effect.forkIn(scope, { startImmediately: true }),
+                                Effect.asVoid,
+                              ),
+                        ),
+                      ),
                     ),
                   )
 

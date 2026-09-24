@@ -280,6 +280,20 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.get("session.promptBackend", "/api/session/:sessionID/prompt/backend", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: Schema.Literals(["v2", "legacy"]) }),
+        error: [SessionNotFoundError, ServiceUnavailableError],
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.promptBackend",
+          summary: "Get the compatible prompt backend",
+          description:
+            "A Session with historical V1 messages must continue on its legacy prompt path; an empty or canonical-only Session uses V2.",
+        }),
+      ),
+    )
+    .add(
       HttpApiEndpoint.post("session.prompt", "/api/session/:sessionID/prompt", {
         params: { sessionID: Session.ID },
         payload: Schema.Struct({
@@ -289,7 +303,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInput.Admitted }),
-        error: [ConflictError, InvalidRequestError, SessionNotFoundError, SkillMentionError],
+        error: [ConflictError, InvalidRequestError, SessionNotFoundError, SkillMentionError, ServiceUnavailableError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(

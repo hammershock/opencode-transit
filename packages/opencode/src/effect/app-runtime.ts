@@ -66,11 +66,15 @@ import { SyncSetup } from "@opencode-ai/core/sync/setup"
 import { SessionSync } from "@opencode-ai/core/sync/session"
 import { SyncMetadata } from "@opencode-ai/core/sync/metadata"
 import { SyncControl } from "@opencode-ai/core/sync/control"
-import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
+import { LocationServiceMap } from "@opencode-ai/core/location-services"
+import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
+import { rexdTargetRegistryNode } from "@/rexd/target-registry"
+import { sessionLocationMap } from "./session-location-map"
+import { taskBackendNode } from "./task-backend"
 
 const localLocationServiceMapNode = makeGlobalNode({
   service: LocationServiceMap.Service,
-  layer: locationServiceMapLayer,
+  layer: sessionLocationMap,
   deps: [],
 })
 
@@ -136,9 +140,12 @@ export const AppLayer = AppNodeBuilderV1.build(
     ShareNext.node,
     SessionShare.node,
     LocationServiceMap.node,
+    taskBackendNode,
   ]),
   [
     [LocationServiceMap.node, localLocationServiceMapNode],
+    [TargetRegistry.node, rexdTargetRegistryNode],
+    [taskBackendNode, Layer.succeed(SessionTaskCapability.Service, SessionTaskCapability.sessionV2)],
     [SessionExecution.node, SessionExecutionLocal.node],
   ],
 ).pipe(Layer.provideMerge(AppNodeBuilderV1.build(Ripgrep.node)), Layer.provideMerge(Observability.layer))

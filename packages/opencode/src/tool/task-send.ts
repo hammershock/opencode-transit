@@ -12,7 +12,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Cause, Effect, Option, Schema } from "effect"
 import { Tool } from "./tool"
 
-const Parameters = Schema.Struct({ target: SessionTask.ExactTarget, text: Schema.String })
+export const Parameters = Schema.Struct({ target: SessionTask.ExactTarget, text: Schema.String })
 
 export const TaskSendTool = Tool.define(
   "task_send",
