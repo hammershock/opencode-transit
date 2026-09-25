@@ -59,6 +59,65 @@ test.each([1, 2])(
   },
 )
 
+test("global SSE preserves durable sequence for live TUI messages", async () => {
+  const received: number[] = []
+  const fetcher = (async (input: RequestInfo | URL) => {
+    if (new URL(input instanceof Request ? input.url : String(input)).pathname !== "/global/event")
+      return new Response("{}", { headers: { "content-type": "application/json" } })
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              `data: ${JSON.stringify({
+                directory,
+                payload: {
+                  id: "evt_prompted",
+                  type: "session.next.prompted",
+                  properties: {
+                    timestamp: 53,
+                    sessionID: "parent",
+                    messageID: "steer",
+                    prompt: { text: "continue" },
+                    delivery: "steer",
+                  },
+                  durable: { aggregateID: "parent", seq: 53, version: 1 },
+                },
+              })}\n\n`,
+            ),
+          )
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    )
+  }) as typeof fetch
+  const dispose = createRoot((dispose) => {
+    createComponent(RemoteStatusProvider, {
+      get children() {
+        return createComponent(SDKProvider, {
+          url: "http://test",
+          fetch: fetcher,
+          get children() {
+            useSDK().event.on("event", (event) => {
+              if (event.payload.type === "session.next.prompted") received.push(event.payload.durable?.seq ?? -1)
+            })
+            return null
+          },
+        })
+      },
+    })
+    return dispose
+  })
+
+  try {
+    const deadline = Date.now() + 2_500
+    while (received.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+    expect(received).toEqual([53])
+  } finally {
+    dispose()
+  }
+})
+
 test("a malformed SSE event does not terminate the global subscription", async () => {
   const received: string[] = []
   let requests = 0

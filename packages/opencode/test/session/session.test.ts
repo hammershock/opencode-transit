@@ -135,11 +135,20 @@ describe("session.created event", () => {
     }),
   )
 
-  it.instance("emits legacy global sync payload", () =>
+  it.instance("emits durable order on the global event alongside the legacy sync payload", () =>
     Effect.gen(function* () {
       const session = yield* SessionNs.Service
       const received = yield* Deferred.make<{ syncEvent: EventV2.SerializedEvent }>()
-      const listener = (event: { payload: { type?: string; syncEvent?: EventV2.SerializedEvent } }) => {
+      const global = yield* Deferred.make<{ aggregateID: string; seq: number; version: number }>()
+      const listener = (event: {
+        payload: {
+          type?: string
+          durable?: { aggregateID: string; seq: number; version: number }
+          syncEvent?: EventV2.SerializedEvent
+        }
+      }) => {
+        if (event.payload.type === SessionNs.Event.Created.type && event.payload.durable)
+          Deferred.doneUnsafe(global, Effect.succeed(event.payload.durable))
         if (event.payload.type === "sync" && event.payload.syncEvent)
           Deferred.doneUnsafe(received, Effect.succeed({ syncEvent: event.payload.syncEvent }))
       }
@@ -148,7 +157,9 @@ describe("session.created event", () => {
 
       const info = yield* session.create({})
       const event = yield* awaitDeferred(received, "timed out waiting for legacy global sync event")
+      const durable = yield* awaitDeferred(global, "timed out waiting for global event durable order")
 
+      expect(durable).toEqual({ aggregateID: info.id, seq: event.syncEvent.seq, version: 1 })
       expect(event.syncEvent).toMatchObject({
         type: EventV2.versionedType(SessionNs.Event.Created.type, 1),
         seq: 0,
