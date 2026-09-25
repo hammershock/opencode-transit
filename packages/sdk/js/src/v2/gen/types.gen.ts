@@ -15236,6 +15236,10 @@ export type V2SessionCompactErrors = {
    */
   404: SessionNotFoundError
   /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
    * ServiceUnavailableError
    */
   503: ServiceUnavailableError

@@ -1,10 +1,19 @@
 export * as SessionExecution from "./execution"
 
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { LayerNode } from "../effect/layer-node"
 import { Node } from "../effect/app-node"
 import { SessionRunner } from "./runner/index"
 import { SessionSchema } from "./schema"
+import { ModelV2 } from "../model"
+import { SessionCompaction } from "./compaction"
+import { SessionRunnerModel } from "./runner/model"
+import { MessageDecodeError } from "./error"
+
+export class CompactionBusyError extends Schema.TaggedErrorClass<CompactionBusyError>()(
+  "SessionExecution.CompactionBusyError",
+  { sessionID: SessionSchema.ID },
+) {}
 
 export interface Interface {
   /** Snapshots active execution owned by this process. */
@@ -15,6 +24,13 @@ export interface Interface {
   readonly wake: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   /** Registers work and waits for the execution generation guaranteed to observe it. */
   readonly wakeAndWait: (sessionID: SessionSchema.ID) => Effect.Effect<void, SessionRunner.RunError>
+  readonly compactManual: (input: {
+    sessionID: SessionSchema.ID
+    model?: ModelV2.Ref
+  }) => Effect.Effect<
+    void,
+    CompactionBusyError | SessionRunnerModel.Error | MessageDecodeError | SessionCompaction.ManualError
+  >
   /** Interrupt active work owned by this process. Idle interruption is a no-op. */
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   /** Signal only the bound invocation generation. This never waits for settlement. */
@@ -38,6 +54,7 @@ export const noopLayer = Layer.succeed(
     resume: () => Effect.void,
     wake: () => Effect.void,
     wakeAndWait: () => Effect.void,
+    compactManual: () => Effect.void,
     interrupt: () => Effect.void,
     requestInterruptExact: () => Effect.succeed(false),
   }),

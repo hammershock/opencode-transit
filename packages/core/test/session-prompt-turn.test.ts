@@ -33,7 +33,8 @@ const execution = Layer.effect(
       wake: coordinator.wake,
       wakeAndWait: coordinator.wakeAndWait,
       interrupt: coordinator.interrupt,
-      requestInterruptExact: () => Effect.succeed(false),
+      compactManual: () => Effect.void,
+    requestInterruptExact: () => Effect.succeed(false),
     })
   }),
 )

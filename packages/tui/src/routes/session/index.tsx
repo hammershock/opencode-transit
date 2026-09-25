@@ -1069,7 +1069,7 @@ export function Session() {
         name: "compact",
         aliases: ["summarize"],
       },
-      run: () => {
+      run: async () => {
         const selectedModel = local.model.current()
         if (!selectedModel) {
           toast.show({
@@ -1079,12 +1079,19 @@ export function Session() {
           })
           return
         }
-        void sdk.client.session.summarize({
-          sessionID: route.sessionID,
-          modelID: selectedModel.modelID,
-          providerID: selectedModel.providerID,
-        })
-        dialog.clear()
+        try {
+          await sdk.client.session.summarize(
+            {
+              sessionID: route.sessionID,
+              modelID: selectedModel.modelID,
+              providerID: selectedModel.providerID,
+            },
+            { throwOnError: true },
+          )
+          dialog.clear()
+        } catch (error) {
+          toast.show({ message: errorMessage(error), variant: "error", duration: 5000 })
+        }
       },
     },
     {
@@ -1890,8 +1897,14 @@ export function Session() {
                               <Show
                                 when={durableUsers().get(messageID)?.origin?.kind !== "delegation_result"}
                                 fallback={
-                                  <box paddingLeft={3} marginTop={1} onMouseUp={() => dialog.push(() => <DialogTaskList sessionID={route.sessionID} />)}>
-                                    <text fg={theme.textMuted}>Subagent result delivered to Agent · click to inspect Tasks</text>
+                                  <box
+                                    paddingLeft={3}
+                                    marginTop={1}
+                                    onMouseUp={() => dialog.push(() => <DialogTaskList sessionID={route.sessionID} />)}
+                                  >
+                                    <text fg={theme.textMuted}>
+                                      Subagent result delivered to Agent · click to inspect Tasks
+                                    </text>
                                   </box>
                                 }
                               >
@@ -3102,7 +3115,8 @@ function Task(props: ToolProps) {
     const task = view()
     if (task) {
       content.push(`↳ ${taskStatusLabel(task)}`)
-      if (task.active_tools.length) content.push(`↳ ${task.active_tools.map((tool) => tool.name).join(", ")} · observed`)
+      if (task.active_tools.length)
+        content.push(`↳ ${task.active_tools.map((tool) => tool.name).join(", ")} · observed`)
       if (task.lifecycle === "settled" && task.result?.summary)
         content.push(`↳ ${Locale.truncate(task.result.summary.replaceAll("\n", " "), 160)}`)
       return content.join("\n")
@@ -3138,7 +3152,9 @@ function Task(props: ToolProps) {
 
   return (
     <InlineTool
-      icon={view() ? (view()!.lifecycle === "settled" ? "✓" : "│") : props.part.state.status === "completed" ? "✓" : "│"}
+      icon={
+        view() ? (view()!.lifecycle === "settled" ? "✓" : "│") : props.part.state.status === "completed" ? "✓" : "│"
+      }
       separate={true}
       color={retry() ? theme.error : undefined}
       spinner={isRunning()}

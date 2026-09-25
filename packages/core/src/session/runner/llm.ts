@@ -109,6 +109,26 @@ const layer = Layer.effect(
     const runtime = yield* RuntimeContext.Service
     const db = (yield* Database.Service).db
     const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
+    const compactManual = Effect.fn("SessionRunner.compactManual")(function* (input: {
+      readonly sessionID: SessionSchema.ID
+      readonly model?: ModelV2.Ref
+    }) {
+      const session = yield* getSession(input.sessionID)
+      const model = yield* models.resolve({ ...session, model: input.model ?? session.model })
+      const entries = yield* SessionHistory.entriesForRunner(db, session.id)
+      yield* compaction.compactManual({
+        sessionID: session.id,
+        entries,
+        model,
+        http: {
+          headers: {
+            "x-session-affinity": session.id,
+            "X-Session-Id": session.id,
+            ...(session.parentID ? { "x-parent-session-id": session.parentID } : {}),
+          },
+        },
+      })
+    })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
       if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
@@ -256,7 +276,9 @@ const layer = Layer.effect(
         .limit(1)
         .get()
         .pipe(Effect.orDie)
-      const selection = latest ? (yield* SessionInput.find(db, SessionMessage.ID.make(latest.id)))?.prompt.selection : undefined
+      const selection = latest
+        ? (yield* SessionInput.find(db, SessionMessage.ID.make(latest.id)))?.prompt.selection
+        : undefined
       const selected = {
         ...session,
         agent: selection?.agent ? AgentV2.ID.make(selection.agent) : session.agent,
@@ -305,12 +327,15 @@ const layer = Layer.effect(
             call,
             origin: "command",
           })
-          yield* publisher.publish(LLMEvent.toolResult({
-            id: call.id,
-            name: call.name,
-            result: settlement.result,
-            output: settlement.output,
-          }), settlement.outputPaths ?? [])
+          yield* publisher.publish(
+            LLMEvent.toolResult({
+              id: call.id,
+              name: call.name,
+              result: settlement.result,
+              output: settlement.output,
+            }),
+            settlement.outputPaths ?? [],
+          )
           yield* events.publish(SessionEvent.Step.Ended, {
             sessionID: session.id,
             timestamp: yield* DateTime.now,
@@ -601,6 +626,7 @@ const layer = Layer.effect(
 
     return Service.of({
       run,
+      compactManual,
     })
   }),
 )

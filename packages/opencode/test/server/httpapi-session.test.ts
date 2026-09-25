@@ -978,6 +978,26 @@ describe("session HttpApi", () => {
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
   )
 
+  it.live("keeps the legacy summarize route on the V1 transcript", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      yield* llm.text("## Objective\n- Legacy work")
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const chat = yield* createSession({ title: "Legacy compaction" }).pipe(provideInstanceEffect(directory))
+      yield* createTextMessage(chat.id, "Original legacy question").pipe(provideInstanceEffect(directory))
+      const reply = yield* request(pathFor(SessionPaths.summarize, { sessionID: chat.id }), {
+        method: "POST",
+        headers: { "x-opencode-directory": directory, "content-type": "application/json" },
+        body: JSON.stringify({ providerID: "test", modelID: "test-model" }),
+      })
+      expect(reply.status).toBe(200)
+      expect(yield* responseJson(reply)).toBe(true)
+      const { db } = yield* Database.Service
+      expect((yield* db.select().from(MessageTable).where(eq(MessageTable.session_id, chat.id)).all()).length).toBeGreaterThan(1)
+      expect((yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, chat.id)).all())).toHaveLength(0)
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
   it.live("admits a configured command through the V2 transcript over the legacy HTTP route", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLMServer
@@ -1225,19 +1245,20 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
-    "returns v2 public unavailable errors for unfinished session mutations",
+    "rejects V2 compaction on legacy history and reports unfinished wait",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
         const headers = { "x-opencode-directory": test.directory }
         const session = yield* createSession({ title: "v2 unavailable" })
+        yield* createTextMessage(session.id, "Legacy history")
 
         const compact = yield* request(`/api/session/${session.id}/compact`, { method: "POST", headers })
-        expect(compact.status).toBe(503)
+        expect(compact.status).toBe(409)
         expect(yield* responseJson(compact)).toEqual({
-          _tag: "ServiceUnavailableError",
-          message: "Session compact is not available yet",
-          service: "session.compact",
+          _tag: "ConflictError",
+          message: "This Session has legacy history; use its legacy summarize path",
+          resource: session.id,
         })
 
         const wait = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })

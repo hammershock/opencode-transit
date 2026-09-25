@@ -6,6 +6,24 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(Layer.empty)
 
 describe("SessionRunCoordinator", () => {
+  it.effect("reserves manual work, rejects concurrent work, and runs a wake after release", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+      const drained = yield* Deferred.make<void>()
+      const coordinator = yield* SessionRunCoordinator.make({ drain: () => Deferred.succeed(drained, undefined) })
+      const manual = yield* coordinator.exclusive("session", Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Deferred.await(gate)),
+      )).pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      expect(yield* coordinator.exclusive("session", Effect.void)).toEqual({ busy: true })
+      yield* coordinator.wake("session")
+      yield* Deferred.succeed(gate, undefined)
+      expect(yield* Fiber.join(manual)).toEqual({ busy: false, value: undefined })
+      yield* Deferred.await(drained)
+    })),
+  )
+
   it.effect("joins concurrent resumes for one key", () =>
     Effect.scoped(
       Effect.gen(function* () {
