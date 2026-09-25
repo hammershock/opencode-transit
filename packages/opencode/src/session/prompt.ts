@@ -59,7 +59,7 @@ import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { eq } from "drizzle-orm"
-import { MessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { SystemAssembly } from "./system-assembly"
@@ -78,7 +78,6 @@ import { SessionActivity } from "@opencode-ai/core/session/activity"
 import { SessionTaskResult } from "@opencode-ai/core/session/task-result"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { Prompt } from "@opencode-ai/core/session/prompt"
-import { SessionInputTable } from "@opencode-ai/core/session/sql"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { DateTime } from "effect"
 
@@ -181,16 +180,7 @@ const layer = Layer.effect(
     const shellControllers = new Map<SessionID, AbortController>()
     const sessionLocation = (sessionID: SessionID) => locationAccess.require(sessionID).pipe(Effect.catch(Effect.die))
     const isCanonical = Effect.fn("SessionPrompt.isCanonical")(function* (sessionID: SessionID) {
-      const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
-      if (session.metadata?.["opencode.promptBackend"] === "v2") return true
-      const row = yield* db
-        .select({ id: SessionInputTable.id })
-        .from(SessionInputTable)
-        .where(eq(SessionInputTable.session_id, sessionID))
-        .limit(1)
-        .get()
-        .pipe(Effect.orDie)
-      return row !== undefined
+      return (yield* sessions.promptBackend(sessionID).pipe(Effect.orDie)) === "v2"
     })
     const contextAt = Effect.fn("SessionPrompt.contextAt")(function* (input: {
       sessionID: SessionID
