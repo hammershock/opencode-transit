@@ -614,6 +614,7 @@ export const Definitions = Event.inventory(
   LocationRebound,
   Prompted,
   PromptAdmitted,
+  TitleGenerated,
   DelegationResultRecorded,
   DelegationWakeRevoked,
   Turn.Settled,
