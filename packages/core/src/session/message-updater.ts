@@ -140,6 +140,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         )
       },
       "session.next.prompt.admitted": () => Effect.void,
+      "session.next.title.generated": () => Effect.void,
       "session.next.delegation.result.recorded": () => Effect.void,
       "session.next.delegation.wake.revoked": () => Effect.void,
       "session.next.turn.settled": () => Effect.void,

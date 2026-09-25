@@ -47,6 +47,56 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  it.effect("applies generated titles only to default primary Session titles", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: "test",
+          directory: "/project",
+          title: "New session - 2026-01-01T00:00:00.000Z",
+          version: "test",
+        })
+        .run()
+      yield* events.publish(SessionEvent.TitleGenerated, {
+        sessionID,
+        timestamp: DateTime.makeUnsafe(1),
+        title: "First generated title",
+      })
+      expect((yield* db.select({ title: SessionTable.title }).from(SessionTable).get())?.title).toBe(
+        "First generated title",
+      )
+      yield* db.update(SessionTable).set({ title: "User title" }).where(eq(SessionTable.id, sessionID)).run()
+      yield* events.publish(SessionEvent.TitleGenerated, {
+        sessionID,
+        timestamp: DateTime.makeUnsafe(2),
+        title: "Stale generated title",
+      })
+      expect((yield* db.select({ title: SessionTable.title }).from(SessionTable).get())?.title).toBe("User title")
+      yield* db
+        .update(SessionTable)
+        .set({ title: "New session - 2026-01-01T00:00:00.000Z", parent_id: SessionV2.ID.make("ses_parent") })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+      yield* events.publish(SessionEvent.TitleGenerated, {
+        sessionID,
+        timestamp: DateTime.makeUnsafe(3),
+        title: "Child title must stay unchanged",
+      })
+      expect((yield* db.select({ title: SessionTable.title }).from(SessionTable).get())?.title).toBe(
+        "New session - 2026-01-01T00:00:00.000Z",
+      )
+    }),
+  )
+
   it.effect("projects moved sessions without the transitional context epoch table", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service

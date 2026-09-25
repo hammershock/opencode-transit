@@ -116,6 +116,50 @@ const layer = Layer.effect(
     const getContext = Effect.fn("SessionRunner.getContext")(function* (sessionID: SessionSchema.ID) {
       return yield* store.context(sessionID)
     })
+    const generateTitle = Effect.fn("SessionRunner.generateTitle")(function* (sessionID: SessionSchema.ID) {
+      const session = yield* getSession(sessionID)
+      if (session.parentID || !/^New session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(session.title)) return
+      const users = (yield* getContext(sessionID)).filter(
+        (message) => message.type === "user" && !/^\/(target|env)\s/.test(message.text.trim()),
+      )
+      const first = users[0]
+      if (!first || first.type !== "user") return
+      const titleAgent = yield* agents.get(AgentV2.ID.make("title"))
+      if (!titleAgent) return
+      const model = yield* models.resolve({ ...session, model: titleAgent.model ?? session.model })
+      const chunks: string[] = []
+      let failed = false
+      yield* llm
+        .stream(
+          LLM.request({
+            model,
+            system: titleAgent.system ? [SystemPart.make(titleAgent.system)] : [],
+            messages: [Message.user(`Generate a title for this conversation:\n${first.text}`)],
+            tools: [],
+            generation: { maxTokens: 80 },
+          }),
+        )
+        .pipe(
+          Stream.runForEach((event) => {
+            if (LLMEvent.is.providerError(event)) failed = true
+            if (LLMEvent.is.textDelta(event)) chunks.push(event.text)
+            return Effect.void
+          }),
+        )
+      if (failed) return
+      const title = chunks
+        .join("")
+        .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line.length > 0)
+      if (!title) return
+      yield* events.publish(SessionEvent.TitleGenerated, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        title: title.length > 100 ? `${title.slice(0, 97)}...` : title,
+      })
+    })
     const failInterruptedTools = Effect.fn("SessionRunner.failInterruptedTools")(function* (
       sessionID: SessionSchema.ID,
     ) {
@@ -477,6 +521,10 @@ const layer = Layer.effect(
           }),
         )
         yield* logicalTurn
+        if (promoted.size > 0)
+          yield* generateTitle(input.sessionID).pipe(
+            Effect.catchCause((cause) => Effect.logError("failed to generate title", { error: Cause.squash(cause) })),
+          )
         if (input.taskInputID) return
         shouldRun = yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = shouldRun ? "queue" : undefined
