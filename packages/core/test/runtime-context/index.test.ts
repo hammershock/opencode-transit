@@ -84,4 +84,23 @@ describe("RuntimeContext", () => {
       expect(yield* runtime.assemble(sessionID, agent())).toEqual([])
     }),
   )
+
+  it.effect("rebuilds an evicted Session part while keeping the same Session identity", () =>
+    Effect.gen(function* () {
+      const runtime = yield* RuntimeContext.Service
+      let renders = 0
+      yield* runtime.register({
+        ...part("cached", 1, "context"),
+        cache: "session",
+        render: () => Effect.sync(() => `render-${++renders}`),
+      })
+      const first = SessionSchema.ID.make("ses_cache_0")
+      expect((yield* runtime.assemble(first, agent()))[0]?.text).toBe("render-1")
+      expect((yield* runtime.assemble(first, agent()))[0]?.text).toBe("render-1")
+      for (let index = 1; index <= 128; index++)
+        yield* runtime.assemble(SessionSchema.ID.make(`ses_cache_${index}`), agent())
+      expect((yield* runtime.assemble(first, agent()))[0]?.text).toBe("render-130")
+      expect((yield* runtime.assemble(first, agent()))[0]?.text).toBe("render-130")
+    }),
+  )
 })

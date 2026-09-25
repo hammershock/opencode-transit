@@ -4,6 +4,7 @@ import { Context, Effect, Layer, Ref, Scope } from "effect"
 import { AgentV2 } from "../agent"
 import { makeLocationNode } from "../effect/app-node"
 import { SessionSchema } from "../session/schema"
+import { SessionIdleCache } from "../session/idle-cache"
 
 /**
  * Per-turn reconstructed, never-persisted model-visible context.
@@ -34,10 +35,7 @@ export interface Rendered {
 
 export interface Interface {
   readonly register: (part: Part) => Effect.Effect<void, never, Scope.Scope>
-  readonly assemble: (
-    sessionID: SessionSchema.ID,
-    agent: AgentV2.Selection,
-  ) => Effect.Effect<ReadonlyArray<Rendered>>
+  readonly assemble: (sessionID: SessionSchema.ID, agent: AgentV2.Selection) => Effect.Effect<ReadonlyArray<Rendered>>
   readonly invalidate: (sessionID: SessionSchema.ID) => Effect.Effect<void>
 }
 
@@ -47,7 +45,8 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const parts = yield* Ref.make<ReadonlyArray<Part>>([])
-    const cache = yield* Ref.make<Map<string, Rendered>>(new Map())
+    const idleCache = yield* SessionIdleCache.Service
+    const cache = new Map<string, Rendered>()
 
     const register = Effect.fn("RuntimeContext.register")(function* (part: Part) {
       yield* Effect.acquireRelease(
@@ -63,14 +62,17 @@ const layer = Layer.effect(
       )
     })
 
-    const invalidate = Effect.fn("RuntimeContext.invalidate")(function* (sessionID: SessionSchema.ID) {
-      yield* Ref.update(cache, (current) => {
+    const resource: SessionIdleCache.Resource = {
+      evict: (sessionID) => {
         const prefix = `${sessionID}\u0000`
-        const next = new Map<string, Rendered>()
-        for (const [key, value] of current) if (!key.startsWith(prefix)) next.set(key, value)
-        return next
+        for (const key of cache.keys()) if (key.startsWith(prefix)) cache.delete(key)
+      },
+    }
+    const invalidate = (sessionID: SessionSchema.ID) =>
+      Effect.sync(() => {
+        resource.evict(sessionID)
+        idleCache.forget(sessionID, resource)
       })
-    })
 
     const assemble = Effect.fn("RuntimeContext.assemble")(function* (
       sessionID: SessionSchema.ID,
@@ -85,14 +87,15 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             const cacheKey = `${sessionID}\u0000${part.key}`
             if (part.cache === "session") {
-              const cached = (yield* Ref.get(cache)).get(cacheKey)
+              const cached = cache.get(cacheKey)
               if (cached) return cached
             }
             const text = yield* part.render(sessionID, agent)
             const result =
               text && text.length > 0 ? { key: part.key, label: part.label, tag: part.tag, text } : undefined
             if (part.cache === "session" && result) {
-              yield* Ref.update(cache, (current) => new Map(current).set(cacheKey, result))
+              cache.set(cacheKey, result)
+              idleCache.retain(sessionID, resource)
             }
             return result
           }),
@@ -105,4 +108,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [] })
+export const node = makeLocationNode({ service: Service, layer, deps: [SessionIdleCache.node] })
