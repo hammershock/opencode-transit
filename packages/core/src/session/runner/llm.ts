@@ -37,10 +37,12 @@ import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
 import { MAX_STEPS_PROMPT } from "./max-steps"
+import { SessionAgentGuidance } from "../agent-guidance"
+import { SessionPeerRoute } from "../peer-route"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
-import { SessionInputTable, SessionPeerMessageTable, SessionPeerReceiptTable } from "../sql"
+import { SessionInputTable, SessionPeerMessageTable, SessionPeerReceiptTable, SessionTaskResultTable } from "../sql"
 import { and, desc, eq, inArray, isNotNull, ne } from "drizzle-orm"
 
 /**
@@ -107,7 +109,8 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const snapshots = yield* Snapshot.Service
     const runtime = yield* RuntimeContext.Service
-    const db = (yield* Database.Service).db
+    const database = yield* Database.Service
+    const db = database.db
     const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
     const compactManual = Effect.fn("SessionRunner.compactManual")(function* (input: {
       readonly sessionID: SessionSchema.ID
@@ -363,6 +366,13 @@ const layer = Layer.effect(
             ])
           })
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
+      const agentGuidance = toolMaterialization?.definitions.some((tool) => tool.name === "agent_interact")
+        ? SessionAgentGuidance.render(
+            (yield* SessionPeerRoute.list(session.id).pipe(Effect.provideService(Database.Service, database)))
+              .filter((route) => route.can_interact)
+              .map((route) => route.alias),
+          )
+        : undefined
       const request = LLM.request({
         model,
         http: {
@@ -373,7 +383,7 @@ const layer = Layer.effect(
           },
         },
         providerOptions: { openai: { promptCacheKey } },
-        system: [agent.info?.system, ...runtimeParts.map((part) => part.text)]
+        system: [agent.info?.system, ...runtimeParts.map((part) => part.text), agentGuidance]
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
         messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
@@ -417,6 +427,24 @@ const layer = Layer.effect(
               .insert(SessionPeerReceiptTable)
               .values({
                 message_id: reply.id,
+                receiver_session_id: session.id,
+                channel: "inbox",
+                time_consumed: Date.now(),
+              })
+              .onConflictDoNothing()
+              .run()
+              .pipe(Effect.orDie)
+          const taskResults = yield* db
+            .select({ id: SessionTaskResultTable.notification_input_id })
+            .from(SessionTaskResultTable)
+            .where(inArray(SessionTaskResultTable.notification_input_id, visiblePeerIDs))
+            .all()
+            .pipe(Effect.orDie)
+          for (const result of taskResults)
+            yield* db
+              .insert(SessionPeerReceiptTable)
+              .values({
+                message_id: result.id,
                 receiver_session_id: session.id,
                 channel: "inbox",
                 time_consumed: Date.now(),

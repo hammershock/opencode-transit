@@ -10,7 +10,7 @@ export function render(agents: readonly AgentV2.Info[]) {
       `<subagent id="${escape(agent.id.slice(0, 64))}">${escape((agent.description ?? "Call only when the user explicitly selects this subagent.").slice(0, 240))}</subagent>`,
   )
   const opening = "<available-subagents>"
-  const guidance = "These are catalog candidates; Task validates current access before launch."
+  const guidance = "These are catalog candidates; agent_spawn validates current access before launch."
   const closing = "</available-subagents>"
   const selected = lines.reduce<string[]>(
     (current, line) =>
@@ -19,5 +19,7 @@ export function render(agents: readonly AgentV2.Info[]) {
         : current,
     [],
   )
-  return [opening, guidance, ...selected, ...(selected.length < lines.length ? ["<truncated />"] : []), closing].join("\n")
+  return [opening, guidance, ...selected, ...(selected.length < lines.length ? ["<truncated />"] : []), closing].join(
+    "\n",
+  )
 }

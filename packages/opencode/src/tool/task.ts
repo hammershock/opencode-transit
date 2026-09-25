@@ -59,6 +59,13 @@ export interface TaskPromptOps {
   cancelRunner(sessionID: SessionID): Effect.Effect<void>
   resolvePromptParts(template: string, sessionID?: SessionID): Effect.Effect<SessionPrompt.PromptInput["parts"]>
   prompt(input: SessionPrompt.PromptInput): Effect.Effect<SessionV1.WithParts>
+  admitPeer?(input: {
+    sessionID: SessionID
+    messageID: string
+    text: string
+    wake: boolean
+    queue?: boolean
+  }): Effect.Effect<void, unknown>
 }
 
 const id = "task"
@@ -77,14 +84,14 @@ const BACKGROUND_DESCRIPTION = [
 const BACKGROUND_STARTED = [
   "The task is working in the background. You will be notified automatically when it finishes.",
   "This existing session uses the legacy Task backend: active steering and exact invocation interruption are unavailable for this child. Start a new parent session with background subagents enabled to use the new controls.",
-  "DO NOT sleep, poll for progress, ask the task for status, or duplicate this task's work — avoid working with the same files or topics it is using.",
-  "Work on non-overlapping tasks, or briefly tell the user what you launched and end your response.",
+  "Use agent_interact to ask for specific progress when a visible alias route is available; the Agent should reply and continue its original work. Do not duplicate its work.",
+  "Use agent_wait for a reply or completion when available. Work on non-overlapping tasks while it runs.",
 ].join("\n")
 const BACKGROUND_UPDATED = [
   "Follow-up queued. It will run after the current task and any earlier queued follow-ups finish; it has not been delivered to the running invocation.",
   "This child uses the legacy Task backend and cannot receive active steering or exact invocation interruption. Start a new parent session with background subagents enabled to use the new controls.",
-  "DO NOT sleep, poll for progress, ask the task for status, or duplicate this task's work — avoid working with the same files or topics it is using.",
-  "Work on non-overlapping tasks, or briefly tell the user what you queued and end your response.",
+  "Use agent_interact to ask for specific progress when a visible alias route is available. Do not duplicate the Agent's work.",
+  "Use agent_wait for a reply or completion when available. Work on non-overlapping tasks while it runs.",
 ].join("\n")
 
 const BaseParameterFields = {
@@ -112,7 +119,7 @@ export const Parameters = Schema.Struct({
   ...BaseParameterFields,
   background: Schema.optional(Schema.Boolean).annotate({
     description:
-      "Run the agent in the background. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress",
+      "Run the agent in the background. You will be notified when it completes; use agent_interact for a specific progress update when a route is available.",
   }),
 })
 

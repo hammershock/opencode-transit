@@ -55,6 +55,8 @@ import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "@opencode-ai/core/shell"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
+import { AgentInteractTool } from "@/tool/agent-tools"
+import { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
@@ -1273,6 +1275,50 @@ it.instance("routes messages from V1 to V2 and from V2 to V1 without changing ei
         .where(eq(MessageTable.session_id, SessionSchema.ID.make(v2.id)))
         .all(),
     ).toHaveLength(0)
+  }),
+)
+
+it.instance("V2 Agent tool delivers a progress request to a V1 Session without promptOps", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const sessions = yield* Session.Service
+    const source = yield* sessions.create({ title: "V2 requester" })
+    const target = yield* sessions.create({ title: "V1 worker" })
+    yield* user(target.id, "Continue the original work")
+    yield* SessionInput.admit((yield* Database.Service).db, yield* EventV2.Service, {
+      id: SessionMessage.ID.create(),
+      sessionID: SessionSchema.ID.make(source.id),
+      prompt: Prompt.make({ text: "Ask the worker" }),
+      delivery: "steer",
+    })
+    yield* SessionPeerRoute.bind({
+      sourceSessionID: SessionSchema.ID.make(source.id),
+      targetSessionID: SessionSchema.ID.make(target.id),
+      alias: "/root/worker",
+      origin: { kind: "spawn", id: "v2-to-v1-tool" },
+    })
+    const interact = yield* Tool.init(yield* AgentInteractTool)
+    yield* llm.text("The original work continues")
+    const output = yield* interact
+      .execute(
+        { target: "/root/worker", message: "What is done? Reply, then continue." },
+        {
+          sessionID: source.id,
+          messageID: MessageID.make("msg_v2_requester"),
+          callID: "call_v2_v1",
+          agent: "build",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+      .pipe(Effect.provide(SessionExecution.noopLayer))
+    expect(JSON.parse(output.output).status).toBe("admitted")
+    yield* llm.wait(1)
+    expect(
+      (yield* sessions.findMessage(target.id, (item) => item.info.id === JSON.parse(output.output).message_id))._tag,
+    ).toBe("Some")
   }),
 )
 
