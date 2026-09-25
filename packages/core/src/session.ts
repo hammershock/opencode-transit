@@ -930,7 +930,10 @@ const layer = Layer.effect(
             const tools = yield* ToolRegistry.Service
             const policy = yield* ExecutionPolicy.Service
             const snapshot = yield* policy.resolve(sessionID, agent.id)
-            const materialization = yield* tools.materialize(snapshot.rules, snapshot.ceilings)
+            const materialization = yield* tools.materialize(snapshot.rules, [
+              ...snapshot.ceilings,
+              ...(session.parentID ? [[{ action: "slash_command", resource: "*", effect: "deny" as const }]] : []),
+            ])
             const environment = buildEnvironment(location)
             return {
               agentSystem: agent.info?.system ?? null,

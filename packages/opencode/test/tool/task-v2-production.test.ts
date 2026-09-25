@@ -103,6 +103,10 @@ test.each([false, true])("production V2 parent executes Task with default HTTP h
       expect(result.legacyMessages).toBe(0)
       expect(hits.some((hit) => JSON.stringify(hit.body).includes("CHILD_TASK_MARKER"))).toBe(true)
       const definitions = JSON.stringify(hits[0]?.body)
+      expect(definitions).toContain('"name":"slash_command"')
+      expect(JSON.stringify(hits.find((hit) => JSON.stringify(hit.body).includes("CHILD_TASK_MARKER"))?.body)).not.toContain(
+        '"name":"slash_command"',
+      )
       expect(definitions).toContain("<available-subagents>")
       expect(result.contextParts.find((part) => part.key === "subagents")?.text).toContain("<available-subagents>")
       expect(result.contextParts.find((part) => part.key === "available-targets")?.text).toContain("<available-targets>")
