@@ -50,6 +50,7 @@ import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { Provider } from "@/provider/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
+import { Skill } from "@/skill"
 
 const tryParseJson = (text: string) =>
   Effect.try({
@@ -76,6 +77,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const sessionV2 = yield* SessionV2.Service
     const execution = yield* SessionExecution.Service
     const commandSvc = yield* Command.Service
+    const skillSvc = yield* Skill.Service
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
@@ -442,6 +444,24 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
               return yield* promptSvc
                 .command({ ...ctx.payload, sessionID: ctx.params.sessionID })
                 .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+
+            if ((yield* SessionError.mapStorageNotFound(session.promptBackend(ctx.params.sessionID))) === "v1") {
+              const skill = yield* skillSvc
+                .require(ctx.payload.command)
+                .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+              const text = [
+                `<skill_instructions name="${skill.name}">\n${skill.content}\n</skill_instructions>`,
+                ctx.payload.arguments,
+              ].filter(Boolean).join("\n\n")
+              return yield* promptSvc.prompt({
+                sessionID: ctx.params.sessionID,
+                messageID: ctx.payload.messageID,
+                agent: ctx.payload.agent ?? current.agent ?? "build",
+                model: ctx.payload.model ? Provider.parseModel(ctx.payload.model) : undefined,
+                variant: ctx.payload.variant,
+                parts: [{ type: "text", text }, ...(ctx.payload.parts ?? [])],
+              }).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+            }
 
             const admitted = yield* sessionV2
               .skillSlash({

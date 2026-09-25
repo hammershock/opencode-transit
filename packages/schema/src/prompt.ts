@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import { optional } from "./schema"
 import { statics } from "./schema"
 import { SkillInvocation } from "./skill-invocation"
+import { Model } from "./model"
 
 export interface Source extends Schema.Schema.Type<typeof Source> {}
 export const Source = Schema.Struct({
@@ -50,6 +51,21 @@ export const Prompt = Schema.Struct({
   files: Schema.Array(FileAttachment).pipe(optional),
   agents: Schema.Array(AgentAttachment).pipe(optional),
   invocations: Schema.Array(SkillInvocationPart).pipe(optional),
+  selection: Schema.Struct({
+    agent: Schema.String.pipe(optional),
+    model: Model.Ref.pipe(optional),
+  }).pipe(optional),
+  command: Schema.Struct({
+    name: Schema.String,
+    arguments: Schema.String,
+    digest: Schema.String.pipe(optional),
+    subtask: Schema.Struct({
+      agent: Schema.String,
+      description: Schema.String,
+      prompt: Schema.String,
+      model: Model.Ref,
+    }).pipe(optional),
+  }).pipe(optional),
 })
   .annotate({ identifier: "Prompt" })
   .pipe(

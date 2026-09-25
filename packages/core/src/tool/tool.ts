@@ -11,6 +11,8 @@ export interface Context {
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
   readonly toolCallID: string
+  /** A durable command may invoke Task directly without a provider tool decision. */
+  readonly origin?: "command"
 }
 
 export type SchemaType<A> = Schema.Codec<A, any, never, never>

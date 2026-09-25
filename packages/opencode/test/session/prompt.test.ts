@@ -26,7 +26,7 @@ import { Image } from "../../src/image/image"
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
-import { SessionMessageTable } from "@opencode-ai/core/session/sql"
+import { MessageTable, SessionMessageTable } from "@opencode-ai/core/session/sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -40,6 +40,8 @@ import { SessionRunState } from "../../src/session/run-state"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
@@ -304,6 +306,31 @@ const withSessionActivation = testEffect(
     [RuntimeFlags.node, runtimeFlags],
     [LocationServiceMap.node, locationServiceMapLayer],
     [SessionExecution.node, SessionExecution.noopLayer],
+  ]),
+)
+const commandHookCalls: string[] = []
+const withCommandHooks = testEffect(
+  LayerNode.compile(LayerNode.group([promptRoot, testLLMServerNode, SessionV2.node]), [
+    [SessionSummary.node, summary],
+    [LSP.node, lsp],
+    [MCP.node, makeMcp()],
+    [RuntimeFlags.node, runtimeFlags],
+    [LocationServiceMap.node, locationServiceMapLayer],
+    [SessionExecution.node, SessionExecution.noopLayer],
+    [Plugin.node, Layer.mock(Plugin.Service)({
+      trigger: <Name extends string, Input, Output>(name: Name, _input: Input, output: Output) =>
+        Effect.sync(() => {
+          commandHookCalls.push(name)
+          if (name === "chat.message") {
+            const parts = (output as { parts: SessionV1.Part[] }).parts
+            const text = parts.find((part) => part.type === "text")
+            if (text?.type === "text") text.text += " [hooked]"
+          }
+          return output
+        }),
+      list: () => Effect.succeed([]),
+      init: () => Effect.void,
+    })],
   ]),
 )
 const unix = process.platform !== "win32" ? it.instance : it.instance.skip
@@ -2240,6 +2267,112 @@ unix(
       }),
     ),
   30_000,
+)
+
+withSessionActivation.instance(
+  "V2 configured command admits once and exact retry does not write V1 messages",
+  () => Effect.gen(function* () {
+    const { dir } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      command: { probe: { template: "Review $ARGUMENTS" } },
+    }))
+    const prompt = yield* SessionPrompt.Service
+    const session = yield* SessionV2.Service
+    const database = yield* Database.Service
+    const chat = yield* session.create({
+      location: Location.Ref.make({ directory: AbsolutePath.make(dir) }),
+      agent: AgentV2.ID.make("build"),
+      model: { providerID: ref.providerID, id: ref.modelID },
+    })
+    const messageID = MessageID.ascending()
+    const input = { sessionID: chat.id, command: "probe", arguments: "hello", messageID }
+    const first = yield* prompt.command(input)
+    const second = yield* prompt.command(input)
+    expect(first.info.id).toBe(messageID)
+    expect(second).toEqual(first)
+    const admitted = yield* SessionInput.find(database.db, SessionMessage.ID.make(messageID))
+    expect(admitted?.prompt.text).toBe("Review hello")
+    expect(admitted?.prompt.command).toMatchObject({ name: "probe", arguments: "hello" })
+    expect(admitted?.prompt.selection?.agent).toBe("build")
+    expect(yield* database.db.select().from(MessageTable).where(eq(MessageTable.session_id, chat.id)).all()).toHaveLength(0)
+    const conflict = yield* prompt.command({ ...input, arguments: "changed" }).pipe(Effect.exit)
+    expect(Exit.isFailure(conflict)).toBe(true)
+    if (Exit.isFailure(conflict)) expect(Cause.squash(conflict.cause)).toBeInstanceOf(SessionV2.PromptConflictError)
+  }),
+)
+
+withSessionActivation.instance("V2 subtask command retains its direct Task request", () =>
+  Effect.gen(function* () {
+    const { dir } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      command: {
+        inspect: { template: "Inspect $ARGUMENTS", agent: "general", model: "test/test-model", subtask: true },
+      },
+    }))
+    const prompt = yield* SessionPrompt.Service
+    const session = yield* SessionV2.Service
+    const database = yield* Database.Service
+    const chat = yield* session.create({
+      location: Location.Ref.make({ directory: AbsolutePath.make(dir) }),
+      agent: AgentV2.ID.make("build"),
+      model: { providerID: ref.providerID, id: ref.modelID },
+    })
+    const result = yield* prompt.command({ sessionID: chat.id, command: "inspect", arguments: "cache" })
+    const admitted = yield* SessionInput.find(database.db, SessionMessage.ID.make(result.info.id))
+    expect(admitted?.prompt.command?.subtask).toMatchObject({
+      agent: "general",
+      prompt: "Inspect cache",
+      model: { providerID: "test", id: "test-model" },
+    })
+    expect(admitted?.prompt.selection?.agent).toBe("build")
+    expect(yield* database.db.select().from(MessageTable).where(eq(MessageTable.session_id, chat.id)).all()).toHaveLength(0)
+  }),
+)
+
+withCommandHooks.instance("V2 configured command preserves both legacy hooks once", () =>
+  Effect.gen(function* () {
+    commandHookCalls.length = 0
+    const { dir } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      command: { inspect: { template: "Inspect $ARGUMENTS" } },
+    }))
+    const session = yield* SessionV2.Service
+    const prompt = yield* SessionPrompt.Service
+    const database = yield* Database.Service
+    const chat = yield* session.create({
+      location: Location.Ref.make({ directory: AbsolutePath.make(dir) }),
+      agent: AgentV2.ID.make("build"),
+      model: { providerID: ref.providerID, id: ref.modelID },
+    })
+    const input = { sessionID: chat.id, command: "inspect", arguments: "cache", messageID: MessageID.ascending() }
+    yield* prompt.command(input)
+    yield* prompt.command(input)
+    expect(commandHookCalls).toEqual(["command.execute.before", "chat.message"])
+    expect((yield* SessionInput.find(database.db, SessionMessage.ID.make(input.messageID)))?.prompt.text)
+      .toBe("Inspect cache [hooked]")
+  }),
+)
+
+withSessionActivation.instance("V2 configured command resolves attached file content before admission", () =>
+  Effect.gen(function* () {
+    const { dir } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      command: { inspect: { template: "Review @notes.txt" } },
+    }))
+    yield* writeText(path.join(dir, "notes.txt"), "Important file body")
+    const session = yield* SessionV2.Service
+    const prompt = yield* SessionPrompt.Service
+    const database = yield* Database.Service
+    const chat = yield* session.create({
+      location: Location.Ref.make({ directory: AbsolutePath.make(dir) }),
+      agent: AgentV2.ID.make("build"),
+      model: { providerID: ref.providerID, id: ref.modelID },
+    })
+    const result = yield* prompt.command({ sessionID: chat.id, command: "inspect", arguments: "" })
+    const admitted = yield* SessionInput.find(database.db, SessionMessage.ID.make(result.info.id))
+    expect(admitted?.prompt.text).toContain("Important file body")
+    expect(admitted?.prompt.files?.[0]?.uri).toStartWith("data:text/plain;base64,")
+  }),
 )
 
 it.instance("init command invalidates the runtime context cache", () =>

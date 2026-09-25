@@ -77,6 +77,8 @@ import { SessionLocationAccess } from "@opencode-ai/core/session/location-access
 import { SessionActivity } from "@opencode-ai/core/session/activity"
 import { SessionTaskResult } from "@opencode-ai/core/session/task-result"
 import { SessionEvent } from "@opencode-ai/core/session/event"
+import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionInput } from "@opencode-ai/core/session/input"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { DateTime } from "effect"
@@ -133,7 +135,7 @@ export interface Interface {
     input: ShellLocationCompletionInput,
   ) => Effect.Effect<ShellCompletionResult, unknown>
   readonly resetShell: (sessionID: SessionID) => Effect.Effect<void>
-  readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionV2.Error>
   readonly slashCommand: (input: SlashCommandInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly resolvePromptParts: (template: string, sessionID?: SessionID) => Effect.Effect<PromptInput["parts"]>
 }
@@ -168,6 +170,7 @@ const layer = Layer.effect(
     const summary = yield* SessionSummary.Service
     const llm = yield* LLM.Service
     const events = yield* EventV2Bridge.Service
+    const sessionV2 = yield* SessionV2.Service
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const locations = yield* LocationServiceMap.Service
@@ -896,64 +899,11 @@ const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
-      const agentName = input.agent
-      const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
-      if (!ag) {
-        const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-        const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-        const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
-        throw error
-      }
-
-      const model = input.model ?? ag.model ?? (yield* currentModel(input.sessionID))
-      const same = ag.model && model.providerID === ag.model.providerID && model.modelID === ag.model.modelID
-      const full =
-        !input.variant && ag.variant && same
-          ? yield* provider
-              .getModel(model.providerID, model.modelID)
-              .pipe(Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)))
-          : undefined
-      const variant = input.variant ?? (ag.variant && full?.variants?.[ag.variant] ? ag.variant : undefined)
-
-      const info: SessionV1.User = {
-        id: input.messageID ?? MessageID.ascending(),
-        role: "user",
-        sessionID: input.sessionID,
-        time: { created: Date.now() },
-        tools: input.tools,
-        agent: ag.name,
-        model: {
-          providerID: model.providerID,
-          modelID: model.modelID,
-          variant,
-        },
-        system: input.system,
-        format: input.format,
-      }
-
-      const current = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-      if (
-        current.agent !== info.agent ||
-        current.model?.providerID !== info.model.providerID ||
-        current.model?.id !== info.model.modelID ||
-        (current.model?.variant === "default" ? undefined : current.model?.variant) !== info.model.variant
-      ) {
-        yield* sessions.setAgentModel({
-          sessionID: input.sessionID,
-          agent: info.agent,
-          model: {
-            id: info.model.modelID,
-            providerID: info.model.providerID,
-            variant: info.model.variant ?? "default",
-          },
-          time: info.time.created,
-        })
-      }
-
-      yield* Effect.addFinalizer(() => instruction.clear(info.id))
-
+    const resolveUserParts = Effect.fn("SessionPrompt.resolveUserParts")(function* (
+      input: PromptInput,
+      info: SessionV1.User,
+      ag: Agent.Info,
+    ) {
       type Draft<T> = T extends SessionV1.Part ? Omit<T, "id"> & { id?: string } : never
       const assign = (part: Draft<SessionV1.Part>): SessionV1.Part => ({
         ...part,
@@ -1261,6 +1211,69 @@ const layer = Layer.effect(
       const resolvedParts = yield* Effect.forEach(input.parts, resolvePart, { concurrency: "unbounded" }).pipe(
         Effect.map((x) => x.flat().map(assign)),
       )
+
+      return resolvedParts
+    })
+
+    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
+      const agentName = input.agent
+      const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
+      if (!ag) {
+        const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
+        const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+        const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
+        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        throw error
+      }
+
+      const model = input.model ?? ag.model ?? (yield* currentModel(input.sessionID))
+      const same = ag.model && model.providerID === ag.model.providerID && model.modelID === ag.model.modelID
+      const full =
+        !input.variant && ag.variant && same
+          ? yield* provider
+              .getModel(model.providerID, model.modelID)
+              .pipe(Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)))
+          : undefined
+      const variant = input.variant ?? (ag.variant && full?.variants?.[ag.variant] ? ag.variant : undefined)
+
+      const info: SessionV1.User = {
+        id: input.messageID ?? MessageID.ascending(),
+        role: "user",
+        sessionID: input.sessionID,
+        time: { created: Date.now() },
+        tools: input.tools,
+        agent: ag.name,
+        model: {
+          providerID: model.providerID,
+          modelID: model.modelID,
+          variant,
+        },
+        system: input.system,
+        format: input.format,
+      }
+
+      const current = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      if (
+        current.agent !== info.agent ||
+        current.model?.providerID !== info.model.providerID ||
+        current.model?.id !== info.model.modelID ||
+        (current.model?.variant === "default" ? undefined : current.model?.variant) !== info.model.variant
+      ) {
+        yield* sessions.setAgentModel({
+          sessionID: input.sessionID,
+          agent: info.agent,
+          model: {
+            id: info.model.modelID,
+            providerID: info.model.providerID,
+            variant: info.model.variant ?? "default",
+          },
+          time: info.time.created,
+        })
+      }
+
+      yield* Effect.addFinalizer(() => instruction.clear(info.id))
+
+      const resolvedParts = yield* resolveUserParts(input, info, ag)
 
       yield* plugin.trigger(
         "chat.message",
@@ -1728,6 +1741,64 @@ const layer = Layer.effect(
 
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
       yield* locationAccess.require(input.sessionID).pipe(Effect.catch(Effect.die))
+      const canonical = yield* isCanonical(input.sessionID)
+      const digest = new Bun.CryptoHasher("sha256")
+        .update(JSON.stringify({
+          command: input.command,
+          arguments: input.arguments,
+          agent: input.agent,
+          model: input.model,
+          variant: input.variant,
+          parts: input.parts,
+        }))
+        .digest("hex")
+      const canonicalReply = (admitted: SessionInput.Admitted): SessionV1.WithParts => {
+        const selected = admitted.prompt.selection
+        if (!selected?.agent || !selected.model) throw new Error("Command admission has no selected Agent or model")
+        return {
+          info: {
+            id: MessageID.make(admitted.id),
+            role: "user",
+            sessionID: input.sessionID,
+            time: { created: DateTime.toEpochMillis(admitted.timeCreated) },
+            agent: selected.agent,
+            model: {
+              providerID: selected.model.providerID,
+              modelID: selected.model.id,
+              variant: selected.model.variant,
+            },
+          },
+          parts: [{
+            id: PartID.make(`prt_${admitted.id.slice(4)}`),
+            messageID: MessageID.make(admitted.id),
+            sessionID: input.sessionID,
+            type: "text",
+            text: admitted.prompt.text,
+          }],
+        }
+      }
+      if (canonical && input.messageID) {
+        const recorded = yield* SessionInput.find(database.db, SessionMessage.ID.make(input.messageID))
+        if (recorded) {
+          if (recorded.sessionID !== input.sessionID || recorded.prompt.command?.digest !== digest)
+            return yield* new SessionV2.PromptConflictError({
+              sessionID: SessionV2.ID.make(input.sessionID),
+              messageID: SessionMessage.ID.make(input.messageID),
+            })
+          if (input.command === Command.Default.INIT) {
+            const location = yield* sessionLocation(input.sessionID)
+            yield* runtimeContext.invalidate(input.sessionID).pipe(Effect.provide(locations.get(location)))
+          }
+          const admitted = yield* sessionV2.prompt({
+            id: SessionMessage.ID.make(input.messageID),
+            sessionID: SessionV2.ID.make(input.sessionID),
+            prompt: recorded.prompt,
+            selection: recorded.prompt.selection,
+            command: recorded.prompt.command,
+          })
+          return canonicalReply(admitted)
+        }
+      }
       yield* Effect.logInfo("command", {
         "session.id": input.sessionID,
         command: input.command,
@@ -1803,12 +1874,12 @@ const layer = Layer.effect(
         throw error
       }
 
-      const templateParts = yield* resolvePromptParts(template)
+      const templateParts = yield* resolvePromptParts(template, canonical ? input.sessionID : undefined)
       const inputFiles = new Set(
         input.parts?.filter((part) => new URL(part.url).protocol === "file:").map((part) => fileURLToPath(part.url)),
       )
       const uniqueTemplateParts = templateParts.filter(
-        (part) => part.type !== "file" || !inputFiles.has(fileURLToPath(part.url)),
+        (part) => part.type !== "file" || new URL(part.url).protocol !== "file:" || !inputFiles.has(fileURLToPath(part.url)),
       )
       const isSubtask = (agent.mode === "subagent" && cmd.subtask !== false) || cmd.subtask === true
       const parts = isSubtask
@@ -1836,6 +1907,118 @@ const layer = Layer.effect(
         { command: input.command, sessionID: input.sessionID, arguments: input.arguments },
         { parts },
       )
+
+      if (canonical) {
+        const messageID = input.messageID ?? MessageID.ascending()
+        const message: SessionV1.User = {
+          id: messageID,
+          role: "user",
+          sessionID: input.sessionID,
+          time: { created: Date.now() },
+          agent: userAgent,
+          model: {
+            providerID: userModel.providerID,
+            modelID: userModel.modelID,
+            variant: input.variant,
+          },
+        }
+        const hookParts = yield* resolveUserParts(
+          {
+            sessionID: input.sessionID,
+            messageID,
+            agent: userAgent,
+            model: userModel,
+            variant: input.variant,
+            parts,
+          },
+          message,
+          agent,
+        )
+        yield* plugin.trigger(
+          "chat.message",
+          {
+            sessionID: input.sessionID,
+            agent: userAgent,
+            model: userModel,
+            messageID,
+            variant: input.variant,
+          },
+          { message, parts: hookParts },
+        )
+        const normalizedParts = yield* Effect.forEach(hookParts, (part) =>
+          part.type === "file" && part.mime.startsWith("image/")
+            ? image.normalize(part).pipe(
+                Effect.catchIf(
+                  (error) => error instanceof Image.ResizerUnavailableError,
+                  () => Effect.succeed(part),
+                ),
+              )
+            : Effect.succeed(part),
+        )
+        const selectedModel = {
+          providerID: message.model.providerID,
+          id: ModelV2.ID.make(message.model.modelID),
+          ...(message.model.variant ? { variant: ModelV2.VariantID.make(message.model.variant) } : {}),
+        }
+        const subtasks = normalizedParts.filter((part) => part.type === "subtask")
+        if (subtasks.length > 1) throw new Error("A command may launch only one subtask")
+        const admission = {
+          id: SessionMessage.ID.make(messageID),
+          sessionID: SessionV2.ID.make(input.sessionID),
+          prompt: {
+            text: subtasks[0]?.prompt ?? normalizedParts.filter((part) => part.type === "text").map((part) => part.text).join("\n\n"),
+            files: normalizedParts.filter((part) => part.type === "file").map((part) => ({
+              uri: part.url,
+              mime: part.mime,
+              name: part.filename,
+              source: part.source
+                ? {
+                    start: part.source.text.start,
+                    end: part.source.text.end,
+                    text: part.source.text.value,
+                  }
+                : undefined,
+            })),
+            agents: normalizedParts.filter((part) => part.type === "agent").map((part) => ({ name: part.name })),
+          },
+          selection: { agent: message.agent, model: selectedModel },
+          command: {
+            name: input.command,
+            arguments: input.arguments,
+            digest,
+            ...(subtasks[0]
+              ? {
+                  subtask: {
+                    agent: subtasks[0].agent,
+                    description: subtasks[0].description,
+                    prompt: subtasks[0].prompt,
+                    model: {
+                      providerID: subtasks[0].model?.providerID ?? taskModel.providerID,
+                      id: ModelV2.ID.make(subtasks[0].model?.modelID ?? taskModel.modelID),
+                    },
+                  },
+                }
+              : {}),
+          },
+        }
+        const admitted = yield* sessionV2.prompt({
+          ...admission,
+          ...(input.command === Command.Default.INIT ? { resume: false } : {}),
+        })
+        const result = canonicalReply(admitted)
+        if (input.command === Command.Default.INIT) {
+          const location = yield* sessionLocation(input.sessionID)
+          yield* runtimeContext.invalidate(input.sessionID).pipe(Effect.provide(locations.get(location)))
+          yield* sessionV2.prompt(admission)
+        }
+        yield* events.publish(Command.Event.Executed, {
+          name: input.command,
+          sessionID: input.sessionID,
+          arguments: input.arguments,
+          messageID: result.info.id,
+        })
+        return result
+      }
 
       const result = yield* prompt({
         sessionID: input.sessionID,
@@ -2274,6 +2457,7 @@ export const node = LayerNode.make({
     SystemPrompt.node,
     LLM.node,
     EventV2Bridge.node,
+    SessionV2.node,
     RuntimeFlags.node,
     Database.node,
     UserShellRuntime.node,

@@ -256,6 +256,21 @@ export type Prompt = {
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
   invocations?: Array<PromptSkillInvocation>
+  selection?: {
+    agent?: string
+    model?: ModelRef
+  }
+  command?: {
+    name: string
+    arguments: string
+    digest?: string
+    subtask?: {
+      agent: string
+      description: string
+      prompt: string
+      model: ModelRef
+    }
+  }
 }
 
 export type OutputFormatText = {

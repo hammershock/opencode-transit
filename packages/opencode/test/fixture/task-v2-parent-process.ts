@@ -59,7 +59,21 @@ const outcome = await AppRuntime.runPromise(
           }),
         ).pipe(Effect.provide(locations.get(location)))
         const text = process.env.TASK_V2_TEST_CONTROL === "status" ? "PARENT_STATUS_MARKER" : "PARENT_TASK_MARKER"
-        const admitted = http
+        const admitted = process.env.TASK_V2_TEST_COMMAND === "true" && http
+          ? yield* Effect.promise(async () => {
+              const response = await http.handler(
+                new Request(`http://localhost/session/${parent.id}/command`, {
+                  method: "POST",
+                  headers: { "content-type": "application/json", "x-opencode-directory": directory },
+                  body: JSON.stringify({ command: "inspect", arguments: "cache", model: "test/test-model" }),
+                }),
+                Context.empty() as Context.Context<unknown>,
+              )
+              const body = await response.json() as { info?: { id: string } }
+              if (response.status !== 200 || !body.info) throw new Error(`HTTP command failed: ${response.status} ${JSON.stringify(body)}`)
+              return { id: SessionMessage.ID.make(body.info.id) }
+            })
+          : http
           ? yield* Effect.promise(async () => {
               const response = await http.handler(
                 new Request(`http://localhost/api/session/${parent.id}/prompt`, {

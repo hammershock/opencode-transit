@@ -26,7 +26,7 @@ import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/se
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { Database } from "@opencode-ai/core/database/database"
-import { MessageTable, SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { MessageTable, SessionInputTable, SessionMessageTable, SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
@@ -942,6 +942,72 @@ describe("session HttpApi", () => {
         cwd: sessionDirectory,
         root: sessionDirectory,
       })
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
+  it.live("routes a Skill slash command through the V1 transcript for a legacy session", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      yield* llm.text("Skill complete", { usage: { input: 1, output: 1 } })
+      const directory = yield* tmpdirScoped({
+        git: true,
+        config: { ...testProviderConfig(llm.url), skills: { paths: ["./skills"] } },
+      })
+      yield* Effect.promise(() => mkdir(path.join(directory, "skills", "slash-review"), { recursive: true }))
+      yield* Effect.promise(() => Bun.write(
+        path.join(directory, "skills", "slash-review", "SKILL.md"),
+        "---\nname: slash-review\ndescription: Review files\n---\nKeep $ARGUMENTS literal.",
+      ))
+      const chat = yield* createSession({ title: "Skill compatibility" }).pipe(provideInstanceEffect(directory))
+      yield* createTextMessage(chat.id, "existing legacy prompt").pipe(provideInstanceEffect(directory))
+      const reply = yield* request(pathFor(SessionPaths.command, { sessionID: chat.id }), {
+        method: "POST",
+        headers: { "x-opencode-directory": directory, "content-type": "application/json" },
+        body: JSON.stringify({
+          command: "slash-review",
+          arguments: "inspect cache",
+          agent: "build",
+          model: "test/test-model",
+        }),
+      })
+      expect(reply.status).toBe(200)
+      expect(yield* responseJson(reply)).toMatchObject({ info: { role: "assistant" } })
+      const { db } = yield* Database.Service
+      expect((yield* db.select().from(MessageTable).where(eq(MessageTable.session_id, chat.id)).all()).length).toBeGreaterThan(1)
+      expect((yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, chat.id)).all())).toHaveLength(0)
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
+  it.live("admits a configured command through the V2 transcript over the legacy HTTP route", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const directory = yield* tmpdirScoped({
+        git: true,
+        config: {
+          ...testProviderConfig(llm.url),
+          command: { inspect: { template: "Inspect $ARGUMENTS" } },
+        },
+      })
+      const headers = { "x-opencode-directory": directory, "content-type": "application/json" }
+      const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          location: { directory },
+          agent: "build",
+          model: { providerID: "test", id: "test-model" },
+        }),
+      })
+      const reply = yield* request(pathFor(SessionPaths.command, { sessionID: SessionID.make(created.data.id) }), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ command: "inspect", arguments: "cache", messageID: "msg_http_v2_command" }),
+      })
+      expect(reply.status).toBe(200)
+      expect(yield* responseJson(reply)).toMatchObject({ info: { id: "msg_http_v2_command", role: "user" } })
+      const { db } = yield* Database.Service
+      expect((yield* db.select().from(MessageTable).where(eq(MessageTable.session_id, SessionID.make(created.data.id))).all())).toHaveLength(0)
+      expect((yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, SessionID.make(created.data.id))).all())).toHaveLength(1)
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
   )
 
