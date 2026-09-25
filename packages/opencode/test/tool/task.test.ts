@@ -2936,6 +2936,7 @@ describe("tool.task.destination", () => {
         sessionID: chat.id,
         permission: [
           { permission: "external_directory", pattern: "/parent/path/**", action: "ask" },
+          { permission: "external_directory", pattern: "/parent/allowed/**", action: "allow" },
           { permission: "bash", pattern: "*", action: "deny" },
         ],
       })
@@ -2973,6 +2974,9 @@ describe("tool.task.destination", () => {
       const boundaries = (child.permissionBoundary ?? []).flat()
       expect(
         permissions.some((rule) => rule.permission === "external_directory" && rule.pattern === "/parent/path/**"),
+      ).toBe(false)
+      expect(
+        permissions.some((rule) => rule.permission === "external_directory" && rule.pattern === "/parent/allowed/**"),
       ).toBe(false)
       expect(
         boundaries.some((rule) => rule.action === "external_directory" && rule.resource === "/parent/path/**"),
