@@ -598,6 +598,17 @@ describe("session HttpApi", () => {
               row.type === "shell" && "userMessageID" in row.data && row.data.userMessageID === "msg_http_shell_user",
           ),
         ).toBe(true)
+        const forked = yield* requestJson<Session.Info>(pathFor(SessionPaths.fork, { sessionID }), {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory },
+        })
+        const copied = yield* requestJson<{ data: SessionMessage.Message[] }>(`/api/session/${forked.id}/message`, {
+          headers: { "x-opencode-directory": test.directory },
+        })
+        const copiedShell = copied.data.find((message) => message.type === "shell")
+        const copiedUser = copied.data.find((message) => message.type === "user")
+        expect(copiedShell?.type === "shell" && copiedShell.userMessageID).toBe(copiedUser?.id)
+        expect(copiedUser?.id).not.toBe("msg_http_shell_user")
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

@@ -906,18 +906,20 @@ const layer: Layer.Layer<
           permissionBoundary: original.permissionBoundary,
           approvalMode: original.approvalMode,
         })
+        const copied = history.slice(0, target < 0 ? history.length : target)
+        const ids = new Map(copied.map((message) => [message.id, SessionMessage.ID.create()]))
         yield* Effect.forEach(
-          history.slice(0, target < 0 ? history.length : target),
+          copied,
           (message) =>
             events.publish(SessionEvent.MessageForked, {
               sessionID: session.id,
               timestamp: message.time.created,
               message: {
                 ...message,
-                id: SessionMessage.ID.create(),
+                id: ids.get(message.id)!,
                 ...(message.type === "synthetic" ? { sessionID: session.id } : {}),
                 ...(message.type === "shell" && message.userMessageID
-                  ? { userMessageID: SessionMessage.ID.create() }
+                  ? { userMessageID: ids.get(message.userMessageID) }
                   : {}),
               },
             }),
