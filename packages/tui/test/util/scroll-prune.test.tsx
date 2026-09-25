@@ -142,4 +142,47 @@ describe("session scroll pruning", () => {
         .find((child) => child.id === anchor.id)?.y,
     ).toBe(anchor.y)
   })
+
+  test("keeps a historical row fixed when a peer activity arrives above it", async () => {
+    const [rows, setRows] = createSignal(Array.from({ length: 40 }, (_, index) => String(index)))
+    const [followOutput, setFollowOutput] = createSignal(false)
+    let scroll: ScrollBoxRenderable | undefined
+    const View = () => {
+      createComputed(() => {
+        const current = rows()
+        if (!scroll || scroll.isDestroyed || followOutput() || current.length === 0) return
+        const anchor = scroll.getChildren().find((child) => child.id && child.y + child.height > 0)
+        if (!anchor?.id) return
+        const oldY = anchor.y
+        setTimeout(() => {
+          if (!scroll || scroll.isDestroyed || followOutput()) return
+          const moved = scroll.getChildren().find((child) => child.id === anchor.id)
+          if (moved) scroll.scrollTop += moved.y - oldY
+        }, 0)
+      })
+      return (
+        <scrollbox ref={(value) => (scroll = value)} width={50} height={15} stickyScroll={followOutput()}>
+          <For each={rows()}>
+            {(row) => (
+              <box id={row} flexShrink={0}>
+                <text>{row}</text>
+              </box>
+            )}
+          </For>
+        </scrollbox>
+      )
+    }
+    app = await testRender(() => <View />, { width: 80, height: 24 })
+    await app.renderOnce()
+    scroll!.scrollTo(20)
+    await app.renderOnce()
+    const before = scroll!.getChildren().find((child) => child.id === "20")!.y
+
+    setRows((current) => [...current.slice(0, 10), "peer-event", ...current.slice(10)])
+    await app.renderOnce()
+    await Bun.sleep(10)
+    await app.renderOnce()
+
+    expect(scroll!.getChildren().find((child) => child.id === "20")!.y).toBe(before)
+  })
 })

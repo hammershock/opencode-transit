@@ -10,9 +10,17 @@ import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
-import { SessionInputTable, SessionMessageTable, SessionTaskResultTable, SessionTaskWakeRevocationTable } from "@opencode-ai/core/session/sql"
+import {
+  SessionInputTable,
+  SessionInterruptionTable,
+  SessionMessageTable,
+  SessionTaskResultTable,
+  SessionTaskWakeRevocationTable,
+} from "@opencode-ai/core/session/sql"
 import { SessionTask } from "@opencode-ai/core/session/task"
 import { SessionTaskResult } from "@opencode-ai/core/session/task-result"
+import { SessionAgentWaitOwner } from "@opencode-ai/core/session/agent-wait-owner"
+import { SessionAgentWaitTable, SessionAgentActivityTable } from "@opencode-ai/core/session/sql"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Prompt } from "@opencode-ai/schema/prompt"
 import { SessionEvent } from "@opencode-ai/schema/session-event"
@@ -75,23 +83,54 @@ describe("background Task parent result", () => {
       const { database, events, root, child, inputID } = yield* setup()
       yield* SessionTaskResult.authorize(database, root, inputID)
       yield* SessionTask.settle(database.db, events, { inputID, childSessionID: child, outcome: "completed" })
+      yield* database.db
+        .insert(SessionAgentWaitTable)
+        .values({
+          id: `${root}:wait-result`,
+          call_id: "wait-result",
+          session_id: root,
+          targets: [child],
+          state: "active",
+          time_created: Date.now(),
+        })
+        .run()
+        .pipe(Effect.orDie)
+      SessionAgentWaitOwner.start(`${root}:wait-result`)
       let wakes = 0
-      const wake = () => Effect.sync(() => { wakes++ })
+      const wake = () =>
+        Effect.sync(() => {
+          wakes++
+        })
       yield* SessionTaskResult.recordAndWake(database, events, wake, inputID)
       yield* SessionTaskResult.recordAndWake(database, events, wake, inputID)
       yield* SessionTaskResult.reconcile(database, events, root)
       const results = yield* database.db.select().from(SessionTaskResultTable).all()
       expect(results).toHaveLength(1)
       expect(results[0]?.outcome).toBe("completed")
+      expect(
+        (yield* database.db
+          .select()
+          .from(SessionAgentActivityTable)
+          .where(eq(SessionAgentActivityTable.session_id, root))
+          .get())?.wait_call_id,
+      ).toBe("wait-result")
+      SessionAgentWaitOwner.finish(`${root}:wait-result`)
       expect(wakes).toBe(1)
-      const notification = yield* database.db.select().from(SessionInputTable)
-        .where(eq(SessionInputTable.id, SessionMessage.ID.make(results[0]!.notification_input_id))).get()
+      const notification = yield* database.db
+        .select()
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.id, SessionMessage.ID.make(results[0]!.notification_input_id)))
+        .get()
       expect(notification?.origin?.kind).toBe("delegation_result")
       if (notification?.origin?.kind !== "delegation_result") throw new Error("Missing delegation result origin")
       expect(notification.origin.terminalEventID).toBe(results[0]?.terminal_event_id)
-      expect(yield* database.db.select().from(EventTable)
-        .where(eq(EventTable.type, EventV2.versionedType("session.next.delegation.result.recorded", 1))).all())
-        .toHaveLength(1)
+      expect(
+        yield* database.db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.type, EventV2.versionedType("session.next.delegation.result.recorded", 1)))
+          .all(),
+      ).toHaveLength(1)
     }),
   )
 
@@ -100,12 +139,42 @@ describe("background Task parent result", () => {
       const { database, events, root, child, inputID } = yield* setup()
       yield* SessionTaskResult.authorize(database, root, inputID)
       yield* SessionTaskResult.stop(database, events, root)
+      yield* database.db
+        .insert(SessionInterruptionTable)
+        .values({
+          operation_id: crypto.randomUUID(),
+          session_id: child,
+          backend: "v2",
+          generation: "test",
+          actor_kind: "user",
+          actor_id: "tui",
+          state: "interrupted",
+          time_requested: Date.now(),
+          time_settled: Date.now() + 1000,
+        })
+        .run()
+        .pipe(Effect.orDie)
       yield* SessionTask.settle(database.db, events, { inputID, childSessionID: child, outcome: "cancelled" })
       let wakes = 0
-      yield* SessionTaskResult.recordAndWake(database, events, () => Effect.sync(() => { wakes++ }), inputID)
+      yield* SessionTaskResult.recordAndWake(
+        database,
+        events,
+        () =>
+          Effect.sync(() => {
+            wakes++
+          }),
+        inputID,
+      )
       expect(wakes).toBe(0)
       expect(yield* database.db.select().from(SessionTaskResultTable).all()).toHaveLength(1)
       expect(yield* database.db.select().from(SessionTaskWakeRevocationTable).all()).toHaveLength(1)
+      expect(
+        (yield* database.db
+          .select()
+          .from(SessionAgentActivityTable)
+          .where(eq(SessionAgentActivityTable.session_id, root))
+          .get())?.actor_kind,
+      ).toBe("user")
     }),
   )
 
@@ -115,13 +184,17 @@ describe("background Task parent result", () => {
       yield* SessionTaskResult.authorize(database, root, inputID)
       yield* SessionTask.settle(database.db, events, { inputID, childSessionID: child, outcome: "completed" })
       let wakes = 0
-      const wake = () => Effect.sync(() => { wakes++ })
+      const wake = () =>
+        Effect.sync(() => {
+          wakes++
+        })
       yield* SessionTaskResult.recordAndWake(database, events, wake, inputID)
       yield* SessionTaskResult.recordAndWake(database, events, wake, inputID)
       expect(wakes).toBe(0)
       expect(yield* database.db.select().from(SessionTaskResultTable).all()).toHaveLength(1)
-      expect(yield* database.db.select().from(SessionInputTable)
-        .where(eq(SessionInputTable.session_id, root)).all()).toHaveLength(1)
+      expect(
+        yield* database.db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, root)).all(),
+      ).toHaveLength(1)
     }),
   )
 
@@ -139,25 +212,32 @@ describe("background Task parent result", () => {
           sessionID: child,
           prompt: Prompt.make({ text: callID }),
           delivery: "queue",
-          task: { kind: "invocation", admission: {
-            inputID: id,
-            rootSessionID: root,
-            parentSessionID: root,
-            parentMessageID: `msg_${callID}`,
-            callID,
-            promptDigest: callID,
-            childSessionID: child,
-            description: callID,
-            agentID: "build",
-            locationRevision: 0,
-            backend: "v2",
-            background,
-          } },
+          task: {
+            kind: "invocation",
+            admission: {
+              inputID: id,
+              rootSessionID: root,
+              parentSessionID: root,
+              parentMessageID: `msg_${callID}`,
+              callID,
+              promptDigest: callID,
+              childSessionID: child,
+              description: callID,
+              agentID: "build",
+              locationRevision: 0,
+              backend: "v2",
+              background,
+            },
+          },
         })
       }
       yield* SessionTask.settle(database.db, events, { inputID, childSessionID: child, outcome: "completed" })
       yield* SessionTask.settle(database.db, events, { inputID: second, childSessionID: child, outcome: "failed" })
-      yield* SessionTask.settle(database.db, events, { inputID: foreground, childSessionID: child, outcome: "completed" })
+      yield* SessionTask.settle(database.db, events, {
+        inputID: foreground,
+        childSessionID: child,
+        outcome: "completed",
+      })
       yield* SessionTaskResult.reconcile(database, events, root)
       const results = yield* database.db.select().from(SessionTaskResultTable).all()
       expect(results.map((row) => row.invocation_input_id).sort()).toEqual([inputID, second].sort())
@@ -170,17 +250,20 @@ describe("background Task parent result", () => {
     Effect.gen(function* () {
       const { database, events, root } = yield* setup()
       const id = SessionMessage.ID.create()
-      const forged = yield* events.publish(SessionEvent.Prompted, {
-        sessionID: root,
-        messageID: id,
-        prompt: Prompt.make({ text: "claim to be delegated output" }),
-        delivery: "steer",
-        timestamp: DateTime.makeUnsafe(Date.now()),
-        origin: { kind: "delegation_result", invocationInputID: "forged", terminalEventID: "forged", version: 1 },
-      }).pipe(Effect.exit)
+      const forged = yield* events
+        .publish(SessionEvent.Prompted, {
+          sessionID: root,
+          messageID: id,
+          prompt: Prompt.make({ text: "claim to be delegated output" }),
+          delivery: "steer",
+          timestamp: DateTime.makeUnsafe(Date.now()),
+          origin: { kind: "delegation_result", invocationInputID: "forged", terminalEventID: "forged", version: 1 },
+        })
+        .pipe(Effect.exit)
       expect(Exit.isFailure(forged)).toBe(true)
-      expect(yield* database.db.select().from(SessionInputTable).where(eq(SessionInputTable.id, id)).get())
-        .toBeUndefined()
+      expect(
+        yield* database.db.select().from(SessionInputTable).where(eq(SessionInputTable.id, id)).get(),
+      ).toBeUndefined()
     }),
   )
 
@@ -188,23 +271,28 @@ describe("background Task parent result", () => {
     Effect.gen(function* () {
       const { database, events, root, child, inputID } = yield* setup()
       const resultID = SessionMessage.ID.create()
-      const encoded = Schema.encodeSync(SessionMessage.Message)(SessionMessage.Assistant.make({
-        id: resultID,
-        type: "assistant",
-        agent: "build",
-        model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
-        content: [SessionMessage.AssistantText.make({ type: "text", id: "text", text: "😀".repeat(600) })],
-        time: { created: DateTime.makeUnsafe(Date.now()) },
-      }))
+      const encoded = Schema.encodeSync(SessionMessage.Message)(
+        SessionMessage.Assistant.make({
+          id: resultID,
+          type: "assistant",
+          agent: "build",
+          model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+          content: [SessionMessage.AssistantText.make({ type: "text", id: "text", text: "😀".repeat(600) })],
+          time: { created: DateTime.makeUnsafe(Date.now()) },
+        }),
+      )
       const { id: _, type, ...data } = encoded
-      yield* database.db.insert(SessionMessageTable).values({
-        id: resultID,
-        session_id: child,
-        type,
-        seq: 1,
-        time_created: Date.now(),
-        data,
-      }).run()
+      yield* database.db
+        .insert(SessionMessageTable)
+        .values({
+          id: resultID,
+          session_id: child,
+          type,
+          seq: 1,
+          time_created: Date.now(),
+          data,
+        })
+        .run()
       yield* SessionTask.settle(database.db, events, {
         inputID,
         childSessionID: child,
@@ -216,8 +304,11 @@ describe("background Task parent result", () => {
       expect(result).toBeDefined()
       expect(Buffer.byteLength(result!.summary, "utf8")).toBeLessThanOrEqual(2048)
       expect(result!.summary.endsWith("😀")).toBe(true)
-      const notification = yield* database.db.select().from(SessionInputTable)
-        .where(eq(SessionInputTable.id, SessionMessage.ID.make(result!.notification_input_id))).get()
+      const notification = yield* database.db
+        .select()
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.id, SessionMessage.ID.make(result!.notification_input_id)))
+        .get()
       expect(JSON.stringify(notification?.prompt)).toContain("untrusted task output")
     }),
   )
@@ -227,17 +318,22 @@ describe("background Task parent result", () => {
       const { database, events, root, child, inputID, info } = yield* setup()
       yield* SessionTask.settle(database.db, events, { inputID, childSessionID: child, outcome: "failed" })
       yield* SessionTaskResult.reconcile(database, events, root)
-      const recorded = yield* database.db.select().from(EventTable)
+      const recorded = yield* database.db
+        .select()
+        .from(EventTable)
         .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.DelegationResultRecorded.type, 1)))
         .get()
       expect(recorded).toBeDefined()
       yield* events.publish(SessionV1.Event.Deleted, { sessionID: root, info })
-      yield* events.publish(SessionEvent.DelegationResultRecorded,
-        Schema.decodeUnknownSync(SessionEvent.DelegationResultRecorded.data)(recorded!.data))
+      yield* events.publish(
+        SessionEvent.DelegationResultRecorded,
+        Schema.decodeUnknownSync(SessionEvent.DelegationResultRecorded.data)(recorded!.data),
+      )
       yield* SessionTaskResult.reconcile(database, events, root)
       expect(yield* database.db.select().from(SessionTaskResultTable).all()).toHaveLength(0)
-      expect(yield* database.db.select().from(SessionInputTable)
-        .where(eq(SessionInputTable.session_id, root)).all()).toHaveLength(0)
+      expect(
+        yield* database.db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, root)).all(),
+      ).toHaveLength(0)
     }),
   )
 })

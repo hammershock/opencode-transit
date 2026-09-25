@@ -10,6 +10,7 @@ import {
   SessionInputTable,
   SessionMessageTable,
   SessionPeerRouteTable,
+  SessionAgentActivityTable,
   SessionPeerUserMessageTable,
   SessionTable,
 } from "./sql"
@@ -187,6 +188,17 @@ export const bind = Effect.fn("SessionPeerRoute.bind")(function* (input: {
         )
         .get()
       if (bound?.target_session_id !== input.targetSessionID) return yield* Effect.fail(new AliasConflict())
+      yield* tx
+        .update(SessionAgentActivityTable)
+        .set({ alias: input.alias })
+        .where(
+          and(
+            eq(SessionAgentActivityTable.session_id, input.sourceSessionID),
+            eq(SessionAgentActivityTable.subject_session_id, input.targetSessionID),
+            eq(SessionAgentActivityTable.alias, "/contacts/unknown"),
+          ),
+        )
+        .run()
       return bound
     }),
     { behavior: "immediate" },

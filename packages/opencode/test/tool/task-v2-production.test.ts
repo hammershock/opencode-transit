@@ -277,6 +277,7 @@ test("HTTP V2 prompt reaches the real provider with Agent controls in a fresh Se
           TASK_V2_TEST_LLM_URL: llm.url,
           TASK_V2_TEST_CONTROL: "status",
           TASK_V2_TEST_HTTP: "true",
+          TASK_V2_TEST_ACTIVITY: "true",
         },
         stdout: "pipe",
         stderr: "pipe",
@@ -289,6 +290,12 @@ test("HTTP V2 prompt reaches the real provider with Agent controls in a fresh Se
       const hits = yield* llm.hits
       expect(hits.length, stdout + stderr.slice(0, 4_096)).toBeGreaterThanOrEqual(2)
       expect(JSON.stringify(hits[0]?.body)).toContain('"name":"agent_inspect"')
+      const result = JSON.parse(stdout.split("\n").find((line) => line.startsWith("TASK_V2_PARENT_RESULT:"))!.slice("TASK_V2_PARENT_RESULT:".length)) as {
+        activity: { activities: unknown[]; anchors: Array<{ id: string; seq: number }> }
+        messages: Array<{ id: string }>
+      }
+      expect(result.activity.activities).toEqual([])
+      expect(result.activity.anchors.some((item) => result.messages.some((message) => message.id === item.id))).toBe(true)
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
   )
 }, 60_000)

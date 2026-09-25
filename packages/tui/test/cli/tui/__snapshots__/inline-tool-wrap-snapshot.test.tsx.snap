@@ -75,6 +75,52 @@ exports[`TUI inline tool wrapping separates a task row from a preceding inline d
      ↳ 1 toolcall · 501ms"
 `;
 
+exports[`TUI inline tool wrapping keeps Agent activity order at 48 columns 1`] = `
+"
+   • Started \`/root/sleep_loop\`
+
+   • Finished waiting
+       └ No agents completed yet
+
+   • Interacted with \`/root/sleep_loop\` ·
+     admitted
+
+   • Finished waiting
+       └ Reply from \`/root/sleep_loop\`
+
+   • Completed \`/root/sleep_loop\`"
+`;
+
+exports[`TUI inline tool wrapping keeps Agent activity order at 72 columns 1`] = `
+"
+   • Started \`/root/sleep_loop\`
+
+   • Finished waiting
+       └ No agents completed yet
+
+   • Interacted with \`/root/sleep_loop\` · admitted
+
+   • Finished waiting
+       └ Reply from \`/root/sleep_loop\`
+
+   • Completed \`/root/sleep_loop\`"
+`;
+
+exports[`TUI inline tool wrapping keeps Agent activity order at 112 columns 1`] = `
+"
+   • Started \`/root/sleep_loop\`
+
+   • Finished waiting
+       └ No agents completed yet
+
+   • Interacted with \`/root/sleep_loop\` · admitted
+
+   • Finished waiting
+       └ Reply from \`/root/sleep_loop\`
+
+   • Completed \`/root/sleep_loop\`"
+`;
+
 exports[`TUI inline tool wrapping separates an inline row from the previous assistant summary 1`] = `
 "   ▣ Build · Little Frank · 53.1s
 

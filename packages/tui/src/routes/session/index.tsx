@@ -17,6 +17,7 @@ import {
   useContext,
 } from "solid-js"
 import path from "node:path"
+import { Option, Schema } from "effect"
 import { mkdir, writeFile } from "node:fs/promises"
 import { useRoute, useRouteData } from "../../context/route"
 import { useProject } from "../../context/project"
@@ -40,9 +41,11 @@ import type {
   SessionMessageUser,
   SessionStatus,
   V2SessionTaskStatusResponses,
+  V2SessionActivityResponses,
 } from "@opencode-ai/sdk/v2"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
+import { AgentTimeline } from "../../util/agent-timeline"
 import { webSearchProviderLabel } from "../../util/tool-display"
 import { Dynamic, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "../../context/sdk"
@@ -227,6 +230,7 @@ const context = createContext<{
   outputExpansion: () => boolean | undefined
   diffWrapMode: () => "word" | "none"
   providers: () => ReadonlyMap<string, Provider>
+  agentActivity: () => V2SessionActivityResponses[200]["activities"]
   sync: ReturnType<typeof useSync>
   tui: ReturnType<typeof useTuiConfig>
 }>()
@@ -313,7 +317,6 @@ export function Session() {
   })
   const messages = createMemo(() => sessionMessageWindow(allMessages(), route.messageID, renderLimit()))
   // Canonical projection creates fresh adapters per delta; stable IDs keep Solid from remounting the transcript.
-  const messageIDs = createMemo(() => messages().map((message) => message.id))
   const messagesByID = createMemo(() => new Map(messages().map((message) => [message.id, message] as const)))
   const messageParts = (messageID: string) => sync.data.part[messageID] ?? canonicalParts().get(messageID) ?? []
   const durableUsers = createMemo(
@@ -384,14 +387,14 @@ export function Session() {
       : [],
   )
   const permissions = createMemo(() => {
-    if (session()?.parentID) return []
+    if (session()?.parentID) return sync.data.permission[route.sessionID] ?? []
     return children().flatMap((x) => sync.data.permission[x.id] ?? [])
   })
   const questions = createMemo(() => {
-    if (session()?.parentID) return []
+    if (session()?.parentID) return sync.data.question[route.sessionID] ?? []
     return children().flatMap((x) => sync.data.question[x.id] ?? [])
   })
-  const visible = createMemo(() => !session()?.parentID && permissions().length === 0 && questions().length === 0)
+  const visible = createMemo(() => permissions().length === 0 && questions().length === 0)
   const readOnly = createMemo(() => route.accessMode === "read-only")
   const disabled = createMemo(
     () => route.accessMode === undefined || permissions().length > 0 || questions().length > 0,
@@ -439,6 +442,82 @@ export function Session() {
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const toast = useToast()
   const sdk = useSDK()
+  const [agentActivity, setAgentActivity] = createSignal<V2SessionActivityResponses[200]["activities"]>([])
+  const [agentAnchors, setAgentAnchors] = createSignal(new Map<string, number>())
+  const [activityReadyAt, setActivityReadyAt] = createSignal<number>()
+  const [activityLoaded, setActivityLoaded] = createSignal(false)
+  createEffect(
+    on(
+      () => route.sessionID,
+      (sessionID) => {
+        setAgentActivity([])
+        setAgentAnchors(new Map<string, number>())
+        setActivityLoaded(false)
+        const started = Date.now()
+        setActivityReadyAt(started)
+        let after = -1
+        let busy = false
+        let unsupported = false
+        const refresh = async () => {
+          if (busy || unsupported) return
+          busy = true
+          try {
+            for (let page = 0; page < 8; page++) {
+              const response = await sdk.client.v2.session.activity({ sessionID, after: String(after), limit: "500" })
+              if (response.response.status === 404 || response.response.status === 405) {
+                unsupported = true
+                setActivityReadyAt(undefined)
+                setActivityLoaded(true)
+                return
+              }
+              if (response.error || !response.data) throw response.error ?? new Error("Agent activity unavailable")
+              if (route.sessionID !== sessionID) return
+              setAgentActivity((previous) => {
+                const items = new Map(previous.map((item) => [item.id, item] as const))
+                for (const item of response.data.activities) items.set(item.id, item)
+                return [...items.values()].toSorted((a, b) => a.seq - b.seq)
+              })
+              setAgentAnchors((previous) => {
+                const anchors = new Map(previous)
+                for (const item of response.data.anchors)
+                  anchors.set(
+                    item.id,
+                    item.id.startsWith("footer:")
+                      ? Math.max(anchors.get(item.id) ?? item.seq, item.seq)
+                      : Math.min(anchors.get(item.id) ?? item.seq, item.seq),
+                  )
+                return anchors
+              })
+              if (response.data.next === null) {
+                setActivityLoaded(true)
+                return
+              }
+              after = response.data.next
+            }
+          } catch {
+            // A reconnect retries the same page; never fill a sequence gap with arrival order.
+          } finally {
+            busy = false
+          }
+        }
+        void refresh()
+        const timer = setInterval(() => void refresh(), 1_500)
+        onCleanup(() => clearInterval(timer))
+      },
+    ),
+  )
+  const activityByID = createMemo(() => new Map(agentActivity().map((item) => [item.id, item] as const)))
+  const timelineRows = createMemo(() =>
+    activityLoaded()
+      ? AgentTimeline.order({
+          messages: messages(),
+          parts: new Map(messages().map((message) => [message.id, messageParts(message.id)] as const)),
+          anchors: agentAnchors(),
+          activities: agentActivity(),
+          readyAt: activityReadyAt(),
+        })
+      : [],
+  )
   const editor = useEditorContext()
   const dialog = useDialog()
   const activation = { sessionID: undefined as string | undefined }
@@ -600,6 +679,20 @@ export function Session() {
     if (next === undefined) return
     setFollowOutput(false)
     scroll.scrollTop = next
+  })
+  createComputed(() => {
+    const rows = timelineRows()
+    if (!scroll || scroll.isDestroyed || followOutput() || rows.length === 0) return
+    const current = scroll.getChildren().filter((child) => child.id && child.y + child.height > 0)
+    const anchor = current[0]
+    if (!anchor?.id) return
+    const oldY = anchor.y
+    const oldTop = scroll.scrollTop
+    setTimeout(() => {
+      if (!scroll || scroll.isDestroyed || followOutput() || scroll.scrollTop !== oldTop) return
+      const moved = scroll.getChildren().find((child) => child.id === anchor.id)
+      if (moved) scroll.scrollTop += moved.y - oldY
+    }, 0)
   })
   const [shellCompletionGeneration, setShellCompletionGeneration] = createSignal(0)
   const bind = (r: PromptRef | undefined) => {
@@ -1765,6 +1858,7 @@ export function Session() {
           outputExpansion,
           diffWrapMode,
           providers,
+          agentActivity,
           sync,
           tui: tuiConfig,
         }}
@@ -1808,135 +1902,174 @@ export function Session() {
                 scrollAcceleration={scrollAcceleration()}
               >
                 <box height={1} />
-                <Show when={messageIDs().length === 0}>
+                <Show when={timelineRows().length === 0}>
                   <text fg={historyState() === "error" ? theme.error : theme.textMuted}>
-                    {historyState() === "loading"
+                    {historyState() === "loading" || !activityLoaded()
                       ? "Loading transcript…"
                       : historyState() === "error"
                         ? "Could not load transcript. Reopen this session to retry."
                         : "No messages yet."}
                   </text>
                 </Show>
-                <For each={messageIDs()}>
-                  {(messageID, index) => {
+                <For each={timelineRows()}>
+                  {(rowKey) => {
+                    const partSeparator = rowKey.startsWith("part:") ? rowKey.indexOf(":", "part:".length) : -1
+                    const messageID = rowKey.startsWith("part:")
+                      ? rowKey.slice("part:".length, partSeparator)
+                      : rowKey.startsWith("footer:")
+                        ? rowKey.slice("footer:".length)
+                        : rowKey.slice("message:".length)
+                    const partID = partSeparator === -1 ? undefined : rowKey.slice(partSeparator + 1)
+                    const index = createMemo(() => messages().findIndex((item) => item.id === messageID))
                     const message = createMemo(() => messagesByID().get(messageID))
                     return (
-                      <Show when={message()}>
-                        {(message) => (
-                          <Switch>
-                            <Match when={messageID === revert()?.messageID}>
-                              {(function () {
-                                const redoShortcut = useCommandShortcut("session.redo")
-                                const [hover, setHover] = createSignal(false)
-                                const dialog = useDialog()
-
-                                const handleUnrevert = async () => {
-                                  const confirmed = await DialogConfirm.show(
-                                    dialog,
-                                    "Confirm Redo",
-                                    "Are you sure you want to restore the reverted messages?",
-                                  )
-                                  if (confirmed) {
-                                    keymap.dispatchCommand("session.redo")
-                                  }
-                                }
-
-                                return (
-                                  <box
-                                    onMouseOver={() => setHover(true)}
-                                    onMouseOut={() => setHover(false)}
-                                    onMouseUp={handleUnrevert}
-                                    marginTop={1}
-                                    flexShrink={0}
-                                    border={["left"]}
-                                    customBorderChars={SplitBorder.customBorderChars}
-                                    borderColor={theme.backgroundPanel}
-                                  >
-                                    <box
-                                      paddingTop={1}
-                                      paddingBottom={1}
-                                      paddingLeft={2}
-                                      backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
-                                    >
-                                      <text fg={theme.textMuted}>{revert()!.reverted.length} message reverted</text>
-                                      <text fg={theme.textMuted}>
-                                        <span style={{ fg: theme.text }}>{redoShortcut()}</span> or /redo to restore
-                                      </text>
-                                      <Show when={revert()!.diffFiles?.length}>
-                                        <box marginTop={1}>
-                                          <For each={revert()!.diffFiles}>
-                                            {(file) => (
-                                              <text fg={theme.text}>
-                                                {file.filename}
-                                                <Show when={file.additions > 0}>
-                                                  <span style={{ fg: theme.diffAdded }}> +{file.additions}</span>
-                                                </Show>
-                                                <Show when={file.deletions > 0}>
-                                                  <span style={{ fg: theme.diffRemoved }}> -{file.deletions}</span>
-                                                </Show>
-                                              </text>
-                                            )}
-                                          </For>
-                                        </box>
-                                      </Show>
-                                    </box>
-                                  </box>
-                                )
-                              })()}
-                            </Match>
-                            <Match
-                              when={
-                                revert()?.messageID && revertMessageIndex() !== -1 && index() >= revertMessageIndex()
-                              }
+                      <>
+                        <Show
+                          when={
+                            rowKey.startsWith("activity:")
+                              ? activityByID().get(rowKey.slice("activity:".length))
+                              : undefined
+                          }
+                        >
+                          {(item) => (
+                            <box
+                              id={rowKey}
+                              paddingLeft={3}
+                              marginTop={1}
+                              flexShrink={0}
+                              onMouseUp={() => {
+                                if (renderer.getSelection()?.getSelectedText()) return
+                                navigate({ type: "session", sessionID: item().sessionID })
+                              }}
                             >
-                              <></>
-                            </Match>
-                            <Match when={message().role === "user"}>
-                              <Show
-                                when={durableUsers().get(messageID)?.origin?.kind !== "delegation_result"}
-                                fallback={
-                                  <box
-                                    paddingLeft={3}
-                                    marginTop={1}
-                                    onMouseUp={() => dialog.push(() => <DialogTaskList sessionID={route.sessionID} />)}
-                                  >
-                                    <text fg={theme.textMuted}>
-                                      Subagent result delivered to Agent · click to inspect Tasks
-                                    </text>
-                                  </box>
+                              <text fg={theme.textMuted}>
+                                • {AgentTimeline.label(item().kind, item().actor)} `
+                                {Locale.truncate(item().alias, Math.max(12, contentWidth() - 24))}`
+                              </text>
+                            </box>
+                          )}
+                        </Show>
+                        <Show when={message()}>
+                          {(message) => (
+                            <Switch>
+                              <Match when={messageID === revert()?.messageID}>
+                                {(function () {
+                                  const redoShortcut = useCommandShortcut("session.redo")
+                                  const [hover, setHover] = createSignal(false)
+                                  const dialog = useDialog()
+
+                                  const handleUnrevert = async () => {
+                                    const confirmed = await DialogConfirm.show(
+                                      dialog,
+                                      "Confirm Redo",
+                                      "Are you sure you want to restore the reverted messages?",
+                                    )
+                                    if (confirmed) {
+                                      keymap.dispatchCommand("session.redo")
+                                    }
+                                  }
+
+                                  return (
+                                    <box
+                                      onMouseOver={() => setHover(true)}
+                                      onMouseOut={() => setHover(false)}
+                                      onMouseUp={handleUnrevert}
+                                      marginTop={1}
+                                      flexShrink={0}
+                                      border={["left"]}
+                                      customBorderChars={SplitBorder.customBorderChars}
+                                      borderColor={theme.backgroundPanel}
+                                    >
+                                      <box
+                                        paddingTop={1}
+                                        paddingBottom={1}
+                                        paddingLeft={2}
+                                        backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
+                                      >
+                                        <text fg={theme.textMuted}>{revert()!.reverted.length} message reverted</text>
+                                        <text fg={theme.textMuted}>
+                                          <span style={{ fg: theme.text }}>{redoShortcut()}</span> or /redo to restore
+                                        </text>
+                                        <Show when={revert()!.diffFiles?.length}>
+                                          <box marginTop={1}>
+                                            <For each={revert()!.diffFiles}>
+                                              {(file) => (
+                                                <text fg={theme.text}>
+                                                  {file.filename}
+                                                  <Show when={file.additions > 0}>
+                                                    <span style={{ fg: theme.diffAdded }}> +{file.additions}</span>
+                                                  </Show>
+                                                  <Show when={file.deletions > 0}>
+                                                    <span style={{ fg: theme.diffRemoved }}> -{file.deletions}</span>
+                                                  </Show>
+                                                </text>
+                                              )}
+                                            </For>
+                                          </box>
+                                        </Show>
+                                      </box>
+                                    </box>
+                                  )
+                                })()}
+                              </Match>
+                              <Match
+                                when={
+                                  revert()?.messageID && revertMessageIndex() !== -1 && index() >= revertMessageIndex()
                                 }
                               >
-                                <UserMessage
-                                  index={index()}
-                                  onMouseUp={() => {
-                                    if (renderer.getSelection()?.getSelectedText()) return
-                                    dialog.replace(() => (
-                                      <DialogMessage
-                                        messageID={messageID}
-                                        sessionID={route.sessionID}
-                                        setPrompt={(promptInfo) => prompt?.set(promptInfo)}
-                                      />
-                                    ))
-                                  }}
-                                  message={message() as UserMessage}
-                                  parts={messageParts(messageID)}
-                                  skills={durableUsers().get(messageID)?.skills}
-                                  expandedSkills={expandedSkills()}
-                                  onSkillToggle={toggleSkill}
-                                  pending={pending()}
+                                <></>
+                              </Match>
+                              <Match when={message().role === "user"}>
+                                <Show
+                                  when={durableUsers().get(messageID)?.origin?.kind !== "delegation_result"}
+                                  fallback={
+                                    <box
+                                      paddingLeft={3}
+                                      marginTop={1}
+                                      onMouseUp={() =>
+                                        dialog.push(() => <DialogTaskList sessionID={route.sessionID} />)
+                                      }
+                                    >
+                                      <text fg={theme.textMuted}>
+                                        Subagent result delivered to Agent · click to inspect Tasks
+                                      </text>
+                                    </box>
+                                  }
+                                >
+                                  <UserMessage
+                                    index={index()}
+                                    onMouseUp={() => {
+                                      if (renderer.getSelection()?.getSelectedText()) return
+                                      dialog.replace(() => (
+                                        <DialogMessage
+                                          messageID={messageID}
+                                          sessionID={route.sessionID}
+                                          setPrompt={(promptInfo) => prompt?.set(promptInfo)}
+                                        />
+                                      ))
+                                    }}
+                                    message={message() as UserMessage}
+                                    parts={messageParts(messageID)}
+                                    skills={durableUsers().get(messageID)?.skills}
+                                    expandedSkills={expandedSkills()}
+                                    onSkillToggle={toggleSkill}
+                                    pending={pending()}
+                                  />
+                                </Show>
+                              </Match>
+                              <Match when={message().role === "assistant"}>
+                                <AssistantMessage
+                                  last={rowKey.startsWith("footer:") && lastAssistant()?.id === messageID}
+                                  message={message() as AssistantMessage}
+                                  parts={partID ? messageParts(messageID).filter((part) => part.id === partID) : []}
+                                  footer={rowKey.startsWith("footer:")}
+                                  rowID={partID && messageParts(messageID)[0]?.id === partID ? messageID : rowKey}
                                 />
-                              </Show>
-                            </Match>
-                            <Match when={message().role === "assistant"}>
-                              <AssistantMessage
-                                last={lastAssistant()?.id === messageID}
-                                message={message() as AssistantMessage}
-                                parts={messageParts(messageID)}
-                              />
-                            </Match>
-                          </Switch>
-                        )}
-                      </Show>
+                              </Match>
+                            </Switch>
+                          )}
+                        </Show>
+                      </>
                     )
                   }}
                 </For>
@@ -2168,7 +2301,13 @@ function UserMessage(props: {
   )
 }
 
-function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; last: boolean }) {
+function AssistantMessage(props: {
+  message: AssistantMessage
+  parts: Part[]
+  last: boolean
+  footer?: boolean
+  rowID?: string
+}) {
   const ctx = use()
   const local = useLocal()
   const { theme } = useTheme()
@@ -2195,7 +2334,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
   const partsByID = createMemo(() => new Map(props.parts.map((part) => [part.id, part] as const)))
 
   return (
-    <box id={props.message.id} flexShrink={0}>
+    <box id={props.rowID ?? props.message.id} flexShrink={0}>
       <For each={partIDs()}>
         {(partID, index) => {
           const part = createMemo(() => partsByID().get(partID))
@@ -2244,7 +2383,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           </text>
         </box>
       </Show>
-      <Show when={props.message.error && props.message.error.name !== "MessageAbortedError"}>
+      <Show when={props.footer && props.message.error && props.message.error.name !== "MessageAbortedError"}>
         <box
           ref={(el: BoxRenderable) => alwaysSeparate.add(el)}
           border={["left"]}
@@ -2260,7 +2399,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
         </box>
       </Show>
       <Switch>
-        <Match when={props.last || final() || props.message.error?.name === "MessageAbortedError"}>
+        <Match when={props.footer && (props.last || final() || props.message.error?.name === "MessageAbortedError")}>
           <box ref={(el: BoxRenderable) => alwaysSeparate.add(el)} paddingLeft={3}>
             <text marginTop={1}>
               <span
@@ -2427,7 +2566,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
 
   // Hide tool if showDetails is false and tool completed successfully
   const shouldHide = createMemo(() => {
-    if (props.part.tool === "task") return false
+    if (props.part.tool === "task" || props.part.tool.startsWith("agent_")) return false
     if (ctx.showDetails()) return false
     if (props.part.state.status !== "completed") return false
     return true
@@ -2483,6 +2622,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         </Match>
         <Match when={display() === "task"}>
           <Task {...toolprops} />
+        </Match>
+        <Match when={props.part.tool.startsWith("agent_")}>
+          <AgentActivityTool {...toolprops} />
         </Match>
         <Match when={display() === "execute"}>
           <Execute {...toolprops} />
@@ -2984,6 +3126,64 @@ function WebSearch(props: ToolProps) {
 }
 
 type TaskView = V2SessionTaskStatusResponses[200]["data"][number]
+
+function AgentActivityTool(props: ToolProps) {
+  const ctx = use()
+  const sync = useSync()
+  const { navigate } = useRoute()
+  const data = createMemo(() => {
+    const parsed = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(props.output ?? "{}")
+    return Option.isSome(parsed) && parsed.value && typeof parsed.value === "object"
+      ? (parsed.value as Record<string, unknown>)
+      : {}
+  })
+  const alias = createMemo(() => stringValue(props.input.alias ?? props.input.target) ?? "Agent")
+  const target = createMemo(() =>
+    stringValue(
+      props.metadata.targetSessionID ?? props.metadata.sessionId ?? props.input.session_id ?? data().session_id,
+    ),
+  )
+  onMount(() => {
+    const sessionID = target()
+    if (sessionID && props.tool === "agent_spawn") void sync.session.sync(sessionID)
+  })
+  const started = createMemo(() => {
+    const sessionID = target()
+    if (!sessionID) return false
+    if ((sync.data.session_status[sessionID]?.type ?? "idle") !== "idle") return true
+    return (sync.data.message[sessionID] ?? []).some((message) => message.role === "assistant")
+  })
+  const owned = createMemo(() => ctx.agentActivity().filter((item) => item.waitCallID === props.part.callID))
+  const label = createMemo(() =>
+    AgentTimeline.toolText({
+      tool: props.tool,
+      alias: alias(),
+      width: ctx.width,
+      status: stringValue(data().status),
+      started: started(),
+      waiting: props.part.state.status === "running" || props.part.state.status === "pending",
+      reason: stringValue(data().reason),
+      actor: stringValue(data().actor),
+      events: owned(),
+    }),
+  )
+  return (
+    <InlineTool
+      icon={props.tool === "agent_wait" && props.part.state.status === "running" ? "◌" : "•"}
+      pending={props.tool === "agent_wait" ? "Waiting for subagents" : "Contacting Agent…"}
+      complete={props.part.state.status === "completed"}
+      spinner={props.part.state.status === "running" && props.tool === "agent_wait"}
+      separate={true}
+      part={props.part}
+      onClick={() => {
+        const sessionID = target() ?? owned()[0]?.sessionID
+        if (sessionID) navigate({ type: "session", sessionID })
+      }}
+    >
+      {label()}
+    </InlineTool>
+  )
+}
 
 function Task(props: ToolProps) {
   const { theme } = useTheme()

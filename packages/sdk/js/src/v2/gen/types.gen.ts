@@ -1111,6 +1111,7 @@ export type GlobalEvent = {
           backend: "v1" | "v2"
           queued: boolean
           resume: boolean
+          activityWaitCallID?: string
         }
         durable?: {
           aggregateID: string
@@ -1161,6 +1162,7 @@ export type GlobalEvent = {
           summary: string
           notificationInputID: string
           notify: boolean
+          activityWaitCallID?: string
           version: 1
         }
         durable?: {
@@ -4853,6 +4855,7 @@ export type SyncEventSessionNextPeerMessageSent = {
       backend: "v1" | "v2"
       queued: boolean
       resume: boolean
+      activityWaitCallID?: string
     }
   }
 }
@@ -4909,6 +4912,7 @@ export type SyncEventSessionNextDelegationResultRecorded = {
       summary: string
       notificationInputID: string
       notify: boolean
+      activityWaitCallID?: string
       version: 1
     }
   }
@@ -5800,6 +5804,7 @@ export type SessionNextPeerMessageSent = {
     backend: "v1" | "v2"
     queued: boolean
     resume: boolean
+    activityWaitCallID?: string
   }
 }
 
@@ -5865,6 +5870,7 @@ export type SessionNextDelegationResultRecorded = {
     summary: string
     notificationInputID: string
     notify: boolean
+    activityWaitCallID?: string
     version: 1
   }
 }
@@ -8726,6 +8732,7 @@ export type EventSessionNextPeerMessageSent = {
     backend: "v1" | "v2"
     queued: boolean
     resume: boolean
+    activityWaitCallID?: string
   }
 }
 
@@ -8764,6 +8771,7 @@ export type EventSessionNextDelegationResultRecorded = {
     summary: string
     notificationInputID: string
     notify: boolean
+    activityWaitCallID?: string
     version: 1
   }
 }
@@ -16856,6 +16864,63 @@ export type V2SessionMessageResponses = {
 }
 
 export type V2SessionMessageResponse = V2SessionMessageResponses[keyof V2SessionMessageResponses]
+
+export type V2SessionActivityData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    after?: string
+    limit?: string
+  }
+  url: "/api/session/{sessionID}/activity"
+}
+
+export type V2SessionActivityErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type V2SessionActivityError = V2SessionActivityErrors[keyof V2SessionActivityErrors]
+
+export type V2SessionActivityResponses = {
+  /**
+   * Success
+   */
+  200: {
+    activities: Array<{
+      id: string
+      seq: number
+      kind: "reply" | "notice" | "completed" | "failed" | "interrupted"
+      alias: string
+      sessionID: string
+      waitCallID: string
+      actor: "user" | "agent" | "system" | "unknown"
+    }>
+    anchors: Array<{
+      id: string
+      seq: number
+    }>
+    next: number
+  }
+}
+
+export type V2SessionActivityResponse = V2SessionActivityResponses[keyof V2SessionActivityResponses]
 
 export type V2SessionMessagesData = {
   body?: never

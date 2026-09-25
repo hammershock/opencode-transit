@@ -156,6 +156,33 @@ export const SessionPeerReceiptTable = sqliteTable("session_peer_receipt", {
   time_consumed: integer().notNull(),
 })
 
+/** A Wait owns only events assigned while it was active; completed waits never absorb later events. */
+export const SessionAgentWaitTable = sqliteTable("session_agent_wait", {
+  id: text().primaryKey(),
+  call_id: text().notNull(),
+  session_id: text().$type<SessionSchema.ID>().notNull().references(() => SessionTable.id, { onDelete: "cascade" }),
+  targets: text({ mode: "json" }).$type<string[]>().notNull(),
+  state: text().$type<"active" | "finished">().notNull(),
+  time_created: integer().notNull(),
+  time_finished: integer(),
+})
+
+/** Receiver-owned placement of one external event in its durable transcript. */
+export const SessionAgentActivityTable = sqliteTable(
+  "session_agent_activity",
+  {
+    event_id: text().primaryKey(),
+    session_id: text().$type<SessionSchema.ID>().notNull().references(() => SessionTable.id, { onDelete: "cascade" }),
+    seq: integer().notNull(),
+    kind: text().$type<"reply" | "notice" | "completed" | "failed" | "interrupted">().notNull(),
+    subject_session_id: text().$type<SessionSchema.ID>().notNull(),
+    alias: text().notNull(),
+    wait_call_id: text(),
+    actor_kind: text().$type<"user" | "agent" | "system" | "unknown">(),
+  },
+  (table) => [index("session_agent_activity_session_seq_idx").on(table.session_id, table.seq)],
+)
+
 /** One exact execution interruption, including the authenticated actor and outcome. */
 export const SessionInterruptionTable = sqliteTable(
   "session_interruption",

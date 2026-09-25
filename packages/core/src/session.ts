@@ -48,6 +48,8 @@ import { PermissionV2 } from "./permission"
 import { ExecutionPolicy } from "./permission/policy"
 import { QuestionV2 } from "./question"
 import { SessionActivity } from "./session/activity"
+import { page } from "./session/agent-activity"
+import { SessionAgentActivity } from "@opencode-ai/schema/session-agent-activity"
 import { SessionLocationAccess } from "./session/location-access"
 import { SessionLocationMutation } from "./session/location-mutation"
 import { SyncSetup } from "./sync/setup"
@@ -168,6 +170,11 @@ export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
   readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
+  readonly activity: (input: {
+    sessionID: SessionSchema.ID
+    after?: number
+    limit?: number
+  }) => Effect.Effect<Schema.Schema.Type<typeof SessionAgentActivity.Page>, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
     limit?: number
@@ -604,6 +611,10 @@ const layer = Layer.effect(
     )
 
     const result = Service.of({
+      activity: Effect.fn("V2Session.activity")(function* (input) {
+        yield* result.get(input.sessionID)
+        return yield* page(input).pipe(Effect.provideService(Database.Service, database))
+      }),
       create: Effect.fn("V2Session.create")((input) =>
         locationMutation.withLock(
           Effect.gen(function* () {

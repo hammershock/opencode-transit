@@ -55,6 +55,8 @@ import type {
   SessionsTaskStopOutput,
   SessionsMessageInput,
   SessionsMessageOutput,
+  MessagesActivityInput,
+  MessagesActivityOutput,
   MessagesListInput,
   MessagesListOutput,
   ModelsListInput,
@@ -709,6 +711,18 @@ export function make(options: ClientOptions) {
         ).then((value) => value.data),
     },
     messages: {
+      activity: (input: MessagesActivityInput, requestOptions?: RequestOptions) =>
+        request<MessagesActivityOutput>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/activity`,
+            query: { after: input["after"], limit: input["limit"] },
+            successStatus: 200,
+            declaredStatuses: [404, 500, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
       list: (input: MessagesListInput, requestOptions?: RequestOptions) =>
         request<MessagesListOutput>(
           {

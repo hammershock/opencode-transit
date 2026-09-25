@@ -12,6 +12,7 @@ import { SessionInterruption } from "./interruption"
 import { SessionLegacyOwner } from "./legacy-owner"
 import { SessionMessage } from "./message"
 import { SessionPeerRoute } from "./peer-route"
+import { SessionAgentWaitOwner } from "./agent-wait-owner"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
 import {
@@ -176,79 +177,89 @@ const sendWithin = Effect.fn("SessionPeerMessage.sendWithin")(function* (input: 
   if (previous && previous.backend !== backend) return yield* Effect.fail(new Conflict())
   const messageID = previous?.id ?? SessionMessage.ID.create()
   if (!previous)
-    yield* events
-      .publish(
-        SessionEvent.PeerMessageSent,
-        {
-          sessionID: target.id,
-          sourceSessionID: input.sourceSessionID,
-          messageID: SessionMessage.ID.make(messageID),
-          operationID: input.operationID,
-          alias: input.alias,
-          kind,
-          ...(replyTo ? { requestID: replyTo } : {}),
-          text: input.text,
-          backend,
-          queued: input.queue ?? false,
-          resume: input.resume ?? false,
-          timestamp: yield* DateTime.now,
-        },
-        {
-          commit: () =>
-            Effect.gen(function* () {
-              const existing = yield* db
-                .select()
-                .from(SessionPeerMessageTable)
-                .where(eq(SessionPeerMessageTable.operation_id, input.operationID))
-                .get()
-              if (
-                !existing ||
-                existing.id !== messageID ||
-                existing.source_session_id !== input.sourceSessionID ||
-                existing.target_session_id !== target.id ||
-                existing.text !== input.text ||
-                existing.kind !== kind
-              )
-                return yield* Effect.fail(new Conflict())
-              if (request) {
-                const claimed = yield* db
-                  .select({ reply_id: SessionPeerMessageTable.reply_id })
-                  .from(SessionPeerMessageTable)
-                  .where(eq(SessionPeerMessageTable.id, request.id))
-                  .get()
-                if (claimed?.reply_id !== messageID) return yield* Effect.fail(new Conflict())
-              }
-              const replyAlias = `/contacts/requester_${input.sourceSessionID.slice(4, 16)}`
-              if (kind === "request") {
-                yield* db
-                  .insert(SessionPeerRouteTable)
-                  .values({
-                    source_session_id: target.id,
-                    target_session_id: input.sourceSessionID,
-                    alias: replyAlias,
-                    origin_kind: "peer_reply",
-                    origin_id: messageID,
-                    can_interrupt: false,
-                    time_created: Date.now(),
-                  })
-                  .onConflictDoNothing()
-                  .run()
-                const reverse = yield* db
-                  .select({ target: SessionPeerRouteTable.target_session_id })
-                  .from(SessionPeerRouteTable)
-                  .where(
-                    and(
-                      eq(SessionPeerRouteTable.source_session_id, target.id),
-                      eq(SessionPeerRouteTable.alias, replyAlias),
-                    ),
+    yield* SessionAgentWaitOwner.withReceiver(target.id)(
+      Effect.gen(function* () {
+        const activityWaitCallID = yield* SessionAgentWaitOwner.current({
+          db,
+          receiver: target.id,
+          subject: input.sourceSessionID,
+        })
+        return yield* events
+          .publish(
+            SessionEvent.PeerMessageSent,
+            {
+              sessionID: target.id,
+              sourceSessionID: input.sourceSessionID,
+              messageID: SessionMessage.ID.make(messageID),
+              operationID: input.operationID,
+              alias: input.alias,
+              kind,
+              ...(replyTo ? { requestID: replyTo } : {}),
+              text: input.text,
+              backend,
+              queued: input.queue ?? false,
+              resume: input.resume ?? false,
+              ...(activityWaitCallID ? { activityWaitCallID } : {}),
+              timestamp: yield* DateTime.now,
+            },
+            {
+              commit: () =>
+                Effect.gen(function* () {
+                  const existing = yield* db
+                    .select()
+                    .from(SessionPeerMessageTable)
+                    .where(eq(SessionPeerMessageTable.operation_id, input.operationID))
+                    .get()
+                  if (
+                    !existing ||
+                    existing.id !== messageID ||
+                    existing.source_session_id !== input.sourceSessionID ||
+                    existing.target_session_id !== target.id ||
+                    existing.text !== input.text ||
+                    existing.kind !== kind
                   )
-                  .get()
-                if (reverse?.target !== input.sourceSessionID) return yield* Effect.fail(new Conflict())
-              }
-            }).pipe(Effect.orDie),
-        },
-      )
-      .pipe(Effect.catchDefect((defect) => (defect instanceof Conflict ? Effect.fail(defect) : Effect.die(defect))))
+                    return yield* Effect.fail(new Conflict())
+                  if (request) {
+                    const claimed = yield* db
+                      .select({ reply_id: SessionPeerMessageTable.reply_id })
+                      .from(SessionPeerMessageTable)
+                      .where(eq(SessionPeerMessageTable.id, request.id))
+                      .get()
+                    if (claimed?.reply_id !== messageID) return yield* Effect.fail(new Conflict())
+                  }
+                  const replyAlias = `/contacts/requester_${input.sourceSessionID.slice(4, 16)}`
+                  if (kind === "request") {
+                    yield* db
+                      .insert(SessionPeerRouteTable)
+                      .values({
+                        source_session_id: target.id,
+                        target_session_id: input.sourceSessionID,
+                        alias: replyAlias,
+                        origin_kind: "peer_reply",
+                        origin_id: messageID,
+                        can_interrupt: false,
+                        time_created: Date.now(),
+                      })
+                      .onConflictDoNothing()
+                      .run()
+                    const reverse = yield* db
+                      .select({ target: SessionPeerRouteTable.target_session_id })
+                      .from(SessionPeerRouteTable)
+                      .where(
+                        and(
+                          eq(SessionPeerRouteTable.source_session_id, target.id),
+                          eq(SessionPeerRouteTable.alias, replyAlias),
+                        ),
+                      )
+                      .get()
+                    if (reverse?.target !== input.sourceSessionID) return yield* Effect.fail(new Conflict())
+                  }
+                }).pipe(Effect.orDie),
+            },
+          )
+          .pipe(Effect.catchDefect((defect) => (defect instanceof Conflict ? Effect.fail(defect) : Effect.die(defect))))
+      }),
+    )
   const row = yield* db
     .select()
     .from(SessionPeerMessageTable)
