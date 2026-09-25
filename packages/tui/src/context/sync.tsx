@@ -499,13 +499,16 @@ export const {
     let reconcilingWorkingSessions: Promise<void> | undefined
     function reconcileWorkingSessions() {
       if (reconcilingWorkingSessions) return reconcilingWorkingSessions
-      const sessions = [...fullSyncedSessions].filter(
-        (sessionID) =>
+      const sessions = [...fullSyncedSessions].filter((sessionID) => {
+        const status = store.session_status[sessionID]
+        return (
+          (status !== undefined && status.type !== "idle") ||
           result.session.status(sessionID) === "working" ||
           (store.message[sessionID] ?? []).some((message) =>
             (store.part[message.id] ?? []).some((part) => part.type === "tool" && part.state.status === "running"),
-          ),
-      )
+          )
+        )
+      })
       if (sessions.length === 0) return Promise.resolve()
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), 5_000)

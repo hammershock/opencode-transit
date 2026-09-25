@@ -359,6 +359,38 @@ test.each(["working", "idle"] as const)(
   },
 )
 
+test("a busy status sampled alongside completed messages is polled until the server reports idle", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  const running = { ...assistant, time: { created: 1 } }
+  const completed = { ...assistant, time: { created: 1, completed: 2 }, finish: "stop" as const }
+  let messageRequests = 0
+  let statusRequests = 0
+  let started = false
+  const { app, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json(session)
+    if (url.pathname === `/session/${sessionID}/message`)
+      return json([{ info: ++messageRequests === 1 ? running : completed, parts: [] }])
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    if (url.pathname === "/session/status")
+      return json(started ? { [sessionID]: { type: ++statusRequests === 1 ? "busy" : "idle" } } : {})
+    return undefined
+  }, tmp.path)
+
+  try {
+    await sync.session.sync(sessionID)
+    expect(sync.session.status(sessionID)).toBe("working")
+    started = true
+    sync.set("session_status", sessionID, { type: "busy" })
+    await wait(() => statusRequests >= 1 && sync.session.status(sessionID) === "idle", 3_500)
+    expect(sync.data.session_status[sessionID]).toEqual({ type: "busy" })
+    await wait(() => sync.data.session_status[sessionID]?.type === "idle", 5_500)
+    expect(statusRequests).toBeGreaterThanOrEqual(2)
+  } finally {
+    app.renderer.destroy()
+  }
+}, 10_000)
+
 test("message reconciliation preserves a newer live completion event", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")
