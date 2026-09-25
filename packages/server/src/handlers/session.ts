@@ -26,6 +26,8 @@ import { SessionTask } from "@opencode-ai/core/session/task"
 import { SessionTaskWait } from "@opencode-ai/core/session/task-wait"
 import { SessionTaskControl } from "@opencode-ai/core/session/task-control"
 import { SessionTaskResult } from "@opencode-ai/core/session/task-result"
+import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
+import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionInterruption } from "@opencode-ai/core/session/interruption"
@@ -347,11 +349,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               resource: ctx.params.sessionID,
               message: "This Session has legacy history; use its legacy prompt path",
             })
+          // Register direct-user provenance before wake so a fast Agent can connect immediately.
+          const messageID = ctx.payload.id ?? SessionMessage.ID.create()
+          yield* SessionPeerRoute.markUserMessage({ sessionID: ctx.params.sessionID, messageID })
           return {
             data: yield* session
               .prompt({
                 sessionID: ctx.params.sessionID,
-                id: ctx.payload.id,
+                id: messageID,
                 prompt: ctx.payload.prompt,
                 delivery: ctx.payload.delivery,
                 resume: ctx.payload.resume,

@@ -26,8 +26,9 @@ import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/se
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { Database } from "@opencode-ai/core/database/database"
-import { MessageTable, SessionInputTable, SessionMessageTable, SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
+import { MessageTable, SessionInputTable, SessionMessageTable, SessionPeerUserMessageTable, SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
 import { SessionMessage } from "@opencode-ai/core/session/message"
@@ -1240,6 +1241,69 @@ describe("session HttpApi", () => {
           "10 seconds",
         )
         expect(message).toMatchObject({ id: wakeID, type: "user" })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  sharedIt.instance(
+    "allows a V2 direct-user prompt to connect its named Session without trusting internal prompts",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const source = yield* requestJson<Session.Info>(SessionPaths.create, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "user connection source" }),
+        })
+        const target = yield* requestJson<Session.Info>(SessionPaths.create, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "user connection target" }),
+        })
+        const input = yield* requestJson<{ data: { id: string } }>(`/api/session/${source.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: { text: `Please connect ${target.id}` }, resume: false }),
+        })
+        const marker = yield* Database.Service.use(({ db }) =>
+          db.select().from(SessionPeerUserMessageTable)
+            .where(eq(SessionPeerUserMessageTable.message_id, SessionMessage.ID.make(input.data.id)))
+            .get(),
+        )
+        expect(marker).toMatchObject({ session_id: source.id, message_id: input.data.id })
+        const bound = yield* SessionPeerRoute.bind({
+          sourceSessionID: source.id,
+          targetSessionID: target.id,
+          alias: "/root/previous_task",
+          origin: { kind: "user_message", id: input.data.id },
+        })
+        expect(bound.alias).toBe("/root/previous_task")
+
+        const internalID = SessionMessage.ID.make("msg_internal_provenance")
+        yield* Database.Service.use(({ db }) =>
+          db.insert(SessionInputTable).values({
+            id: internalID,
+            session_id: source.id,
+            prompt: { text: `Please connect ${target.id}` },
+            delivery: "steer",
+            origin: { kind: "peer_message", sourceSessionID: target.id, alias: "/root/peer", messageKind: "request", version: 1 },
+            admitted_seq: 2,
+          }).run(),
+        )
+        const retry = yield* request(`/api/session/${source.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ id: internalID, prompt: { text: `Please connect ${target.id}` }, resume: false }),
+        })
+        expect(retry.status).toBe(200)
+        const forged = yield* SessionPeerRoute.bind({
+          sourceSessionID: source.id,
+          targetSessionID: target.id,
+          alias: "/root/forged",
+          origin: { kind: "user_message", id: internalID },
+        }).pipe(Effect.exit)
+        expect(Exit.isFailure(forged)).toBe(true)
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )
