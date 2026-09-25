@@ -173,6 +173,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.next.prompt.admitted":
           break
+        case "session.next.title.generated":
+          void Promise.all([
+            result.session.refresh(event.data.sessionID),
+            sync.session.sync(event.data.sessionID),
+          ]).catch(() => undefined)
+          break
         case "session.next.revert.staged":
           result.session.revert(event.data.sessionID, event.data.revert)
           break
