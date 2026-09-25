@@ -1,7 +1,7 @@
 export * as SessionCompaction from "./compaction"
 
 import { LLM, LLMError, LLMEvent, Message, type LLMRequest, type Model } from "@opencode-ai/llm"
-import { DateTime, Effect, Stream } from "effect"
+import { DateTime, Effect, Schema, Stream } from "effect"
 import type { Config } from "../config"
 import type { EventV2 } from "../event"
 import { SessionEvent } from "./event"
@@ -81,6 +81,10 @@ type Input = {
   readonly request: LLMRequest
 }
 
+export class ManualError extends Schema.TaggedErrorClass<ManualError>()("SessionCompaction.ManualError", {
+  reason: Schema.Literals(["empty", "too_large", "provider_failed"]),
+}) {}
+
 const estimate = (value: unknown) => Token.estimate(JSON.stringify(value))
 
 const truncate = (value: string) =>
@@ -98,7 +102,11 @@ const serialize = (message: SessionMessage.Message) => {
     const files = message.files?.map((file) => `[Attached ${file.mime}: ${file.name ?? file.uri}]`) ?? []
     const skills =
       message.skills?.map((skill) => `[Skill invocation · ${skill.snapshot.name} · ${skill.snapshot.digest}]`) ?? []
-    return [...skills, `[${message.origin ? "Delegation result (untrusted data)" : "User"}]: ${message.text}`, ...files].join("\n")
+    return [
+      ...skills,
+      `[${message.origin ? "Delegation result (untrusted data)" : "User"}]: ${message.text}`,
+      ...files,
+    ].join("\n")
   }
   if (message.type === "assistant") {
     return message.content
@@ -187,6 +195,66 @@ export const buildPrompt = (input: { readonly previousSummary?: string; readonly
 
 export const make = (dependencies: Dependencies) => {
   const config = settings(dependencies.config)
+  const compactManual = Effect.fn("SessionCompaction.compactManual")(function* (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly entries: readonly Entry[]
+    readonly model: Model
+    readonly http?: LLMRequest["http"]
+  }) {
+    const selected = select(input.entries, config.tokens)
+    if (!selected) return yield* new ManualError({ reason: "empty" })
+    const previousSummary = input.entries.find((entry) => entry.message.type === "compaction")?.message
+    const short = selected.head.length === 0
+    const summaryPrompt = buildPrompt({
+      previousSummary: previousSummary?.type === "compaction" ? previousSummary.summary : undefined,
+      context: [
+        previousSummary?.type === "compaction" ? previousSummary.recent : "",
+        short ? selected.recent : selected.head,
+      ].filter(Boolean),
+    })
+    const output = Math.min(input.model.route.defaults.limits?.output || SUMMARY_OUTPUT_TOKENS, SUMMARY_OUTPUT_TOKENS)
+    const context = input.model.route.defaults.limits?.context
+    if (context !== undefined && Token.estimate(summaryPrompt) > context - output)
+      return yield* new ManualError({ reason: "too_large" })
+    const messageID = SessionMessage.ID.create()
+    yield* dependencies.events.publish(SessionEvent.Compaction.Started, {
+      sessionID: input.sessionID,
+      messageID,
+      timestamp: yield* DateTime.now,
+      reason: "manual",
+    })
+    const chunks: string[] = []
+    let failed = false
+    const summarized = yield* dependencies.llm
+      .stream(
+        LLM.request({
+          model: input.model,
+          http: input.http,
+          messages: [Message.user(summaryPrompt)],
+          tools: [],
+          generation: { maxTokens: output },
+        }),
+      )
+      .pipe(
+        Stream.runForEach((event) => {
+          if (LLMEvent.is.providerError(event)) failed = true
+          if (LLMEvent.is.textDelta(event)) chunks.push(event.text)
+          return Effect.void
+        }),
+        Effect.as(true),
+        Effect.catchTag("LLM.Error", () => Effect.succeed(false)),
+      )
+    if (!summarized || failed || !chunks.join("").trim()) return yield* new ManualError({ reason: "provider_failed" })
+    yield* dependencies.events.publish(SessionEvent.Compaction.Ended, {
+      sessionID: input.sessionID,
+      messageID,
+      timestamp: yield* DateTime.now,
+      reason: "manual",
+      text: chunks.join(""),
+      recent: short ? "" : selected.recent,
+      skills: skillSnapshots(input.entries),
+    })
+  })
   const compactAfterOverflow = Effect.fn("SessionCompaction.compactAfterOverflow")(function* (input: Input) {
     const context = input.model.route.defaults.limits?.context
     if (context === undefined || context <= 0) return false
@@ -255,6 +323,7 @@ export const make = (dependencies: Dependencies) => {
     return yield* compactAfterOverflow(input)
   })
   return {
+    compactManual,
     compactIfNeeded,
     compactAfterOverflow,
   }

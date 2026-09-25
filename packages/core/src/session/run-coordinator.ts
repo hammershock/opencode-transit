@@ -12,6 +12,11 @@ export interface Coordinator<Key, E> {
   readonly wake: (key: Key) => Effect.Effect<void>
   /** Registers work and waits for the execution generation guaranteed to observe that wake. */
   readonly wakeAndWait: (key: Key) => Effect.Effect<void, E>
+  /** Reserves an idle key for a scoped operation; wakes admitted during it run after release. */
+  readonly exclusive: <A, E2, R>(
+    key: Key,
+    operation: Effect.Effect<A, E2, R>,
+  ) => Effect.Effect<{ busy: true } | { busy: false; value: A }, E2, R>
   /** Stops active execution and waits for its cleanup. */
   readonly interrupt: (key: Key) => Effect.Effect<void>
   /** Bind an exact execution while its owner lease is held. */
@@ -118,6 +123,26 @@ export const make = <Key, E>(options: {
     const wake = (key: Key) => scheduleWake(key).pipe(Effect.asVoid)
     const wakeAndWait = (key: Key) => scheduleWake(key).pipe(Effect.flatMap(Deferred.await))
 
+    const exclusive = <A, E2, R>(
+      key: Key,
+      operation: Effect.Effect<A, E2, R>,
+    ): Effect.Effect<{ busy: true } | { busy: false; value: A }, E2, R> =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const entry = yield* Effect.sync(() => {
+            if (active.has(key)) return undefined
+            const entry = makeEntry()
+            active.set(key, entry)
+            return entry
+          })
+          if (entry === undefined) return { busy: true as const }
+          const value = yield* restore(operation).pipe(
+            Effect.ensuring(Effect.sync(() => settle(key, entry, Exit.succeed(undefined)))),
+          )
+          return { busy: false as const, value }
+        }),
+      )
+
     const interrupt = (key: Key): Effect.Effect<void> =>
       Effect.suspend(() => {
         const entry = active.get(key)
@@ -152,6 +177,7 @@ export const make = <Key, E>(options: {
       run,
       wake,
       wakeAndWait,
+      exclusive,
       interrupt,
       bindExact,
       requestInterruptExact,

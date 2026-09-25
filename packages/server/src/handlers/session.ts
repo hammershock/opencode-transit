@@ -317,23 +317,29 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.promptBackend",
         Effect.fn(function* (ctx) {
-          yield* session.get(ctx.params.sessionID).pipe(
-            Effect.catchTag(
-              "Session.NotFoundError",
-              () => new SessionNotFoundError({ sessionID: ctx.params.sessionID, message: "Session not found" }),
+          yield* session
+            .get(ctx.params.sessionID)
+            .pipe(
+              Effect.catchTag(
+                "Session.NotFoundError",
+                () => new SessionNotFoundError({ sessionID: ctx.params.sessionID, message: "Session not found" }),
+              ),
+            )
+          const old = yield* hasLegacyHistory(ctx.params.sessionID).pipe(
+            Effect.mapError(
+              () => new ServiceUnavailableError({ service: "prompt_backend", message: "Prompt backend unavailable" }),
             ),
           )
-          const old = yield* hasLegacyHistory(ctx.params.sessionID).pipe(
-            Effect.mapError(() => new ServiceUnavailableError({ service: "prompt_backend", message: "Prompt backend unavailable" })),
-          )
-          return { data: old ? "legacy" as const : "v2" as const }
+          return { data: old ? ("legacy" as const) : ("v2" as const) }
         }),
       )
       .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
           const old = yield* hasLegacyHistory(ctx.params.sessionID).pipe(
-            Effect.mapError(() => new ServiceUnavailableError({ service: "prompt_backend", message: "Prompt backend unavailable" })),
+            Effect.mapError(
+              () => new ServiceUnavailableError({ service: "prompt_backend", message: "Prompt backend unavailable" }),
+            ),
           )
           if (old)
             return yield* new ConflictError({
@@ -391,23 +397,40 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.compact",
         Effect.fn(function* (ctx) {
+          const old = yield* hasLegacyHistory(ctx.params.sessionID).pipe(
+            Effect.mapError(
+              () => new ServiceUnavailableError({ service: "prompt_backend", message: "Prompt backend unavailable" }),
+            ),
+          )
+          if (old)
+            return yield* new ConflictError({
+              resource: ctx.params.sessionID,
+              message: "This Session has legacy history; use its legacy summarize path",
+            })
           yield* session.compact({ sessionID: ctx.params.sessionID }).pipe(
-            Effect.catchTag("Session.NotFoundError", (error) =>
-              Effect.fail(
-                new SessionNotFoundError({
+            Effect.mapError((error) => {
+              if (error._tag === "Session.NotFoundError")
+                return new SessionNotFoundError({
                   sessionID: error.sessionID,
                   message: `Session not found: ${error.sessionID}`,
-                }),
-              ),
-            ),
-            Effect.catchTag("Session.OperationUnavailableError", (error) =>
-              Effect.fail(
-                new ServiceUnavailableError({
+                })
+              if (error._tag === "Session.OperationUnavailableError")
+                return new ServiceUnavailableError({
                   message: `Session ${error.operation} is not available yet`,
                   service: `session.${error.operation}`,
-                }),
-              ),
-            ),
+                })
+              if (error._tag === "SessionExecution.CompactionBusyError")
+                return new InvalidRequestError({
+                  kind: "session_compaction_busy",
+                  message: `Session is busy: ${error.sessionID}`,
+                })
+              if (error._tag === "SessionCompaction.ManualError")
+                return new InvalidRequestError({
+                  kind: `session_compaction_${error.reason}`,
+                  message: `Manual compaction failed: ${error.reason}`,
+                })
+              return new InvalidRequestError({ kind: "session_compaction_model", message: String(error) })
+            }),
           )
           return HttpApiSchema.NoContent.make()
         }),

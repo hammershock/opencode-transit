@@ -270,6 +270,7 @@ const execution = Layer.effect(
       wake: coordinator.wake,
       wakeAndWait: coordinator.wakeAndWait,
       interrupt: coordinator.interrupt,
+      compactManual: (input) => sessionRunner.compactManual(input),
       requestInterruptExact: () => Effect.succeed(false),
     })
   }),
@@ -1423,6 +1424,69 @@ describe("SessionRunnerLLM", () => {
         type: "compaction",
         summary: "## Objective\n- Preserve the updated task",
       })
+    }),
+  )
+
+  it.effect("manually compacts V2 history with the requested model and no continuation turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      response = fragmentFixture("text", "initial-answer", ["Original answer"]).completeEvents
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Original question" }), resume: false })
+      yield* session.resume(sessionID)
+      requests.length = 0
+      response = fragmentFixture("text", "manual-summary", ["## Objective\n- Preserve the original question"]).completeEvents
+      yield* session.compact({
+        sessionID,
+        model: { providerID: ProviderV2.ID.make("fake"), id: ModelV2.ID.make("replacement") },
+      })
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.model).toEqual(replacementModel)
+      expect(requests[0]?.tools).toEqual([])
+      expect((yield* session.context(sessionID))[0]).toMatchObject({
+        type: "compaction",
+        reason: "manual",
+        summary: "## Objective\n- Preserve the original question",
+      })
+      expect((yield* session.get(sessionID)).model).toBeUndefined()
+    }),
+  )
+
+  it.effect("keeps V2 history active when manual compaction fails", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      response = fragmentFixture("text", "initial-answer", ["Original answer"]).completeEvents
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Original question" }), resume: false })
+      yield* session.resume(sessionID)
+      const before = yield* session.context(sessionID)
+      requests.length = 0
+      response = []
+      const failed = yield* session.compact({ sessionID }).pipe(Effect.exit)
+      expect(Exit.isFailure(failed)).toBe(true)
+      if (Exit.isFailure(failed))
+        expect(Cause.squash(failed.cause)).toMatchObject({ _tag: "SessionCompaction.ManualError", reason: "provider_failed" })
+      expect(requests).toHaveLength(1)
+      expect(yield* session.context(sessionID)).toEqual(before)
+    }),
+  )
+
+  it.effect("keeps the previous V2 context when manual compaction is interrupted", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      response = fragmentFixture("text", "initial-answer", ["Original answer"]).completeEvents
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Original question" }), resume: false })
+      yield* session.resume(sessionID)
+      const before = yield* session.context(sessionID)
+      streamStarted = yield* Deferred.make<void>()
+      streamGate = yield* Deferred.make<void>()
+      const running = yield* session.compact({ sessionID }).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      yield* Fiber.interrupt(running)
+      expect(yield* session.context(sessionID)).toEqual(before)
+      streamGate = undefined
+      streamStarted = undefined
     }),
   )
 

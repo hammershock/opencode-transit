@@ -105,6 +105,18 @@ const layer = Layer.effect(
       resume: coordinator.run,
       wake: coordinator.wake,
       wakeAndWait: coordinator.wakeAndWait,
+      compactManual: Effect.fn("SessionExecution.compactManual")(function* (input) {
+        const result = yield* coordinator.exclusive(
+          input.sessionID,
+          Effect.gen(function* () {
+            const location = yield* access.require(input.sessionID).pipe(Effect.catch(Effect.die))
+            yield* SessionRunner.Service.use((runner) => runner.compactManual(input)).pipe(
+              Effect.provide(locations.get(location)),
+            )
+          }),
+        )
+        if (result.busy) return yield* new SessionExecution.CompactionBusyError({ sessionID: input.sessionID })
+      }),
     })
   }),
 )

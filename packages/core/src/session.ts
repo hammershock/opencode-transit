@@ -31,6 +31,8 @@ import { makeGlobalNode } from "./effect/app-node"
 import { LocationServiceMap } from "./location-service-map"
 import { ContextSnapshotDecodeError, MessageDecodeError } from "./session/error"
 import { SessionEvent } from "./session/event"
+import { SessionCompaction } from "./session/compaction"
+import { SessionRunnerModel } from "./session/runner/model"
 import { SessionInput } from "./session/input"
 import { SessionTask } from "./session/task"
 import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
@@ -120,6 +122,7 @@ type CreateInput = {
 type CompactInput = {
   sessionID: SessionSchema.ID
   prompt?: Prompt
+  model?: ModelV2.Ref
 }
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Session.NotFoundError", {
@@ -273,7 +276,17 @@ export interface Interface {
     skill: string
     resume?: boolean
   }) => Effect.Effect<void, OperationUnavailableError>
-  readonly compact: (input: CompactInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
+  readonly compact: (
+    input: CompactInput,
+  ) => Effect.Effect<
+    void,
+    | NotFoundError
+    | OperationUnavailableError
+    | SessionExecution.CompactionBusyError
+    | SessionRunnerModel.Error
+    | MessageDecodeError
+    | SessionCompaction.ManualError
+  >
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
   readonly activate: (
@@ -528,7 +541,7 @@ const layer = Layer.effect(
                     ? new PromptConflictError({ sessionID: input.sessionID, messageID })
                     : defect instanceof SessionInput.PromptBackendConflict
                       ? new PromptConflictError({ sessionID: input.sessionID, messageID })
-                    : Effect.die(defect),
+                      : Effect.die(defect),
                 ),
               )
               if (!SessionInput.equivalent(admitted, expected))
@@ -1131,7 +1144,8 @@ const layer = Layer.effect(
       ),
       compact: Effect.fn("V2Session.compact")(function* (input) {
         yield* result.get(input.sessionID)
-        return yield* new OperationUnavailableError({ operation: "compact" })
+        yield* requireLocation(input.sessionID)
+        yield* execution.compactManual({ sessionID: input.sessionID, model: input.model })
       }),
       wait: Effect.fn("V2Session.wait")(function* (sessionID) {
         yield* result.get(sessionID)

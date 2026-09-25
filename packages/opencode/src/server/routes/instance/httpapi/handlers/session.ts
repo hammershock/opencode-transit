@@ -39,7 +39,7 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { InvalidRequestError, PermissionNotFoundError } from "../errors"
+import { InvalidRequestError, PermissionNotFoundError, SessionBusyError } from "../errors"
 import * as SessionError from "./session-errors"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { SessionActivity } from "@opencode-ai/core/session/activity"
@@ -356,6 +356,33 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           ctx.params.sessionID,
           Effect.gen(function* () {
             yield* requireWritableLocation(ctx.params.sessionID)
+            if ((yield* SessionError.mapStorageNotFound(session.promptBackend(ctx.params.sessionID))) === "v2") {
+              yield* sessionV2
+                .compact({
+                  sessionID: SessionV2.ID.make(ctx.params.sessionID),
+                  model: { providerID: ctx.payload.providerID, id: ctx.payload.modelID },
+                })
+                .pipe(
+                  Effect.mapError((error) => {
+                    if (error._tag === "SessionExecution.CompactionBusyError")
+                      return new SessionBusyError({
+                        sessionID: ctx.params.sessionID,
+                        message: `Session is busy: ${ctx.params.sessionID}`,
+                      })
+                    return new InvalidRequestError({
+                      kind:
+                        error._tag === "SessionCompaction.ManualError"
+                          ? `session_compaction_${error.reason}`
+                          : "session_compaction_model",
+                      message:
+                        error._tag === "SessionCompaction.ManualError"
+                          ? `Manual compaction failed: ${error.reason}`
+                          : String(error),
+                    })
+                  }),
+                )
+              return true
+            }
             yield* revertSvc.cleanup(yield* requireSession(ctx.params.sessionID))
             const messages = yield* SessionError.mapStorageNotFound(
               session.messages({ sessionID: ctx.params.sessionID }),
@@ -452,15 +479,19 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
               const text = [
                 `<skill_instructions name="${skill.name}">\n${skill.content}\n</skill_instructions>`,
                 ctx.payload.arguments,
-              ].filter(Boolean).join("\n\n")
-              return yield* promptSvc.prompt({
-                sessionID: ctx.params.sessionID,
-                messageID: ctx.payload.messageID,
-                agent: ctx.payload.agent ?? current.agent ?? "build",
-                model: ctx.payload.model ? Provider.parseModel(ctx.payload.model) : undefined,
-                variant: ctx.payload.variant,
-                parts: [{ type: "text", text }, ...(ctx.payload.parts ?? [])],
-              }).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+              ]
+                .filter(Boolean)
+                .join("\n\n")
+              return yield* promptSvc
+                .prompt({
+                  sessionID: ctx.params.sessionID,
+                  messageID: ctx.payload.messageID,
+                  agent: ctx.payload.agent ?? current.agent ?? "build",
+                  model: ctx.payload.model ? Provider.parseModel(ctx.payload.model) : undefined,
+                  variant: ctx.payload.variant,
+                  parts: [{ type: "text", text }, ...(ctx.payload.parts ?? [])],
+                })
+                .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
             }
 
             const admitted = yield* sessionV2
@@ -541,7 +572,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           Effect.gen(function* () {
             yield* requireWritableLocation(ctx.params.sessionID)
             yield* requireSession(ctx.params.sessionID)
-            return yield* SessionError.mapBusy(promptSvc.slashCommand({ ...ctx.payload, sessionID: ctx.params.sessionID }))
+            return yield* SessionError.mapBusy(
+              promptSvc.slashCommand({ ...ctx.payload, sessionID: ctx.params.sessionID }),
+            )
           }),
         ),
     )
