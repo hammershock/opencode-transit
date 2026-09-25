@@ -270,6 +270,20 @@ describe("model context inspector", () => {
     expect(systemParts[2]?.value.content).toBe(mcpText)
   })
 
+  test("shows V2 target and subagent runtime parts in the system prompt section", () => {
+    const options = modelContextOptions({
+      ...generation,
+      systemParts: null,
+      runtimeParts: [
+        ...(generation.runtimeParts ?? []),
+        { key: "available-targets", label: "Available targets", tag: "<available-targets>", text: "target list" },
+        { key: "subagents", label: "Available subagents", tag: "<available-subagents>", text: "agent list" },
+      ],
+    })
+    expect(options.find((option) => option.title === "available-targets")?.value.content).toBe("target list")
+    expect(options.find((option) => option.title === "available-subagents")?.value.content).toBe("agent list")
+  })
+
   test("reports an empty state when no tool definitions are available", () => {
     const options = modelContextOptions({ ...generation, tools: undefined })
     const tools = options.find((option) => option.category === "Tools")
