@@ -49,6 +49,7 @@ test.each([false, true])("production V2 parent executes Task with default HTTP h
       const result = JSON.parse(line!.slice("TASK_V2_PARENT_RESULT:".length)) as {
         rows: Array<{ backend: string; state: string }>
         legacyMessages: number
+        contextParts: Array<{ key: string; text: string }>
       }
       expect(result.rows).toHaveLength(1)
       expect(result.rows[0]?.backend).toBe("v2")
@@ -56,6 +57,9 @@ test.each([false, true])("production V2 parent executes Task with default HTTP h
       expect(result.legacyMessages).toBe(0)
       expect(hits.some((hit) => JSON.stringify(hit.body).includes("CHILD_TASK_MARKER"))).toBe(true)
       const definitions = JSON.stringify(hits[0]?.body)
+      expect(definitions).toContain("<available-subagents>")
+      expect(result.contextParts.find((part) => part.key === "subagents")?.text).toContain("<available-subagents>")
+      expect(result.contextParts.find((part) => part.key === "available-targets")?.text).toContain("<available-targets>")
       for (const name of [
         "task",
         "task_status",

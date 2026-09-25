@@ -51,7 +51,7 @@ const it = testEffect(
 afterAll(() => fs.rm(registryDir, { recursive: true, force: true }))
 
 const targetsPart = (rendered: readonly RuntimeContext.Rendered[]) =>
-  rendered.find((part) => part.key === "targets")
+  rendered.find((part) => part.key === "available-targets")
 
 function sessionRow(id: string, parentID?: string) {
   return {

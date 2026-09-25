@@ -156,6 +156,9 @@ const outcome = await AppRuntime.runPromise(
                 }),
               ),
               legacyMessages: (yield* db.select({ id: MessageTable.id }).from(MessageTable).where(eq(MessageTable.session_id, parent.id)).all()).length,
+              contextParts: (yield* session.requestContext(parent.id)).runtimeParts
+                .filter((part) => part.key === "subagents" || part.key === "available-targets")
+                .map((part) => ({ key: part.key, text: part.text })),
             }
           yield* Effect.sleep(Duration.millis(50))
         }

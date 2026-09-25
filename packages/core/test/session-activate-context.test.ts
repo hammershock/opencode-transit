@@ -64,7 +64,7 @@ const writeRegistry = (description: string) =>
   )
 
 const targetsText = (runtimeParts: readonly { key: string; text: string }[]) =>
-  runtimeParts.find((part) => part.key === "targets")?.text
+  runtimeParts.find((part) => part.key === "available-targets")?.text
 
 describe("SessionV2.activate refreshes the available-targets runtime context", () => {
   it.effect("re-reads the target registry after activation", () =>

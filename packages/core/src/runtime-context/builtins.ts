@@ -97,7 +97,7 @@ const builtIns = Layer.effectDiscard(
     })
 
     yield* runtime.register({
-      key: "targets",
+      key: "available-targets",
       label: "Available targets",
       tag: "<available-targets>",
       order: 5,

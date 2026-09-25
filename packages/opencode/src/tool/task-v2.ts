@@ -21,6 +21,9 @@ import { Parameters as TaskStopParameters } from "./task-stop"
 import { Config } from "@opencode-ai/core/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ConfigExperimental } from "@opencode-ai/core/config/experimental"
+import { AgentV2 } from "@opencode-ai/core/agent"
+import { RuntimeContext } from "@opencode-ai/core/runtime-context"
+import { render } from "./available-subagents"
 
 /** Register the existing durable V2 Task adapter in the canonical V2 tool catalog. */
 const layer = Layer.effectDiscard(
@@ -29,6 +32,8 @@ const layer = Layer.effectDiscard(
     const permission = yield* PermissionV2.Service
     const config = yield* Config.Service
     const flags = yield* RuntimeFlags.Service
+    const agents = yield* AgentV2.Service
+    const runtime = yield* RuntimeContext.Service
     const controlsEnabled = ConfigExperimental.backgroundSubagents(
       {
         experimental: (yield* config.entries())
@@ -38,6 +43,15 @@ const layer = Layer.effectDiscard(
       },
       flags.experimentalBackgroundSubagents,
     )
+    yield* runtime.register({
+      key: "subagents",
+      label: "Available subagents",
+      tag: "<available-subagents>",
+      order: 6,
+      cache: "turn",
+      enabled: () => true,
+      render: () => Effect.map(agents.all(), render),
+    })
     const execute = (name: string, input: unknown, context: Tool.Context, resources: readonly string[] = []) =>
       Effect.gen(function* () {
         const source = {
@@ -155,7 +169,7 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/task-v2",
   layer,
-  deps: [CoreToolRegistry.toolsNode, PermissionV2.node, Config.node, RuntimeFlags.node],
+  deps: [CoreToolRegistry.toolsNode, PermissionV2.node, Config.node, RuntimeFlags.node, AgentV2.node, RuntimeContext.node],
 })
 
 export * as TaskV2Tool from "./task-v2"
