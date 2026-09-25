@@ -203,7 +203,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             }
             return output
           }),
-          { signal: options.abortSignal },
+          // Bash handles the abort signal itself so it can kill the process,
+          // close its output sink, and persist the final truncated result.
+          item.id === "bash" ? undefined : { signal: options.abortSignal },
         )
       },
     })
