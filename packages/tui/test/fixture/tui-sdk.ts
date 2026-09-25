@@ -28,7 +28,7 @@ export function createEventSource() {
         }
       },
     } satisfies EventSource,
-    emit(event: GlobalEvent & { payload: { durable?: { aggregateID: string; seq: number; version: number } } }) {
+    emit(event: GlobalEvent) {
       if (!fn) throw new Error("event source not ready")
       fn(event)
       if (!("properties" in event.payload)) return

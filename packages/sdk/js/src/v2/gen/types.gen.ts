@@ -787,12 +787,22 @@ export type GlobalEvent = {
         properties: {
           [key: string]: unknown
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "integration.updated"
         properties: {
           [key: string]: unknown
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -801,12 +811,22 @@ export type GlobalEvent = {
         properties: {
           integrationID: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "catalog.updated"
         properties: {
           [key: string]: unknown
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -835,6 +855,11 @@ export type GlobalEvent = {
             delivery: "steer" | "queue"
           }
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -842,6 +867,11 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           info: Session
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -851,6 +881,11 @@ export type GlobalEvent = {
           sessionID: string
           info: Session
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -859,6 +894,11 @@ export type GlobalEvent = {
           sessionID: string
           info: Message
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -866,6 +906,11 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           messageID: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -876,6 +921,11 @@ export type GlobalEvent = {
           part: Part
           time: number
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -884,6 +934,11 @@ export type GlobalEvent = {
           sessionID: string
           messageID: string
           partID: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -898,6 +953,11 @@ export type GlobalEvent = {
             diff?: string
           }
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -907,6 +967,11 @@ export type GlobalEvent = {
           sessionID: string
           messageID: string
           agent: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -918,6 +983,11 @@ export type GlobalEvent = {
           messageID: string
           model: ModelRef
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -927,6 +997,11 @@ export type GlobalEvent = {
           sessionID: string
           location: LocationRef
           subdirectory?: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -939,6 +1014,11 @@ export type GlobalEvent = {
           location: LocationRef
           revision: number
           context?: ModelContextGeneration
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -957,6 +1037,11 @@ export type GlobalEvent = {
             version: 1
           }
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -965,6 +1050,11 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           message: SessionMessage
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1001,6 +1091,11 @@ export type GlobalEvent = {
                 promptDigest: string
               }
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1009,6 +1104,11 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           title: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1028,6 +1128,11 @@ export type GlobalEvent = {
           notify: boolean
           version: 1
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1037,6 +1142,11 @@ export type GlobalEvent = {
           sessionID: string
           rootSessionID: string
           invocationInputIDs: Array<string>
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1048,6 +1158,11 @@ export type GlobalEvent = {
           messageID: string
           outcome: "completed" | "failed" | "cancelled"
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1058,6 +1173,11 @@ export type GlobalEvent = {
           messageID: string
           text: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1066,6 +1186,11 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           context: ModelContextGeneration
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1080,6 +1205,11 @@ export type GlobalEvent = {
           sources: ModelContextSourceState
           digest: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1089,6 +1219,11 @@ export type GlobalEvent = {
           sessionID: string
           messageID: string
           text: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1102,6 +1237,11 @@ export type GlobalEvent = {
           callID: string
           command: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1111,6 +1251,11 @@ export type GlobalEvent = {
           sessionID: string
           callID: string
           output: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1123,6 +1268,11 @@ export type GlobalEvent = {
           agent: string
           model: ModelRef
           snapshot?: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1146,6 +1296,11 @@ export type GlobalEvent = {
           snapshot?: string
           files?: Array<string>
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1156,6 +1311,11 @@ export type GlobalEvent = {
           assistantMessageID: string
           error: SessionErrorUnknown
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1165,6 +1325,11 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           textID: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1177,6 +1342,11 @@ export type GlobalEvent = {
           textID: string
           delta: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1187,6 +1357,11 @@ export type GlobalEvent = {
           assistantMessageID: string
           textID: string
           text: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1199,6 +1374,11 @@ export type GlobalEvent = {
           reasoningID: string
           providerMetadata?: LlmProviderMetadata
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1209,6 +1389,11 @@ export type GlobalEvent = {
           assistantMessageID: string
           reasoningID: string
           delta: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1222,6 +1407,11 @@ export type GlobalEvent = {
           text: string
           providerMetadata?: LlmProviderMetadata
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1232,6 +1422,11 @@ export type GlobalEvent = {
           assistantMessageID: string
           callID: string
           name: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1244,6 +1439,11 @@ export type GlobalEvent = {
           callID: string
           delta: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1254,6 +1454,11 @@ export type GlobalEvent = {
           assistantMessageID: string
           callID: string
           text: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1273,6 +1478,11 @@ export type GlobalEvent = {
             metadata?: LlmProviderMetadata
           }
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1286,6 +1496,11 @@ export type GlobalEvent = {
             [key: string]: unknown
           }
           content: Array<LlmToolContent>
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1307,6 +1522,11 @@ export type GlobalEvent = {
             metadata?: LlmProviderMetadata
           }
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1323,6 +1543,11 @@ export type GlobalEvent = {
             metadata?: LlmProviderMetadata
           }
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1332,6 +1557,11 @@ export type GlobalEvent = {
           sessionID: string
           attempt: number
           error: SessionNextRetryError
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1343,6 +1573,11 @@ export type GlobalEvent = {
           messageID: string
           reason: "auto" | "manual"
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1352,6 +1587,11 @@ export type GlobalEvent = {
           sessionID: string
           messageID: string
           text: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1366,6 +1606,11 @@ export type GlobalEvent = {
           recent: string
           skills?: Array<SessionSkillInvocationSnapshot>
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1375,6 +1620,11 @@ export type GlobalEvent = {
           sessionID: string
           revert: RevertState
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1382,6 +1632,11 @@ export type GlobalEvent = {
         properties: {
           timestamp: number
           sessionID: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1391,6 +1646,11 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           messageID: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1403,6 +1663,11 @@ export type GlobalEvent = {
           field: string
           delta: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1410,6 +1675,11 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           diff: Array<SnapshotFileDiff>
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1427,12 +1697,22 @@ export type GlobalEvent = {
             | ContentFilterError
             | ApiError
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "installation.updated"
         properties: {
           version: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1441,6 +1721,11 @@ export type GlobalEvent = {
         properties: {
           version: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1448,12 +1733,22 @@ export type GlobalEvent = {
         properties: {
           file: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "reference.updated"
         properties: {
           [key: string]: unknown
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1470,6 +1765,11 @@ export type GlobalEvent = {
           }
           source?: PermissionV2Source
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1479,6 +1779,11 @@ export type GlobalEvent = {
           requestID: string
           reply: PermissionV2Reply
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1486,12 +1791,22 @@ export type GlobalEvent = {
         properties: {
           id: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "project.directories.updated"
         properties: {
           projectID: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1501,6 +1816,11 @@ export type GlobalEvent = {
           file: string
           event: "add" | "change" | "unlink"
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1508,12 +1828,22 @@ export type GlobalEvent = {
         properties: {
           info: Pty
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "pty.updated"
         properties: {
           info: Pty
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1523,12 +1853,22 @@ export type GlobalEvent = {
           id: string
           exitCode: number
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "pty.deleted"
         properties: {
           id: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1543,6 +1883,11 @@ export type GlobalEvent = {
           questions: Array<QuestionV2Info>
           tool?: QuestionV2Tool
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1552,6 +1897,11 @@ export type GlobalEvent = {
           requestID: string
           answers: Array<QuestionV2Answer>
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1560,6 +1910,11 @@ export type GlobalEvent = {
           sessionID: string
           requestID: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1567,6 +1922,11 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           todos: Array<Todo>
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1585,6 +1945,11 @@ export type GlobalEvent = {
                 bytes?: number
               }
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1592,12 +1957,22 @@ export type GlobalEvent = {
         properties: {
           revision: number
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "sync.initialization.required"
         properties: {
           trigger: "automatic"
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1613,12 +1988,22 @@ export type GlobalEvent = {
             detail?: string
           }
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "lsp.updated"
         properties: {
           [key: string]: unknown
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1638,6 +2023,11 @@ export type GlobalEvent = {
             callID: string
           }
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1647,12 +2037,22 @@ export type GlobalEvent = {
           requestID: string
           reply: "once" | "always" | "reject"
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "tui.prompt.append"
         properties: {
           text: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1678,6 +2078,11 @@ export type GlobalEvent = {
             | "agent.cycle"
             | string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1687,6 +2092,11 @@ export type GlobalEvent = {
           message: string
           variant: "info" | "success" | "warning" | "error"
           duration?: number
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1698,12 +2108,22 @@ export type GlobalEvent = {
            */
           sessionID: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "mcp.tools.changed"
         properties: {
           server: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1712,6 +2132,11 @@ export type GlobalEvent = {
         properties: {
           mcpName: string
           url: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1722,6 +2147,11 @@ export type GlobalEvent = {
           sessionID: string
           arguments: string
           messageID: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1737,6 +2167,11 @@ export type GlobalEvent = {
           time: ProjectTime
           sandboxes: Array<string>
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1745,12 +2180,22 @@ export type GlobalEvent = {
           sessionID: string
           status: SessionStatus
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "session.idle"
         properties: {
           sessionID: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1765,6 +2210,11 @@ export type GlobalEvent = {
           questions: Array<QuestionInfo>
           tool?: QuestionTool
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1774,6 +2224,11 @@ export type GlobalEvent = {
           requestID: string
           answers: Array<QuestionAnswer>
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1782,12 +2237,22 @@ export type GlobalEvent = {
           sessionID: string
           requestID: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "session.compacted"
         properties: {
           sessionID: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1796,6 +2261,11 @@ export type GlobalEvent = {
         properties: {
           branch?: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1803,12 +2273,22 @@ export type GlobalEvent = {
         properties: {
           name: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "workspace.failed"
         properties: {
           message: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1818,6 +2298,11 @@ export type GlobalEvent = {
           workspaceID: string
           status: "connected" | "connecting" | "disconnected" | "error"
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
@@ -1826,12 +2311,22 @@ export type GlobalEvent = {
           name: string
           branch?: string
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "worktree.failed"
         properties: {
           message: string
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | {
@@ -1840,12 +2335,22 @@ export type GlobalEvent = {
         properties: {
           [key: string]: unknown
         }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
       }
     | {
         id: string
         type: "global.disposed"
         properties: {
           [key: string]: unknown
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
         }
       }
     | EventServerInstanceDisposed
@@ -2955,6 +3460,12 @@ export type NotFoundError = {
   }
 }
 
+export type SessionBusyError = {
+  _tag: "SessionBusyError"
+  sessionID: string
+  message: string
+}
+
 export type TextPartInput = {
   id?: string
   type: "text"
@@ -3005,12 +3516,6 @@ export type SubtaskPartInput = {
 
 export type EffectHttpApiErrorConflict = {
   _tag: "Conflict"
-}
-
-export type SessionBusyError = {
-  _tag: "SessionBusyError"
-  sessionID: string
-  message: string
 }
 
 export type EventTuiPromptAppend = {
@@ -13495,6 +14000,10 @@ export type SessionSummarizeErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * SessionBusyError
+   */
+  409: SessionBusyError
 }
 
 export type SessionSummarizeError = SessionSummarizeErrors[keyof SessionSummarizeErrors]
@@ -15929,6 +16438,9 @@ export type V2SessionTaskReconcileResponse = V2SessionTaskReconcileResponses[key
 
 export type V2SessionTaskWaitData = {
   body: {
+    /**
+     * Provide 1–32 unique exact Task targets. Copy each task_wait_target from the Task result, or use task_status target and input_id.
+     */
     targets: Array<{
       task_id: string
       invocation: {

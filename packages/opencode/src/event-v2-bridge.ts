@@ -58,7 +58,12 @@ const layer = Layer.effect(
           directory: event.location?.directory ?? ctx?.directory,
           project: ctx?.project.id,
           workspace: workspaceID,
-          payload: { id: event.id, type: event.type, properties: event.data },
+          payload: {
+            id: event.id,
+            type: event.type,
+            properties: event.data,
+            ...(event.durable ? { durable: event.durable } : {}),
+          },
         })
         if (event.durable === undefined) return
         GlobalBus.emit("event", {
