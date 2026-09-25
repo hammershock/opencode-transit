@@ -181,6 +181,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           SessionMessage.Shell.make({
             id: event.data.messageID,
             type: "shell",
+            userMessageID: event.data.userMessageID,
             metadata: event.metadata,
             callID: event.data.callID,
             command: event.data.command,

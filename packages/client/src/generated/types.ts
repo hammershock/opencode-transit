@@ -797,6 +797,7 @@ export type SessionsContextOutput = {
         readonly metadata?: { readonly [x: string]: JsonValue }
         readonly time: { readonly created: number; readonly completed?: number }
         readonly type: "shell"
+        readonly userMessageID?: string
         readonly callID: string
         readonly command: string
         readonly output: string
@@ -1600,6 +1601,7 @@ export type SessionsHistoryOutput = {
           readonly timestamp: number
           readonly sessionID: string
           readonly messageID: string
+          readonly userMessageID?: string
           readonly callID: string
           readonly command: string
         }
@@ -2534,6 +2536,7 @@ export type SessionsEventsOutput =
         readonly timestamp: number
         readonly sessionID: string
         readonly messageID: string
+        readonly userMessageID?: string
         readonly callID: string
         readonly command: string
       }
@@ -3448,6 +3451,7 @@ export type SessionsMessageOutput = {
         readonly metadata?: { readonly [x: string]: JsonValue }
         readonly time: { readonly created: number; readonly completed?: number }
         readonly type: "shell"
+        readonly userMessageID?: string
         readonly callID: string
         readonly command: string
         readonly output: string
@@ -3653,6 +3657,7 @@ export type MessagesListOutput = {
         readonly metadata?: { readonly [x: string]: JsonValue }
         readonly time: { readonly created: number; readonly completed?: number }
         readonly type: "shell"
+        readonly userMessageID?: string
         readonly callID: string
         readonly command: string
         readonly output: string
