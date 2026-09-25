@@ -9,6 +9,7 @@ import { AgentV2 } from "./agent"
 import { SessionV2 } from "./session"
 import { SessionStore } from "./session/store"
 import { Wildcard } from "./util/wildcard"
+import { evaluate, merge } from "./permission/evaluate"
 import { PermissionSaved } from "./permission/saved"
 import { ExecutionPolicy } from "./permission/policy"
 import { SessionPolicyStore } from "./session/policy"
@@ -74,21 +75,7 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Per
 
 export type Error = BlockedError | CorrectedError
 
-export function evaluate(action: string, resource: string, ...rulesets: Permission.Ruleset[]): Permission.Rule {
-  return (
-    rulesets
-      .flat()
-      .findLast((rule) => Wildcard.match(action, rule.action) && Wildcard.match(resource, rule.resource)) ?? {
-      action,
-      resource: "*",
-      effect: "ask",
-    }
-  )
-}
-
-export function merge(...rulesets: Permission.Ruleset[]): Permission.Ruleset {
-  return rulesets.flat()
-}
+export { evaluate, merge }
 
 export interface Interface {
   readonly ask: (

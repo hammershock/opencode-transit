@@ -4,7 +4,7 @@ import { makeLocationNode } from "./effect/app-node"
 import { Context, Effect, Layer, Types } from "effect"
 import { Skill } from "@opencode-ai/schema/skill"
 import { AgentV2 } from "./agent"
-import { PermissionV2 } from "./permission"
+import { evaluate } from "./permission/evaluate"
 import { SkillRegistry } from "./skill/registry"
 import { State } from "./state"
 import { SkillSettings } from "./skill/settings"
@@ -29,7 +29,7 @@ export const Detail = Skill.Detail
 export type Detail = Skill.Detail
 
 export const available = <A extends { readonly name: string }>(skills: ReadonlyArray<A>, agent: AgentV2.Info) =>
-  skills.filter((skill) => PermissionV2.evaluate("skill", skill.name, agent.permissions).effect !== "deny")
+  skills.filter((skill) => evaluate("skill", skill.name, agent.permissions).effect !== "deny")
 
 export function preview(snapshot: Skill.RegistrySnapshot, agent: AgentV2.Info | undefined) {
   const skills = agent ? available(snapshot.skills, agent) : []
