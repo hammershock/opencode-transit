@@ -45,6 +45,7 @@ import { SessionLocationAccess } from "@opencode-ai/core/session/location-access
 import { SessionActivity } from "@opencode-ai/core/session/activity"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { Provider } from "@/provider/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -73,6 +74,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const locationAccess = yield* SessionLocationAccess.Service
     const activity = yield* SessionActivity.Service
     const sessionV2 = yield* SessionV2.Service
+    const execution = yield* SessionExecution.Service
     const commandSvc = yield* Command.Service
     const scope = yield* Scope.Scope
 
@@ -268,6 +270,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* execution.interrupt(ctx.params.sessionID)
       yield* promptSvc.cancel(ctx.params.sessionID)
       return true
     })
