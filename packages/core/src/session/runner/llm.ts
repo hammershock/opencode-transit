@@ -356,7 +356,10 @@ const layer = Layer.effect(
         ? undefined
         : yield* Effect.gen(function* () {
             const snapshot = yield* policy.resolve(session.id, agent.id).pipe(Effect.orDie)
-            return yield* tools.materialize(snapshot.rules, snapshot.ceilings)
+            return yield* tools.materialize(snapshot.rules, [
+              ...snapshot.ceilings,
+              ...(session.parentID ? [[{ action: "slash_command", resource: "*", effect: "deny" as const }]] : []),
+            ])
           })
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const request = LLM.request({
