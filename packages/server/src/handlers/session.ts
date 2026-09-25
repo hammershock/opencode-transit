@@ -638,6 +638,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             operationID: request.headers["x-opencode-interrupt-id"] ?? crypto.randomUUID(),
             actor: { kind: "user", id: "direct_user" },
           }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.provideService(EventV2.Service, events),
+            Effect.provideService(SessionExecution.Service, execution),
             Effect.mapError((error) =>
               error instanceof SessionInterruption.UnknownOrForbidden
                 ? new SessionNotFoundError({ sessionID: ctx.params.sessionID, message: "Session unavailable" })
