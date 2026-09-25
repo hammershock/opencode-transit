@@ -67,6 +67,8 @@ import {
 } from "@opencode-ai/core/session/sql"
 import { SessionLegacyOwner } from "@opencode-ai/core/session/legacy-owner"
 import { SessionPeerMessage } from "@opencode-ai/core/session/peer-message"
+import { SessionAgentGuidance } from "@opencode-ai/core/session/agent-guidance"
+import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { SystemAssembly } from "./system-assembly"
@@ -222,6 +224,7 @@ const layer = Layer.effect(
         cancelRunner: (sessionID: SessionID) => state.cancelRunner(sessionID),
         resolvePromptParts: (template: string, sessionID?: SessionID) => resolvePromptParts(template, sessionID),
         prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
+        admitPeer: (input: Parameters<Interface["admitPeer"]>[0]) => admitPeer(input),
       } satisfies TaskPromptOps
     })
 
@@ -1657,6 +1660,14 @@ const layer = Layer.effect(
               }),
             ])
             const system = [...assembled.system]
+            if ("agent_interact" in tools) {
+              const routes = yield* SessionPeerRoute.list(SessionV2.ID.make(sessionID)).pipe(
+                Effect.provideService(Database.Service, database),
+              )
+              system.push(
+                SessionAgentGuidance.render(routes.filter((route) => route.can_interact).map((route) => route.alias)),
+              )
+            }
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({

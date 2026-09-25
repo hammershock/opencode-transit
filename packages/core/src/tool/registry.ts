@@ -11,6 +11,7 @@ import { Wildcard } from "../util/wildcard"
 import { ApplicationTools } from "./application-tools"
 import {
   definition,
+  modelVisible,
   permission,
   retainsOverflow,
   settle,
@@ -131,7 +132,9 @@ const registryLayer = Layer.effect(
           if ([permissions, ...ceilings].some((rules) => whollyDisabled(permission(registration.tool, name), rules)))
             registrations.delete(name)
         return {
-          definitions: Array.from(registrations, ([name, registration]) => definition(name, registration.tool)),
+          definitions: Array.from(registrations, ([name, registration]) =>
+            modelVisible(registration.tool) ? definition(name, registration.tool) : undefined,
+          ).filter((entry): entry is ToolDefinition => entry !== undefined),
           settle: (input) => {
             const registration = registrations.get(input.call.name)
             if (registration) return settleWith(input, registration.identity)

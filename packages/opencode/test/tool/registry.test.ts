@@ -19,6 +19,16 @@ import { Prompt } from "@opencode-ai/schema/prompt"
 import { SessionTaskTable } from "@opencode-ai/core/session/sql"
 import { eq } from "drizzle-orm"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
+import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
+import { SessionPeerMessage } from "@opencode-ai/core/session/peer-message"
+import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionTask } from "@opencode-ai/core/session/task"
+import {
+  SessionExecutionPauseTable,
+  SessionInterruptionTable,
+  SessionPeerMessageTable,
+} from "@opencode-ai/core/session/sql"
 import { Tool } from "@/tool/tool"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -175,22 +185,201 @@ describe("tool.registry", () => {
     }),
   )
 
-  withTaskBackend.instance("advertises task_status only with a complete enabled backend", () =>
+  withTaskBackend.instance("advertises six Agent tools without duplicate Task controls", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
-      expect(yield* registry.ids()).toContain("task_status")
-      expect(yield* registry.ids()).toContain("task_send")
-      expect(yield* registry.ids()).toContain("task_reconcile")
-      expect(yield* registry.ids()).toContain("task_wait")
-      expect(yield* registry.ids()).toContain("task_interrupt")
-      expect(yield* registry.ids()).toContain("task_stop")
+      const ids = yield* registry.ids()
+      expect(ids).toEqual(
+        expect.arrayContaining([
+          "agent_spawn",
+          "agent_connect",
+          "agent_interact",
+          "agent_inspect",
+          "agent_wait",
+          "agent_interrupt",
+        ]),
+      )
+      expect(ids).not.toContain("task")
+      expect(ids).not.toContain("task_status")
+      expect(ids).not.toContain("task_send")
+      expect(ids).not.toContain("task_wait")
+    }),
+  )
+
+  withTaskBackend.instance("agent_interact records an admitted V2 request under a readable alias", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const source = SessionSchema.ID.create()
+      const target = SessionSchema.ID.create()
+      const now = Date.now()
+      const info = {
+        id: source,
+        slug: "agent-source",
+        projectID: Project.ID.global,
+        directory: process.cwd(),
+        title: "agent source",
+        version: "test",
+        time: { created: now, updated: now },
+      }
+      yield* events.publish(SessionV1.Event.Created, { sessionID: source, info })
+      yield* events.publish(SessionV1.Event.Created, {
+        sessionID: target,
+        info: { ...info, id: target, slug: "agent-target" },
+      })
+      yield* SessionPeerRoute.bind({
+        sourceSessionID: source,
+        targetSessionID: target,
+        alias: "/root/review",
+        origin: { kind: "spawn", id: "agent-tool-test" },
+      })
+      const interact = (yield* registry.all()).find((tool) => tool.id === "agent_interact")
+      expect(interact).toBeDefined()
+      const output = yield* interact!
+        .execute(
+          { target: "/root/review", message: "What is done? Continue afterward." },
+          {
+            sessionID: SessionID.make(source),
+            messageID: MessageID.make("msg_agent_tool"),
+            callID: "call_interact",
+            agent: "build",
+            abort: new AbortController().signal,
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.provide(SessionExecution.noopLayer))
+      expect(output.title).toBe("Interacted with /root/review")
+      expect(JSON.parse(output.output).status).toBe("admitted")
+      const request = yield* database.db.select().from(SessionPeerMessageTable).get()
+      expect(request).toBeDefined()
+      yield* SessionPeerMessage.send({
+        sourceSessionID: target,
+        alias: `/contacts/requester_${source.slice(4, 16)}`,
+        kind: "reply",
+        replyTo: request!.id,
+        text: "Three files reviewed; continuing.",
+        operationID: "agent-tool-reply",
+      }).pipe(Effect.provide(SessionExecution.noopLayer))
+      const wait = (yield* registry.all()).find((tool) => tool.id === "agent_wait")
+      expect(wait).toBeDefined()
+      const waitContext: Tool.Context = {
+        sessionID: SessionID.make(source),
+        messageID: MessageID.make("msg_agent_wait"),
+        callID: "call_wait",
+        agent: "build",
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+      const received = yield* wait!.execute({ aliases: ["/root/review"], timeout_ms: 1000 }, waitContext)
+      expect(JSON.parse(received.output).reason).toBe("reply")
+      expect(JSON.parse(received.output).data.text).toBe("Three files reviewed; continuing.")
+      expect(yield* SessionInput.hasPending(database.db, source, "steer")).toBe(false)
+      const repeated = yield* wait!.execute({ aliases: ["/root/review"], timeout_ms: 10 }, waitContext)
+      expect(JSON.parse(repeated.output).timed_out).toBe(true)
+      yield* database.db
+        .insert(SessionInterruptionTable)
+        .values({
+          operation_id: "user-interrupt-review",
+          session_id: target,
+          backend: "v2",
+          generation: "review-generation",
+          actor_kind: "user",
+          actor_id: "direct-user",
+          state: "interrupted",
+          time_requested: Date.now(),
+          time_settled: Date.now(),
+        })
+        .run()
+      yield* database.db
+        .insert(SessionExecutionPauseTable)
+        .values({
+          session_id: target,
+          operation_id: "user-interrupt-review",
+          time_created: Date.now(),
+        })
+        .run()
+      const inspect = (yield* registry.all()).find((tool) => tool.id === "agent_inspect")
+      expect(inspect).toBeDefined()
+      const observed = yield* inspect!.execute({ alias: "/root/review" }, waitContext)
+      expect(JSON.parse(observed.output).agents[0]).toMatchObject({
+        state: "interrupted",
+        recent_execution: { status: "interrupted", actor: "user" },
+      })
+    }),
+  )
+
+  withTaskBackend.instance("agent_wait claims an already completed Task result once", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const parent = SessionSchema.ID.create()
+      const child = SessionSchema.ID.create()
+      const inputID = SessionMessage.ID.create()
+      const now = Date.now()
+      const info = {
+        id: parent,
+        slug: "wait-parent",
+        projectID: Project.ID.global,
+        directory: process.cwd(),
+        title: "wait parent",
+        version: "test",
+        time: { created: now, updated: now },
+      }
+      yield* events.publish(SessionV1.Event.Created, { sessionID: parent, info })
+      yield* events.publish(SessionV1.Event.Created, {
+        sessionID: child,
+        info: { ...info, id: child, slug: "wait-child", parentID: parent },
+        task: {
+          inputID,
+          rootSessionID: parent,
+          parentSessionID: parent,
+          parentMessageID: "msg_wait_parent",
+          callID: "call_spawn",
+          promptDigest: "digest",
+          childSessionID: child,
+          description: "Review files",
+          agentID: "build",
+          locationRevision: 0,
+          backend: "v2",
+          background: true,
+        },
+        taskInput: { messageID: inputID, prompt: Prompt.make({ text: "Review files" }), delivery: "queue" },
+      })
+      yield* SessionPeerRoute.bind({
+        sourceSessionID: parent,
+        targetSessionID: child,
+        alias: "/root/review",
+        origin: { kind: "spawn", id: "call_spawn" },
+      })
+      yield* SessionTask.settle(database.db, events, { inputID, childSessionID: child, outcome: "completed" })
+      const wait = (yield* registry.all()).find((tool) => tool.id === "agent_wait")
+      expect(wait).toBeDefined()
+      const context: Tool.Context = {
+        sessionID: SessionID.make(parent),
+        messageID: MessageID.make("msg_wait_parent"),
+        callID: "call_wait",
+        agent: "build",
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+      const first = yield* wait!.execute({ aliases: ["/root/review"], timeout_ms: 1000 }, context)
+      expect(JSON.parse(first.output)).toMatchObject({ reason: "completed", alias: "/root/review" })
+      const second = yield* wait!.execute({ aliases: ["/root/review"], timeout_ms: 1000 }, context)
+      expect(JSON.parse(second.output).timed_out).toBe(true)
     }),
   )
 
   withTaskBackend.instance("returns one bounded error for missing and foreign status targets", () =>
     Effect.gen(function* () {
-      const registry = yield* ToolRegistry.Service
-      const status = (yield* registry.all()).find((item) => item.id === "task_status")
+      const status = (yield* (yield* ToolRegistry.Service).named()).taskStatus
       expect(status).toBeDefined()
       const ctx: Tool.Context = {
         sessionID: SessionID.make("ses_status_parent"),
@@ -210,8 +399,7 @@ describe("tool.registry", () => {
 
   withTaskBackend.instance("returns a bounded wait error for an unknown exact child", () =>
     Effect.gen(function* () {
-      const registry = yield* ToolRegistry.Service
-      const wait = (yield* registry.all()).find((item) => item.id === "task_wait")
+      const wait = (yield* (yield* ToolRegistry.Service).named()).taskWait
       expect(wait).toBeDefined()
       const parent = SessionID.make("ses_wait_parent")
       const output = yield* wait!.execute(
@@ -241,8 +429,7 @@ describe("tool.registry", () => {
 
   withTaskBackend.instance("a pre-aborted model Task wait cancels without touching the child", () =>
     Effect.gen(function* () {
-      const registry = yield* ToolRegistry.Service
-      const wait = (yield* registry.all()).find((item) => item.id === "task_wait")
+      const wait = (yield* (yield* ToolRegistry.Service).named()).taskWait
       expect(wait).toBeDefined()
       const parent = SessionID.make("ses_wait_parent")
       const controller = new AbortController()
@@ -274,10 +461,9 @@ describe("tool.registry", () => {
 
   withTaskBackend.instance("an in-flight model Task wait stops on ctx.abort without cancelling its child", () =>
     Effect.gen(function* () {
-      const registry = yield* ToolRegistry.Service
       const events = yield* EventV2.Service
       const database = yield* Database.Service
-      const wait = (yield* registry.all()).find((item) => item.id === "task_wait")
+      const wait = (yield* (yield* ToolRegistry.Service).named()).taskWait
       expect(wait).toBeDefined()
       const parent = SessionSchema.ID.create()
       const child = SessionSchema.ID.create()

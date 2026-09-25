@@ -22,6 +22,14 @@ import { TaskReconcileTool } from "./task-reconcile"
 import { TaskWaitTool } from "./task-wait"
 import { TaskInterruptTool } from "./task-interrupt"
 import { TaskStopTool } from "./task-stop"
+import {
+  AgentSpawnTool,
+  AgentConnectTool,
+  AgentInteractTool,
+  AgentInspectTool,
+  AgentWaitTool,
+  AgentInterruptTool,
+} from "./agent-tools"
 import { SessionTaskCapability } from "@opencode-ai/core/session/task-capability"
 import { taskBackendNode } from "@/effect/task-backend"
 import { ConfigExperimental } from "@opencode-ai/core/config/experimental"
@@ -82,18 +90,29 @@ export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false
 
 type TaskDef = Tool.InferDef<typeof TaskTool>
 type ReadDef = Tool.InferDef<typeof ReadTool>
+type TaskStatusDef = Tool.InferDef<typeof TaskStatusTool>
+type TaskWaitDef = Tool.InferDef<typeof TaskWaitTool>
 
 type State = {
   custom: Tool.Def[]
   builtin: Tool.Def[]
+  legacy: Record<string, Tool.Def>
   task: TaskDef
   read: ReadDef
+  taskStatus: TaskStatusDef
+  taskWait: TaskWaitDef
 }
 
 export interface Interface {
   readonly ids: () => Effect.Effect<string[]>
   readonly all: () => Effect.Effect<Tool.Def[]>
-  readonly named: () => Effect.Effect<{ task: TaskDef; read: ReadDef }>
+  readonly legacy: (name: string) => Effect.Effect<Tool.Def | undefined>
+  readonly named: () => Effect.Effect<{
+    task: TaskDef
+    read: ReadDef
+    taskStatus: TaskStatusDef
+    taskWait: TaskWaitDef
+  }>
   readonly tools: (model: {
     providerID: ProviderV2.ID
     modelID: ModelV2.ID
@@ -129,6 +148,12 @@ const layer = Layer.effect(
     const taskWait = yield* TaskWaitTool
     const taskInterrupt = yield* TaskInterruptTool
     const taskStop = yield* TaskStopTool
+    const agentSpawn = yield* AgentSpawnTool
+    const agentConnect = yield* AgentConnectTool
+    const agentInteract = yield* AgentInteractTool
+    const agentInspect = yield* AgentInspectTool
+    const agentWait = yield* AgentWaitTool
+    const agentInterrupt = yield* AgentInterruptTool
     const read = yield* ReadTool
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
@@ -237,6 +262,7 @@ const layer = Layer.effect(
         const taskStatusEnabled =
           ConfigExperimental.backgroundSubagents(cfg, flags.experimentalBackgroundSubagents) &&
           SessionTaskCapability.evaluate(taskBackend).status === "supported"
+        const agentToolsEnabled = ConfigExperimental.backgroundSubagents(cfg, flags.experimentalBackgroundSubagents)
 
         const tool = yield* Effect.all({
           invalid: Tool.init(invalid),
@@ -253,6 +279,12 @@ const layer = Layer.effect(
           taskWait: Tool.init(taskWait),
           taskInterrupt: Tool.init(taskInterrupt),
           taskStop: Tool.init(taskStop),
+          agentSpawn: Tool.init(agentSpawn),
+          agentConnect: Tool.init(agentConnect),
+          agentInteract: Tool.init(agentInteract),
+          agentInspect: Tool.init(agentInspect),
+          agentWait: Tool.init(agentWait),
+          agentInterrupt: Tool.init(agentInterrupt),
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
           search: Tool.init(websearch),
@@ -266,6 +298,15 @@ const layer = Layer.effect(
 
         return {
           custom,
+          legacy: {
+            task: tool.task,
+            task_status: tool.taskStatus,
+            task_send: tool.taskSend,
+            task_reconcile: tool.taskReconcile,
+            task_wait: tool.taskWait,
+            task_interrupt: tool.taskInterrupt,
+            task_stop: tool.taskStop,
+          },
           builtin: [
             tool.invalid,
             ...(questionEnabled ? [tool.question] : []),
@@ -275,9 +316,18 @@ const layer = Layer.effect(
             tool.grep,
             tool.edit,
             tool.write,
-            tool.task,
-            ...(taskStatusEnabled ? [tool.taskStatus] : []),
-            ...(taskStatusEnabled
+            ...(agentToolsEnabled
+              ? [
+                  tool.agentSpawn,
+                  tool.agentConnect,
+                  tool.agentInteract,
+                  tool.agentInspect,
+                  tool.agentWait,
+                  tool.agentInterrupt,
+                ]
+              : [tool.task]),
+            ...(!agentToolsEnabled && taskStatusEnabled ? [tool.taskStatus] : []),
+            ...(!agentToolsEnabled && taskStatusEnabled
               ? [tool.taskSend, tool.taskReconcile, tool.taskWait, tool.taskInterrupt, tool.taskStop]
               : []),
             tool.fetch,
@@ -291,6 +341,8 @@ const layer = Layer.effect(
           ],
           task: tool.task,
           read: tool.read,
+          taskStatus: tool.taskStatus,
+          taskWait: tool.taskWait,
         }
       }),
     )
@@ -302,6 +354,10 @@ const layer = Layer.effect(
 
     const ids: Interface["ids"] = Effect.fn("ToolRegistry.ids")(function* () {
       return (yield* all()).map((tool) => tool.id)
+    })
+
+    const legacy: Interface["legacy"] = Effect.fn("ToolRegistry.legacy")(function* (name) {
+      return (yield* InstanceState.get(state)).legacy[name]
     })
 
     const describeCodeMode = Effect.fn("ToolRegistry.describeCodeMode")(function* (input: {
@@ -360,7 +416,7 @@ const layer = Layer.effect(
               ? output.jsonSchema
               : undefined
           const catalog =
-            tool.id === TaskTool.id && subagents
+            (tool.id === TaskTool.id || tool.id === AgentSpawnTool.id) && subagents
               ? yield* subagents.resolve({
                   parentAgentID: input.agent.id ?? input.agent.name,
                   sessionID: input.sessionID,
@@ -378,7 +434,7 @@ const layer = Layer.effect(
               ? taskSchema(jsonSchema ?? ToolJsonSchema.fromSchema(output.parameters), catalog)
               : jsonSchema,
             execute:
-              tool.id === TaskTool.id && catalog
+              (tool.id === TaskTool.id || tool.id === AgentSpawnTool.id) && catalog
                 ? (args: Parameters<typeof tool.execute>[0], ctx: Parameters<typeof tool.execute>[1]) =>
                     tool.execute(args, {
                       ...ctx,
@@ -394,10 +450,10 @@ const layer = Layer.effect(
 
     const named: Interface["named"] = Effect.fn("ToolRegistry.named")(function* () {
       const s = yield* InstanceState.get(state)
-      return { task: s.task, read: s.read }
+      return { task: s.task, read: s.read, taskStatus: s.taskStatus, taskWait: s.taskWait }
     })
 
-    return Service.of({ ids, all, named, tools })
+    return Service.of({ ids, all, legacy, named, tools })
   }),
 )
 

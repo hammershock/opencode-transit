@@ -74,6 +74,7 @@ const layer = Layer.mergeAll(
     ToolRegistry.Service.of({
       ids: () => Effect.succeed(["timing"]),
       all: () => Effect.succeed([]),
+      legacy: () => Effect.succeed(undefined),
       named: () => Effect.die("unused"),
       tools: () =>
         Effect.succeed([
@@ -334,6 +335,7 @@ for (const route of ["legacy", "location"] as const) {
           Effect.provideService(ToolRegistry.Service, {
             ids: () => Effect.succeed(["glob"]),
             all: () => Effect.succeed([]),
+            legacy: () => Effect.succeed(undefined),
             named: () => Effect.die("unused"),
             tools: () =>
               Effect.succeed([

@@ -59,6 +59,23 @@ const make = (permission?: string) => {
 }
 
 describe("ToolRegistry", () => {
+  it.effect("keeps command-only adapters callable without advertising them to the model", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register({
+        internal: Tool.make({
+          description: "Internal command adapter",
+          input: Schema.Struct({ text: Schema.String }),
+          output: Schema.Struct({ text: Schema.String }),
+          modelVisible: false,
+          execute: ({ text }) => Effect.succeed({ text }),
+        }),
+      })
+      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).not.toContain("internal")
+      expect(yield* executeTool(service, call("internal"))).toMatchObject({ type: "json", value: { text: "internal" } })
+    }),
+  )
+
   it.effect("filters disabled tools with edit aliases and ordered wildcard precedence", () =>
     Effect.gen(function* () {
       const service = yield* ToolRegistry.Service

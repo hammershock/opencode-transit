@@ -23,7 +23,7 @@ export const waitReply = Effect.fn("SessionPeerWait.waitReply")(function* (input
   const events = yield* EventV2.Service
   const requestIDs =
     input.requestIDs ?? (yield* SessionPeerMessage.openRequests(input.sessionID)).map((item) => item.id)
-  if (requestIDs.length < 1) return { reason: "timeout" as const, timedOut: true }
+  if (requestIDs.length < 1 && input.requestIDs === undefined) return { reason: "timeout" as const, timedOut: true }
   const timeoutMs = input.timeoutMs ?? 30_000
   const started = Date.now()
   return yield* Effect.gen(function* () {
@@ -45,7 +45,9 @@ export const waitReply = Effect.fn("SessionPeerWait.waitReply")(function* (input
       (unsubscribe) => unsubscribe.pipe(Effect.andThen(Queue.shutdown(signals))),
     )
     while (true) {
-      const result = yield* SessionPeerMessage.takeReply({ sessionID: input.sessionID, requestIDs })
+      const result = requestIDs.length
+        ? yield* SessionPeerMessage.takeReply({ sessionID: input.sessionID, requestIDs })
+        : undefined
       if (result)
         return {
           reason: "reply" as const,
@@ -63,7 +65,9 @@ export const waitReply = Effect.fn("SessionPeerWait.waitReply")(function* (input
       if (remaining <= 0) return { reason: "timeout" as const, timedOut: true }
       const next = yield* Queue.take(signals).pipe(Effect.timeoutOption(remaining))
       if (Option.isNone(next)) {
-        const final = yield* SessionPeerMessage.takeReply({ sessionID: input.sessionID, requestIDs })
+        const final = requestIDs.length
+          ? yield* SessionPeerMessage.takeReply({ sessionID: input.sessionID, requestIDs })
+          : undefined
         if (final)
           return {
             reason: "reply" as const,

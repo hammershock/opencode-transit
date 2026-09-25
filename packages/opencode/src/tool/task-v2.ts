@@ -13,6 +13,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { Project } from "@/project/project"
 import { eq } from "drizzle-orm"
+import { SessionAgentTool } from "@opencode-ai/schema/session-agent-tool"
 import { SessionTask } from "@opencode-ai/schema/session-task"
 import { Parameters as TaskSendParameters } from "./task-send"
 import { Parameters as TaskReconcileParameters } from "./task-reconcile"
@@ -38,8 +39,7 @@ const layer = Layer.effectDiscard(
       {
         experimental: (yield* config.entries())
           .filter((entry): entry is Config.Document => entry.type === "document")
-          .findLast((entry) => entry.info.experimental?.background_subagents !== undefined)
-          ?.info.experimental,
+          .findLast((entry) => entry.info.experimental?.background_subagents !== undefined)?.info.experimental,
       },
       flags.experimentalBackgroundSubagents,
     )
@@ -83,7 +83,8 @@ const layer = Layer.effectDiscard(
               if (!owner) return yield* Effect.fail(new ToolFailure({ message: "Task parent unavailable" }))
               return yield* ToolRegistry.Service.use((registry) =>
                 Effect.gen(function* () {
-                  const definition = (yield* registry.all()).find((item) => item.id === name)
+                  const definition =
+                    (yield* registry.all()).find((item) => item.id === name) ?? (yield* registry.legacy(name))
                   if (!definition) return yield* Effect.fail(new ToolFailure({ message: "Task control unsupported" }))
                   return yield* definition.execute(input, {
                     sessionID: context.sessionID,
@@ -110,12 +111,17 @@ const layer = Layer.effectDiscard(
             }),
             { signal },
           ),
-        ).pipe(Effect.flatMap((exit) => (Exit.isFailure(exit) ? Effect.failCause(exit.cause) : Effect.succeed(exit.value))))
+        ).pipe(
+          Effect.flatMap((exit) => (Exit.isFailure(exit) ? Effect.failCause(exit.cause) : Effect.succeed(exit.value))),
+        )
         if (name === "task_wait") {
           if (result.output === "task_wait_invalid_request")
-            return yield* Effect.fail(new ToolFailure({
-              message: "task_wait_invalid_request: provide 1–32 unique exact task_wait_target values and timeout_ms between 1 and 120000",
-            }))
+            return yield* Effect.fail(
+              new ToolFailure({
+                message:
+                  "task_wait_invalid_request: provide 1–32 unique exact task_wait_target values and timeout_ms between 1 and 120000",
+              }),
+            )
           if (result.output === "task_unknown_or_forbidden" || result.output === "task_wait_unavailable")
             return yield* Effect.fail(new ToolFailure({ message: result.output }))
         }
@@ -130,47 +136,94 @@ const layer = Layer.effectDiscard(
         task: Tool.make({
           description:
             "Launch or resume a subagent. Set background=true to continue while the child runs; the parent receives one completion notification.",
+          modelVisible: !controlsEnabled,
           input: Parameters,
           output: Schema.String,
           execute: (input, context) => execute("task", input, context, [input.subagent_type]),
         }),
-        ...(controlsEnabled ? { task_status: Tool.make({
-          description: "Read direct child Task state and invocation history without waking the child.",
-          input: SessionTask.StatusRequest,
-          output: Schema.String,
-          execute: (input, context) => execute("task_status", input, context),
-        }),
-        task_send: Tool.make({
-          description: "Steer one exact running direct child Task and return its durable receipt.",
-          input: TaskSendParameters,
-          output: Schema.String,
-          execute: (input, context) => execute("task_send", input, context),
-        }),
-        task_reconcile: Tool.make({
-          description: "Explicitly resume or cancel one frozen direct child Task input.",
-          input: TaskReconcileParameters,
-          output: Schema.String,
-          execute: (input, context) => execute("task_reconcile", input, context),
-        }),
-        task_wait: Tool.make({
-          description:
-            "Wait for exact direct child invocations or parent input without cancelling child work. Copy each task_wait_target from the Task result into targets. timeout_ms defaults to 30000 and must be 1–120000.",
-          input: SessionTask.WaitRequest,
-          output: Schema.String,
-          execute: (input, context) => execute("task_wait", input, context),
-        }),
-        task_interrupt: Tool.make({
-          description: "Interrupt one exact direct child Task invocation.",
-          input: TaskInterruptParameters,
-          output: Schema.String,
-          execute: (input, context) => execute("task_interrupt", input, context),
-        }),
-        task_stop: Tool.make({
-          description: "Stop the current and pending snapshot of one direct child Task with stable call identity.",
-          input: TaskStopParameters,
-          output: Schema.String,
-          execute: (input, context) => execute("task_stop", input, context),
-        }) } : {}),
+        ...(controlsEnabled
+          ? {
+              task_status: Tool.make({
+                description: "Legacy direct child Task status adapter.",
+                modelVisible: false,
+                input: SessionTask.StatusRequest,
+                output: Schema.String,
+                execute: (input, context) => execute("task_status", input, context),
+              }),
+              task_send: Tool.make({
+                description: "Legacy direct child Task steer adapter.",
+                modelVisible: false,
+                input: TaskSendParameters,
+                output: Schema.String,
+                execute: (input, context) => execute("task_send", input, context),
+              }),
+              task_reconcile: Tool.make({
+                description: "Legacy direct child Task reconcile adapter.",
+                modelVisible: false,
+                input: TaskReconcileParameters,
+                output: Schema.String,
+                execute: (input, context) => execute("task_reconcile", input, context),
+              }),
+              task_wait: Tool.make({
+                description: "Legacy exact Task wait adapter.",
+                modelVisible: false,
+                input: SessionTask.WaitRequest,
+                output: Schema.String,
+                execute: (input, context) => execute("task_wait", input, context),
+              }),
+              task_interrupt: Tool.make({
+                description: "Legacy exact Task interruption adapter.",
+                modelVisible: false,
+                input: TaskInterruptParameters,
+                output: Schema.String,
+                execute: (input, context) => execute("task_interrupt", input, context),
+              }),
+              task_stop: Tool.make({
+                description: "Legacy direct child Task stop adapter.",
+                modelVisible: false,
+                input: TaskStopParameters,
+                output: Schema.String,
+                execute: (input, context) => execute("task_stop", input, context),
+              }),
+              agent_spawn: Tool.make({
+                description: "Start an Agent under a clear alias; return promptly. Use agent_wait for results.",
+                input: SessionAgentTool.Spawn,
+                output: Schema.String,
+                execute: (input, context) => execute("agent_spawn", input, context, [input.subagent_type]),
+              }),
+              agent_connect: Tool.make({
+                description: "Connect an alias to a Session ID supplied by the user; does not send work.",
+                input: SessionAgentTool.Connect,
+                output: Schema.String,
+                execute: (input, context) => execute("agent_connect", input, context),
+              }),
+              agent_interact: Tool.make({
+                description:
+                  "Ask another Agent for actual progress and tell it to continue its work, or send a reply or notice.",
+                input: SessionAgentTool.Interact,
+                output: Schema.String,
+                execute: (input, context) => execute("agent_interact", input, context),
+              }),
+              agent_inspect: Tool.make({
+                description: "Observe running state and tool activity without asking for task progress.",
+                input: SessionAgentTool.Inspect,
+                output: Schema.String,
+                execute: (input, context) => execute("agent_inspect", input, context),
+              }),
+              agent_wait: Tool.make({
+                description: "Wait for a reply or completion without interrupting the Agent; timeout_ms is 1–120000.",
+                input: SessionAgentTool.Wait,
+                output: Schema.String,
+                execute: (input, context) => execute("agent_wait", input, context),
+              }),
+              agent_interrupt: Tool.make({
+                description: "Interrupt the Agent's current execution and keep its Session available.",
+                input: SessionAgentTool.Interrupt,
+                output: Schema.String,
+                execute: (input, context) => execute("agent_interrupt", input, context),
+              }),
+            }
+          : {}),
       })
       .pipe(Effect.orDie)
   }),
@@ -179,7 +232,14 @@ const layer = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "tool/task-v2",
   layer,
-  deps: [CoreToolRegistry.toolsNode, PermissionV2.node, Config.node, RuntimeFlags.node, AgentV2.node, RuntimeContext.node],
+  deps: [
+    CoreToolRegistry.toolsNode,
+    PermissionV2.node,
+    Config.node,
+    RuntimeFlags.node,
+    AgentV2.node,
+    RuntimeContext.node,
+  ],
 })
 
 export * as TaskV2Tool from "./task-v2"
