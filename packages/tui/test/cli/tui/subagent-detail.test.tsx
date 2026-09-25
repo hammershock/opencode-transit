@@ -240,6 +240,97 @@ test("opening a running Task follows new child output past the initial message w
     }
     expect(setup.captureCharFrame()).toContain("child step 25")
 
+    api?.keymap.dispatchCommand("session.parent")
+    const orderDeadline = Date.now() + 5_000
+    while (!setup.captureCharFrame().includes("Inspect child") && Date.now() < orderDeadline) {
+      await setup.renderOnce()
+      await Bun.sleep(10)
+    }
+    events.emit({
+      directory,
+      project: "project",
+      payload: {
+        id: "evt_parent_old_user",
+        type: "session.next.prompted",
+        durable: { aggregateID: "parent", seq: 1, version: 1 },
+        properties: {
+          sessionID: "parent",
+          messageID: "msg_old_user",
+          timestamp: 40,
+          prompt: { text: "Old request" },
+          delivery: "steer",
+        },
+      },
+    })
+    events.emit({
+      directory,
+      project: "project",
+      payload: {
+        id: "evt_parent_new_steer",
+        type: "session.next.prompted",
+        durable: { aggregateID: "parent", seq: 53, version: 1 },
+        properties: {
+          sessionID: "parent",
+          messageID: "msg_new_steer",
+          timestamp: 53,
+          prompt: { text: "New steer request" },
+          delivery: "steer",
+        },
+      },
+    })
+    events.emit({
+      directory,
+      project: "project",
+      payload: {
+        id: "evt_parent_old_assistant",
+        type: "session.next.step.started",
+        durable: { aggregateID: "parent", seq: 46, version: 1 },
+        properties: {
+          sessionID: "parent",
+          assistantMessageID: "msg_old_assistant",
+          timestamp: 60,
+          agent: "build",
+          model: { id: "model", providerID: "test" },
+        },
+      },
+    })
+    events.emit({
+      directory,
+      project: "project",
+      payload: {
+        id: "evt_parent_old_text_started",
+        type: "session.next.text.started",
+        durable: { aggregateID: "parent", seq: 47, version: 1 },
+        properties: { sessionID: "parent", assistantMessageID: "msg_old_assistant", timestamp: 60, textID: "text-old" },
+      },
+    })
+    events.emit({
+      directory,
+      project: "project",
+      payload: {
+        id: "evt_parent_old_text_ended",
+        type: "session.next.text.ended",
+        durable: { aggregateID: "parent", seq: 48, version: 1 },
+        properties: {
+          sessionID: "parent",
+          assistantMessageID: "msg_old_assistant",
+          timestamp: 60,
+          textID: "text-old",
+          text: "Older assistant output",
+        },
+      },
+    })
+    const steerDeadline = Date.now() + 5_000
+    while (!setup.captureCharFrame().includes("New steer request") && Date.now() < steerDeadline) {
+      await setup.renderOnce()
+      await Bun.sleep(10)
+    }
+    const orderLines = setup.captureCharFrame().split("\n")
+    expect(orderLines.findIndex((line) => line.includes("Older assistant output"))).toBeGreaterThanOrEqual(0)
+    expect(orderLines.findIndex((line) => line.includes("New steer request"))).toBeGreaterThan(
+      orderLines.findIndex((line) => line.includes("Older assistant output")),
+    )
+
     process.emit("SIGHUP")
     await task
   } finally {
