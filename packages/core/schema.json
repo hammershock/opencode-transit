@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "35369528-4bec-43c5-bb9a-81de454fa975",
+  "id": "2ec13ad9-f4ee-43cd-baf6-9fcea4c2c60c",
   "prevIds": [
-    "294a6d29-46dd-458b-87b3-b2f1c6c7a4a2"
+    "fdfaeae0-e78e-4319-82f6-25e4b65cbfe9"
   ],
   "ddl": [
     {
@@ -80,6 +80,14 @@
     },
     {
       "name": "session_message",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_peer_route",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_peer_user_message",
       "entityType": "tables"
     },
     {
@@ -1265,6 +1273,126 @@
       "name": "data",
       "entityType": "columns",
       "table": "session_message"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_session_id",
+      "entityType": "columns",
+      "table": "session_peer_route"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "alias",
+      "entityType": "columns",
+      "table": "session_peer_route"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_session_id",
+      "entityType": "columns",
+      "table": "session_peer_route"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin_kind",
+      "entityType": "columns",
+      "table": "session_peer_route"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin_id",
+      "entityType": "columns",
+      "table": "session_peer_route"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "true",
+      "generated": null,
+      "name": "can_inspect",
+      "entityType": "columns",
+      "table": "session_peer_route"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "true",
+      "generated": null,
+      "name": "can_interact",
+      "entityType": "columns",
+      "table": "session_peer_route"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "can_interrupt",
+      "entityType": "columns",
+      "table": "session_peer_route"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_peer_route"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_peer_user_message"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "message_id",
+      "entityType": "columns",
+      "table": "session_peer_user_message"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_peer_user_message"
     },
     {
       "type": "text",
@@ -2718,6 +2846,51 @@
     },
     {
       "columns": [
+        "source_session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_peer_route_source_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_peer_route"
+    },
+    {
+      "columns": [
+        "target_session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_peer_route_target_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_peer_route"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_peer_user_message_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_peer_user_message"
+    },
+    {
+      "columns": [
         "session_id"
       ],
       "tableTo": "session",
@@ -2922,6 +3095,26 @@
       "name": "project_directory_pk",
       "entityType": "pks",
       "table": "project_directory"
+    },
+    {
+      "columns": [
+        "source_session_id",
+        "alias"
+      ],
+      "nameExplicit": false,
+      "name": "session_peer_route_pk",
+      "entityType": "pks",
+      "table": "session_peer_route"
+    },
+    {
+      "columns": [
+        "session_id",
+        "message_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_peer_user_message_pk",
+      "entityType": "pks",
+      "table": "session_peer_user_message"
     },
     {
       "columns": [
@@ -3411,6 +3604,20 @@
       "name": "session_message_time_created_idx",
       "entityType": "indexes",
       "table": "session_message"
+    },
+    {
+      "columns": [
+        {
+          "value": "target_session_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_peer_route_target_idx",
+      "entityType": "indexes",
+      "table": "session_peer_route"
     },
     {
       "columns": [

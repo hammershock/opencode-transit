@@ -80,6 +80,46 @@ export const SessionTable = sqliteTable(
   ],
 )
 
+/** A route grants only the capabilities recorded here; parent_id is historical provenance. */
+export const SessionPeerRouteTable = sqliteTable(
+  "session_peer_route",
+  {
+    source_session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    alias: text().notNull(),
+    target_session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    origin_kind: text().$type<"spawn" | "user_message" | "user_selection" | "legacy">().notNull(),
+    origin_id: text().notNull(),
+    can_inspect: integer({ mode: "boolean" }).notNull().default(true),
+    can_interact: integer({ mode: "boolean" }).notNull().default(true),
+    can_interrupt: integer({ mode: "boolean" }).notNull().default(false),
+    time_created: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.source_session_id, table.alias] }),
+    index("session_peer_route_target_idx").on(table.target_session_id),
+  ],
+)
+
+/** Only an authenticated user entry point can record this provenance. */
+export const SessionPeerUserMessageTable = sqliteTable(
+  "session_peer_user_message",
+  {
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    message_id: text().notNull(),
+    time_created: integer().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.session_id, table.message_id] })],
+)
+
 export const MessageTable = sqliteTable(
   "message",
   {
@@ -162,7 +202,12 @@ export const SessionInputTable = sqliteTable(
       .references(() => SessionTable.id, { onDelete: "cascade" }),
     prompt: text({ mode: "json" }).notNull().$type<(typeof Prompt)["Encoded"]>(),
     delivery: text().$type<SessionInput.Delivery>().notNull(),
-    origin: text({ mode: "json" }).$type<{ kind: "delegation_result"; invocationInputID: string; terminalEventID: string; version: 1 }>(),
+    origin: text({ mode: "json" }).$type<{
+      kind: "delegation_result"
+      invocationInputID: string
+      terminalEventID: string
+      version: 1
+    }>(),
     admitted_seq: integer().notNull(),
     promoted_seq: integer(),
     time_created: integer()
@@ -239,7 +284,9 @@ export const SessionTaskDeletionTable = sqliteTable("session_task_deletion", {
 export const SessionTaskResultTable = sqliteTable("session_task_result", {
   invocation_input_id: text().primaryKey(),
   root_session_id: text().notNull(),
-  parent_session_id: text().notNull().references(() => SessionTable.id, { onDelete: "cascade" }),
+  parent_session_id: text()
+    .notNull()
+    .references(() => SessionTable.id, { onDelete: "cascade" }),
   child_session_id: text().notNull(),
   terminal_event_id: text().notNull(),
   outcome: text().$type<"completed" | "failed" | "cancelled">().notNull(),
@@ -253,7 +300,9 @@ export const SessionTaskResultTable = sqliteTable("session_task_result", {
 export const SessionTaskWakeRevocationTable = sqliteTable("session_task_wake_revocation", {
   invocation_input_id: text().primaryKey(),
   root_session_id: text().notNull(),
-  parent_session_id: text().notNull().references(() => SessionTable.id, { onDelete: "cascade" }),
+  parent_session_id: text()
+    .notNull()
+    .references(() => SessionTable.id, { onDelete: "cascade" }),
   stop_event_id: text().notNull(),
 })
 

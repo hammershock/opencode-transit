@@ -31,34 +31,38 @@ export const CHILD_PENDING_LIMIT = 16
 export const ROOT_PENDING_LIMIT = 64
 
 export function deletionPredicate(sessionID: string) {
-  return or(eq(SessionTaskTable.parent_session_id, sessionID), eq(SessionTaskTable.root_session_id, sessionID))
+  return eq(SessionTaskTable.child_session_id, SessionSchema.ID.make(sessionID))
 }
 
-/** Both local Deleted projection and SyncControl tombstones clear Task facts identically. */
+/** Deletion clears the Session's own work while preserving work in other Sessions. */
 export const deleteProjectionForSession = Effect.fn("SessionTask.deleteProjectionForSession")(function* (
   db: Pick<DB, "delete" | "select">,
   sessionID: string,
 ) {
-  const notifications = yield* db.select({ id: SessionTaskResultTable.notification_input_id })
+  const notifications = yield* db
+    .select({ id: SessionTaskResultTable.notification_input_id })
     .from(SessionTaskResultTable)
-    .where(or(eq(SessionTaskResultTable.root_session_id, sessionID), eq(SessionTaskResultTable.parent_session_id, sessionID)))
-    .all().pipe(Effect.orDie)
+    .where(eq(SessionTaskResultTable.parent_session_id, sessionID))
+    .all()
+    .pipe(Effect.orDie)
   if (notifications.length) {
     const ids = notifications.map((row) => SessionMessage.ID.make(row.id))
     yield* db.delete(SessionMessageTable).where(inArray(SessionMessageTable.id, ids)).run().pipe(Effect.orDie)
     yield* db.delete(SessionInputTable).where(inArray(SessionInputTable.id, ids)).run().pipe(Effect.orDie)
   }
-  yield* db.delete(SessionTaskResultTable)
-    .where(or(eq(SessionTaskResultTable.root_session_id, sessionID), eq(SessionTaskResultTable.parent_session_id, sessionID)))
-    .run().pipe(Effect.orDie)
-  yield* db.delete(SessionTaskWakeRevocationTable)
-    .where(or(eq(SessionTaskWakeRevocationTable.root_session_id, sessionID), eq(SessionTaskWakeRevocationTable.parent_session_id, sessionID)))
-    .run().pipe(Effect.orDie)
+  yield* db
+    .delete(SessionTaskResultTable)
+    .where(eq(SessionTaskResultTable.parent_session_id, sessionID))
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .delete(SessionTaskWakeRevocationTable)
+    .where(eq(SessionTaskWakeRevocationTable.parent_session_id, sessionID))
+    .run()
+    .pipe(Effect.orDie)
   yield* db
     .delete(SessionTaskStopTable)
-    .where(
-      or(eq(SessionTaskStopTable.parent_session_id, sessionID), eq(SessionTaskStopTable.root_session_id, sessionID)),
-    )
+    .where(eq(SessionTaskStopTable.child_session_id, SessionSchema.ID.make(sessionID)))
     .run()
     .pipe(Effect.orDie)
   yield* db.delete(SessionTaskTable).where(deletionPredicate(sessionID)).run().pipe(Effect.orDie)
@@ -565,8 +569,13 @@ export const projectSettled = Effect.fn("SessionTask.projectSettled")(function* 
   if (!previous) return
   if (previous.child_session_id !== input.childSessionID) return yield* Effect.die(new AdmissionConflict())
   if (previous.state === "settled") {
-    if (previous.outcome !== input.outcome || previous.result_message_id !== (input.resultMessageID ?? null) ||
-        (input.terminalEventID !== undefined && previous.terminal_event_id !== null && previous.terminal_event_id !== input.terminalEventID))
+    if (
+      previous.outcome !== input.outcome ||
+      previous.result_message_id !== (input.resultMessageID ?? null) ||
+      (input.terminalEventID !== undefined &&
+        previous.terminal_event_id !== null &&
+        previous.terminal_event_id !== input.terminalEventID)
+    )
       return yield* Effect.die(new AdmissionConflict())
     return
   }
@@ -756,7 +765,12 @@ export const projectReconciled = Effect.fn("SessionTask.projectReconciled")(func
       disposition_actor_id: input.actorID,
       disposition_time: input.timestamp,
       ...(input.disposition === "cancel_pending"
-        ? { state: "settled", outcome: "cancelled", time_settled: input.timestamp, terminal_event_id: input.terminalEventID }
+        ? {
+            state: "settled",
+            outcome: "cancelled",
+            time_settled: input.timestamp,
+            terminal_event_id: input.terminalEventID,
+          }
         : {}),
     })
     .where(eq(SessionTaskTable.input_id, input.inputID))
