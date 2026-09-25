@@ -159,6 +159,7 @@ export const PeerMessageSent = Event.define({
     backend: Schema.Literals(["v1", "v2"]),
     queued: Schema.Boolean,
     resume: Schema.Boolean,
+    activityWaitCallID: Schema.String.pipe(optional),
   },
 })
 export type PeerMessageSent = typeof PeerMessageSent.Type
@@ -195,6 +196,7 @@ export const DelegationResultRecorded = Event.define({
     summary: Schema.String,
     notificationInputID: SessionMessage.ID,
     notify: Schema.Boolean,
+    activityWaitCallID: Schema.String.pipe(optional),
     version: Schema.Literal(1),
   },
 })

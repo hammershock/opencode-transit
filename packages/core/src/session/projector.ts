@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector"
 
-import { and, desc, eq, gt, gte, inArray, isNull, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, isNull, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -22,6 +22,9 @@ import {
   SessionInputTable,
   SessionMessageTable,
   SessionPeerMessageTable,
+  SessionPeerRouteTable,
+  SessionAgentActivityTable,
+  SessionInterruptionTable,
   SessionTable,
 } from "./sql"
 import { AbsolutePath, type DeepMutable } from "../schema"
@@ -637,7 +640,48 @@ const layer = Layer.effectDiscard(
           .pipe(Effect.orDie)
       }),
     )
-    yield* events.project(SessionEvent.DelegationResultRecorded, (event) => SessionTaskResult.project(db, event))
+    yield* events.project(SessionEvent.DelegationResultRecorded, (event) =>
+      Effect.gen(function* () {
+        yield* SessionTaskResult.project(db, event)
+        if (!event.durable) return yield* Effect.die("Missing durable delegation sequence")
+        const task = yield* db
+          .select({ created: SessionTaskTable.time_created })
+          .from(SessionTaskTable)
+          .where(eq(SessionTaskTable.input_id, event.data.invocationInputID))
+          .get()
+          .pipe(Effect.orDie)
+        const interruption =
+          event.data.outcome === "cancelled" && task
+            ? yield* db
+                .select({ actor: SessionInterruptionTable.actor_kind })
+                .from(SessionInterruptionTable)
+                .where(
+                  and(
+                    eq(SessionInterruptionTable.session_id, event.data.childSessionID),
+                    eq(SessionInterruptionTable.state, "interrupted"),
+                    gte(SessionInterruptionTable.time_settled, task.created),
+                  ),
+                )
+                .orderBy(desc(SessionInterruptionTable.time_settled))
+                .get()
+                .pipe(Effect.orDie)
+            : undefined
+        yield* recordAgentActivity(db, {
+          eventID: event.id,
+          sessionID: event.data.sessionID,
+          seq: event.durable.seq,
+          subjectSessionID: event.data.childSessionID,
+          kind:
+            event.data.outcome === "completed"
+              ? "completed"
+              : event.data.outcome === "cancelled"
+                ? "interrupted"
+                : "failed",
+          actor: interruption?.actor,
+          waitCallID: event.data.activityWaitCallID,
+        })
+      }),
+    )
     yield* events.project(SessionEvent.PeerMessageSent, (event) =>
       Effect.gen(function* () {
         const inserted = yield* db
@@ -661,13 +705,25 @@ const layer = Layer.effectDiscard(
           .get()
           .pipe(Effect.orDie)
         if (!inserted) {
-          const prior = yield* db.select().from(SessionPeerMessageTable)
-            .where(eq(SessionPeerMessageTable.operation_id, event.data.operationID)).get().pipe(Effect.orDie)
-          if (!prior || prior.id !== event.data.messageID || prior.target_session_id !== event.data.sessionID ||
-            prior.source_session_id !== event.data.sourceSessionID || prior.alias !== event.data.alias ||
-            prior.text !== event.data.text || prior.kind !== event.data.kind ||
-            prior.request_id !== (event.data.requestID ?? null) || prior.backend !== event.data.backend ||
-            prior.queued !== event.data.queued || prior.resume !== event.data.resume)
+          const prior = yield* db
+            .select()
+            .from(SessionPeerMessageTable)
+            .where(eq(SessionPeerMessageTable.operation_id, event.data.operationID))
+            .get()
+            .pipe(Effect.orDie)
+          if (
+            !prior ||
+            prior.id !== event.data.messageID ||
+            prior.target_session_id !== event.data.sessionID ||
+            prior.source_session_id !== event.data.sourceSessionID ||
+            prior.alias !== event.data.alias ||
+            prior.text !== event.data.text ||
+            prior.kind !== event.data.kind ||
+            prior.request_id !== (event.data.requestID ?? null) ||
+            prior.backend !== event.data.backend ||
+            prior.queued !== event.data.queued ||
+            prior.resume !== event.data.resume
+          )
             return yield* Effect.die("Conflicting peer message projection")
         }
         if (event.data.kind === "reply" && event.data.requestID)
@@ -706,6 +762,17 @@ const layer = Layer.effectDiscard(
               .where(eq(SessionPeerMessageTable.id, event.data.messageID))
               .run()
               .pipe(Effect.orDie)
+        }
+        if (event.data.kind !== "request") {
+          if (!event.durable) return yield* Effect.die("Missing durable peer sequence")
+          yield* recordAgentActivity(db, {
+            eventID: event.id,
+            sessionID: event.data.sessionID,
+            seq: event.durable.seq,
+            subjectSessionID: event.data.sourceSessionID,
+            kind: event.data.kind,
+            waitCallID: event.data.activityWaitCallID,
+          })
         }
       }),
     )
@@ -839,5 +906,55 @@ const layer = Layer.effectDiscard(
     )
   }),
 )
+
+function recordAgentActivity(
+  db: DatabaseService,
+  input: {
+    eventID: string
+    sessionID: SessionSchema.ID
+    seq: number
+    subjectSessionID: SessionSchema.ID
+    kind: "reply" | "notice" | "completed" | "failed" | "interrupted"
+    actor?: "user" | "agent" | "system" | "unknown"
+    waitCallID?: string
+  },
+) {
+  return Effect.gen(function* () {
+    const receiver = yield* db
+      .select({ id: SessionTable.id })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, input.sessionID))
+      .get()
+      .pipe(Effect.orDie)
+    if (!receiver) return
+    const route = yield* db
+      .select({ alias: SessionPeerRouteTable.alias })
+      .from(SessionPeerRouteTable)
+      .where(
+        and(
+          eq(SessionPeerRouteTable.source_session_id, input.sessionID),
+          eq(SessionPeerRouteTable.target_session_id, input.subjectSessionID),
+        ),
+      )
+      .orderBy(asc(SessionPeerRouteTable.time_created))
+      .get()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionAgentActivityTable)
+      .values({
+        event_id: input.eventID,
+        session_id: input.sessionID,
+        seq: input.seq,
+        kind: input.kind,
+        subject_session_id: input.subjectSessionID,
+        alias: route?.alias ?? "/contacts/unknown",
+        wait_call_id: input.waitCallID ?? null,
+        actor_kind: input.actor ?? null,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+  })
+}
 
 export const node = makeGlobalNode({ name: "session-projector", layer, deps: [EventV2.node, Database.node] })

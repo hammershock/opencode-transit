@@ -1,5 +1,6 @@
 import { Session } from "@opencode-ai/schema/session"
 import { SessionMessage } from "@opencode-ai/schema/session-message"
+import { SessionAgentActivity } from "@opencode-ai/schema/session-agent-activity"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { InvalidCursorError, SessionNotFoundError, UnknownError } from "../errors"
@@ -22,6 +23,29 @@ export const SessionMessagesQuery = Schema.Struct({
 }).annotate({ identifier: "SessionMessagesQuery" })
 
 export const MessageGroup = HttpApiGroup.make("server.message")
+  .add(
+    HttpApiEndpoint.get("session.activity", "/api/session/:sessionID/activity", {
+      params: { sessionID: Session.ID },
+      query: Schema.Struct({
+        after: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(-1))),
+        limit: Schema.optional(
+          Schema.NumberFromString.check(
+            Schema.isInt(),
+            Schema.isGreaterThanOrEqualTo(1),
+            Schema.isLessThanOrEqualTo(500),
+          ),
+        ),
+      }),
+      success: SessionAgentActivity.Page,
+      error: [SessionNotFoundError, UnknownError],
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "v2.session.activity",
+        summary: "Get ordered Agent activity",
+        description: "Read safe Agent activity and message anchors in receiver Session sequence order.",
+      }),
+    ),
+  )
   .add(
     HttpApiEndpoint.get("session.messages", "/api/session/:sessionID/message", {
       params: { sessionID: Session.ID },

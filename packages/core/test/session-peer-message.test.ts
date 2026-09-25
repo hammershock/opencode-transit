@@ -18,9 +18,10 @@ import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionPeerMessage } from "@opencode-ai/core/session/peer-message"
 import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
 import { SessionPeerWait } from "@opencode-ai/core/session/peer-wait"
+import { SessionAgentWaitOwner } from "@opencode-ai/core/session/agent-wait-owner"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
-import { SessionExecutionPauseTable, SessionPeerMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionAgentActivityTable, SessionAgentWaitTable, SessionExecutionPauseTable, SessionPeerMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionProjector.node])))
@@ -164,6 +165,15 @@ describe("SessionPeerMessage", () => {
         timeoutMs: 1000,
       }).pipe(Effect.forkChild)
       yield* Effect.yieldNow
+      yield* db.insert(SessionAgentWaitTable).values({
+        id: `${source}:wait-progress`,
+        call_id: "wait-progress",
+        session_id: source,
+        targets: [target],
+        state: "active",
+        time_created: Date.now(),
+      }).run().pipe(Effect.orDie)
+      SessionAgentWaitOwner.start(`${source}:wait-progress`)
       const reply = yield* SessionPeerMessage.send({
         sourceSessionID: target,
         alias: replyAlias,
@@ -171,6 +181,11 @@ describe("SessionPeerMessage", () => {
         text: "7/20 done. Continuing.",
         operationID: "reply-1",
       }).pipe(Effect.provideService(SessionExecution.Service, execution))
+      expect((yield* db.select().from(SessionAgentActivityTable)
+        .where(eq(SessionAgentActivityTable.session_id, source)).get())?.wait_call_id).toBe("wait-progress")
+      SessionAgentWaitOwner.finish(`${source}:wait-progress`)
+      yield* db.update(SessionAgentWaitTable).set({ state: "finished", time_finished: Date.now() })
+        .where(eq(SessionAgentWaitTable.id, `${source}:wait-progress`)).run().pipe(Effect.orDie)
       expect(reply.request_id).toBe(request.id)
       expect(
         (yield* db.select().from(SessionPeerMessageTable).where(eq(SessionPeerMessageTable.id, request.id)).get())

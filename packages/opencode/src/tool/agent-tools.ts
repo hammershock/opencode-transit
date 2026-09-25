@@ -6,9 +6,11 @@ import { SessionLegacyOwner } from "@opencode-ai/core/session/legacy-owner"
 import { SessionPeerMessage } from "@opencode-ai/core/session/peer-message"
 import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
 import { SessionPeerWait } from "@opencode-ai/core/session/peer-wait"
+import { SessionAgentWaitOwner } from "@opencode-ai/core/session/agent-wait-owner"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
 import {
   SessionExecutionPauseTable,
+  SessionAgentWaitTable,
   SessionInterruptionTable,
   SessionPeerMessageTable,
   SessionPeerReceiptTable,
@@ -141,7 +143,10 @@ export const AgentConnectTool = Tool.define(
               origin: { kind: "user_message", id },
             }).pipe(Effect.exit)
             if (Exit.isSuccess(bound))
-              return receipt(`Connected ${input.alias}`, { alias: input.alias, status: "connected" })
+              return {
+                ...receipt(`Connected ${input.alias}`, { alias: input.alias, status: "connected" }),
+                metadata: { targetSessionID: input.session_id },
+              }
           }
           return receipt("Agent connect unavailable", { status: "unknown_or_forbidden" })
         }).pipe(
@@ -203,14 +208,18 @@ export const AgentInteractTool = Tool.define(
             Effect.provideService(EventV2.Service, events),
             Effect.provideService(SessionExecution.Service, execution),
           )
-          return receipt(`Interacted with ${input.target}`, {
-            alias: input.target,
-            status: row.delivery,
-            reason: row.failure_reason,
-            message_id: row.id,
-            request_id: row.request_id,
-            queued: row.queued,
-          })
+          return {
+            ...receipt(`Interacted with ${input.target}`, {
+              alias: input.target,
+              session_id: row.target_session_id,
+              status: row.delivery,
+              reason: row.failure_reason,
+              message_id: row.id,
+              request_id: row.request_id,
+              queued: row.queued,
+            }),
+            metadata: { targetSessionID: row.target_session_id },
+          }
         }).pipe(Effect.catchCause((cause) => failure("Agent interaction unavailable", cause))),
     }
   }),
@@ -505,6 +514,29 @@ export const AgentWaitTool = Tool.define(
             : undefined
           if (!replies && !completions)
             return receipt("Finished waiting", { reason: "timeout", timed_out: true, completed: [] })
+          if (!ctx.callID) return receipt("Agent wait unavailable", { reason: "invalid_operation" })
+          const callID = ctx.callID
+          const waitID = `${ctx.sessionID}:${ctx.callID}`
+          const registered = yield* SessionAgentWaitOwner.withReceiver(ctx.sessionID)(
+            Effect.gen(function* () {
+              const row = yield* database.db
+                .insert(SessionAgentWaitTable)
+                .values({
+                  id: waitID,
+                  call_id: callID,
+                  session_id: SessionSchema.ID.make(ctx.sessionID),
+                  targets: routes.map((route) => route.target_session_id),
+                  state: "active",
+                  time_created: Date.now(),
+                })
+                .onConflictDoNothing()
+                .returning({ id: SessionAgentWaitTable.id })
+                .get()
+              if (row) SessionAgentWaitOwner.start(waitID)
+              return row
+            }),
+          )
+          if (!registered) return receipt("Finished waiting", { reason: "already_finished", completed: [] })
           const waiting = replies && completions ? Effect.raceFirst(replies, completions) : (replies ?? completions!)
           const aborted = Effect.callback<"aborted">((resume) => {
             if (ctx.abort.aborted) return resume(Effect.succeed("aborted"))
@@ -512,15 +544,28 @@ export const AgentWaitTool = Tool.define(
             ctx.abort.addEventListener("abort", handler, { once: true })
             return Effect.sync(() => ctx.abort.removeEventListener("abort", handler))
           })
-          const result = yield* Effect.raceFirst(waiting, aborted)
-          if (result === "aborted") return receipt("Finished waiting", { reason: "interrupted", completed: [] })
-          if (result.kind === "task") {
-            const completed = yield* takeCompletion
-            if (completed) return receipt("Agent wait", completed)
-          }
-          return receipt(
-            result.kind === "reply" && result.result.reason === "timeout" ? "Finished waiting" : "Agent wait",
-            result.result,
+          return yield* Effect.gen(function* () {
+            const result = yield* Effect.raceFirst(waiting, aborted)
+            if (result === "aborted") return receipt("Finished waiting", { reason: "interrupted", completed: [] })
+            if (result.kind === "task") {
+              const completed = yield* takeCompletion
+              if (completed) return receipt("Agent wait", completed)
+            }
+            return receipt(
+              result.kind === "reply" && result.result.reason === "timeout" ? "Finished waiting" : "Agent wait",
+              result.result,
+            )
+          }).pipe(
+            Effect.ensuring(
+              SessionAgentWaitOwner.withReceiver(ctx.sessionID)(
+                database.db
+                  .update(SessionAgentWaitTable)
+                  .set({ state: "finished", time_finished: Date.now() })
+                  .where(eq(SessionAgentWaitTable.id, waitID))
+                  .run()
+                  .pipe(Effect.orDie, Effect.ensuring(Effect.sync(() => SessionAgentWaitOwner.finish(waitID)))),
+              ),
+            ),
           )
         }).pipe(
           Effect.provideService(Database.Service, database),
@@ -559,14 +604,17 @@ export const AgentInterruptTool = Tool.define(
             ? request.pipe(Effect.provideService(SessionExecution.Service, execution))
             : request
           const status = result?.state ?? "unconfirmed"
-          return receipt(
-            status === "interrupted"
-              ? `Interrupted ${input.alias}`
-              : status === "idle"
-                ? `Idle ${input.alias}`
-                : `Interrupting ${input.alias}`,
-            { alias: input.alias, status, actor: "agent" },
-          )
+          return {
+            ...receipt(
+              status === "interrupted"
+                ? `Interrupted ${input.alias}`
+                : status === "idle"
+                  ? `Idle ${input.alias}`
+                  : `Interrupting ${input.alias}`,
+              { alias: input.alias, session_id: route.target_session_id, status, actor: "agent" },
+            ),
+            metadata: { targetSessionID: route.target_session_id },
+          }
         }).pipe(
           Effect.provideService(Database.Service, database),
           Effect.provideService(EventV2.Service, events),

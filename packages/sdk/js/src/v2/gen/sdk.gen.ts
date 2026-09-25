@@ -446,6 +446,8 @@ import type {
   V2SessionActivateResponses,
   V2SessionActiveErrors,
   V2SessionActiveResponses,
+  V2SessionActivityErrors,
+  V2SessionActivityResponses,
   V2SessionCompactErrors,
   V2SessionCompactResponses,
   V2SessionContextErrors,
@@ -6562,6 +6564,38 @@ export class Session3 extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<V2SessionMessageResponses, V2SessionMessageErrors, ThrowOnError>({
       url: "/api/session/{sessionID}/message/{messageID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get ordered Agent activity
+   *
+   * Read safe Agent activity and message anchors in receiver Session sequence order.
+   */
+  public activity<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      after?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "after" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<V2SessionActivityResponses, V2SessionActivityErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/activity",
       ...options,
       ...params,
     })

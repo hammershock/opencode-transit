@@ -62,5 +62,6 @@ export const migrations = (
     import("./migration/20260925184358_agent-user-provenance"),
     import("./migration/20260925190406_session-interruption"),
     import("./migration/20260925194641_session-peer-message"),
+    import("./migration/20260925213602_session-agent-activity"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

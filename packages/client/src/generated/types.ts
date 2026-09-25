@@ -1716,6 +1716,7 @@ export type SessionsHistoryOutput = {
           readonly backend: "v1" | "v2"
           readonly queued: boolean
           readonly resume: boolean
+          readonly activityWaitCallID?: string
         }
       }
     | {
@@ -1767,6 +1768,7 @@ export type SessionsHistoryOutput = {
           readonly summary: string
           readonly notificationInputID: string
           readonly notify: boolean
+          readonly activityWaitCallID?: string
           readonly version: 1
         }
       }
@@ -2970,6 +2972,7 @@ export type SessionsEventsOutput =
         readonly backend: "v1" | "v2"
         readonly queued: boolean
         readonly resume: boolean
+        readonly activityWaitCallID?: string
       }
     }
   | {
@@ -3021,6 +3024,7 @@ export type SessionsEventsOutput =
         readonly summary: string
         readonly notificationInputID: string
         readonly notify: boolean
+        readonly activityWaitCallID?: string
         readonly version: 1
       }
     }
@@ -4244,6 +4248,26 @@ export type SessionsMessageOutput = {
         readonly time: { readonly created: number }
       }
 }["data"]
+
+export type MessagesActivityInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly after?: { readonly after?: number | undefined; readonly limit?: number | undefined }["after"]
+  readonly limit?: { readonly after?: number | undefined; readonly limit?: number | undefined }["limit"]
+}
+
+export type MessagesActivityOutput = {
+  readonly activities: ReadonlyArray<{
+    readonly id: string
+    readonly seq: number
+    readonly kind: "reply" | "notice" | "completed" | "failed" | "interrupted"
+    readonly alias: string
+    readonly sessionID: string
+    readonly waitCallID: string | null
+    readonly actor: "user" | "agent" | "system" | "unknown" | null
+  }>
+  readonly anchors: ReadonlyArray<{ readonly id: string; readonly seq: number }>
+  readonly next: number | null
+}
 
 export type MessagesListInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]

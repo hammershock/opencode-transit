@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { createSignal, For, Show } from "solid-js"
 import type { BoxRenderable, ScrollBoxRenderable } from "@opentui/core"
 import { testRender, type JSX } from "@opentui/solid"
+import { AgentTimeline } from "../../../src/util/agent-timeline"
 import {
   formatCompletedSubagentDetail,
   formatSubagentRetry,
@@ -120,6 +121,34 @@ function TaskRowsFixture() {
       <InlineToolRow icon="→" complete={true} pending="">
         Read src/cli/cmd/tui/routes/session/index.tsx
       </InlineToolRow>
+    </box>
+  )
+}
+
+function AgentRowsFixture(props: { width: number }) {
+  const alias = "/root/sleep_loop"
+  return (
+    <box flexDirection="column" width={props.width}>
+      <InlineToolRow icon="•" complete={true} pending="" separate={true}>
+        {AgentTimeline.toolText({ tool: "agent_spawn", alias, width: props.width, started: true })}
+      </InlineToolRow>
+      <InlineToolRow icon="•" complete={true} pending="" separate={true}>
+        {AgentTimeline.toolText({ tool: "agent_wait", alias, width: props.width, reason: "timeout" })}
+      </InlineToolRow>
+      <InlineToolRow icon="•" complete={true} pending="" separate={true}>
+        {AgentTimeline.toolText({ tool: "agent_interact", alias, width: props.width, status: "admitted" })}
+      </InlineToolRow>
+      <InlineToolRow icon="•" complete={true} pending="" separate={true}>
+        {AgentTimeline.toolText({
+          tool: "agent_wait",
+          alias,
+          width: props.width,
+          events: [{ kind: "reply", alias, actor: null }],
+        })}
+      </InlineToolRow>
+      <box paddingLeft={3} marginTop={1}>
+        <text>• {AgentTimeline.label("completed")} `{alias}`</text>
+      </box>
     </box>
   )
 }
@@ -314,6 +343,13 @@ describe("TUI inline tool wrapping", () => {
   test("separates a task row from a preceding inline detail", async () => {
     expect(await renderFrame(() => <LoadedReadBeforeTaskFixture />, { width: 72, height: 8 })).toMatchSnapshot()
   })
+
+  for (const width of [48, 72, 112])
+    test(`keeps Agent activity order at ${width} columns`, async () => {
+      const frame = await renderFrame(() => <AgentRowsFixture width={width} />, { width, height: 16 })
+      expect(frame).toMatchSnapshot()
+      expect(frame).not.toContain("Private progress text")
+    })
 
   test("separates an inline row from the previous assistant summary", async () => {
     expect(await renderFrame(() => <AssistantSummaryBeforeInlineFixture />, { width: 72, height: 5 })).toMatchSnapshot()

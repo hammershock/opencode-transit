@@ -99,6 +99,19 @@ const outcome = await AppRuntime.runPromise(
                 rows: [],
                 legacyMessages: (yield* db.select({ id: MessageTable.id }).from(MessageTable).where(eq(MessageTable.session_id, parent.id)).all()).length,
                 messages: yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, parent.id)).all(),
+                activity: process.env.TASK_V2_TEST_ACTIVITY === "true" && http
+                  ? yield* Effect.promise(async () => {
+                      const response = await http.handler(
+                        new Request(`http://localhost/api/session/${parent.id}/activity?after=-1&limit=500`, {
+                          headers: { "x-opencode-directory": directory },
+                        }),
+                        Context.empty() as Context.Context<unknown>,
+                      )
+                      const body = await response.json()
+                      if (response.status !== 200) throw new Error(`HTTP activity failed: ${response.status} ${JSON.stringify(body)}`)
+                      return body
+                    })
+                  : undefined,
               }
             yield* Effect.sleep(Duration.millis(50))
           }
