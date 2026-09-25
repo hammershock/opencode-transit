@@ -101,6 +101,7 @@ export type PromptProps = {
   readOnly?: boolean
   onSubmit?: () => void
   onPromptSubmit?: () => void
+  onPromptAccepted?: (sessionID: string) => void | Promise<void>
   shellCompletionGeneration?: number
   commandHost?: {
     (input: string, source?: "slash" | "palette" | "keybind"): Promise<TuiCommandDispatch>
@@ -1489,6 +1490,7 @@ export function Prompt(props: PromptProps) {
               { throwOnError: true },
             )
           })()
+      if (v2Prompt) void request.then(() => props.onPromptAccepted?.(sessionID)).catch(() => undefined)
       if (admissionSignature) {
         try {
           await request

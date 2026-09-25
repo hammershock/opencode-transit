@@ -16,6 +16,18 @@ import type { PromptInfo, SkillMentionPart } from "../prompt/history"
 export const SESSION_MESSAGE_LIMIT = 100
 export const SESSION_RENDER_MESSAGE_LIMIT = 20
 
+export function reconcileCanonicalMessageSnapshot(
+  current: readonly SessionMessage[],
+  snapshot: readonly SessionMessage[],
+  eventsDuringFetch: boolean,
+) {
+  if (!eventsDuringFetch) return snapshot.slice(0, SESSION_MESSAGE_LIMIT)
+  const live = new Set(current.map((message) => message.id))
+  return [...current, ...snapshot.filter((message) => !live.has(message.id))]
+    .toSorted((left, right) => right.time.created - left.time.created || right.id.localeCompare(left.id))
+    .slice(0, SESSION_MESSAGE_LIMIT)
+}
+
 export function sessionMessageWindow<T extends { id: string }>(
   messages: readonly T[],
   focusID?: string,

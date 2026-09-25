@@ -5,6 +5,7 @@ import {
   commitCanonicalRevert,
   mergeCanonicalSessionMessages,
   projectCanonicalSessionMessages,
+  reconcileCanonicalMessageSnapshot,
   restoreCanonicalPrompt,
   sessionMessageWindow,
 } from "../../src/util/session-message"
@@ -232,4 +233,19 @@ describe("sessionMessageWindow", () => {
     expect(visible.at(-1)?.id).toBe("msg-20")
     expect(visible.some((message) => message.id === "msg-139")).toBe(false)
   })
+})
+
+test("a delayed history refresh preserves prompts and assistant updates received live", () => {
+  const old = { id: "old", type: "user", text: "old", time: { created: 1 } } as SessionMessage
+  const prompt = { id: "prompt", type: "user", text: "new", time: { created: 2 } } as SessionMessage
+  const live = {
+    id: "assistant",
+    type: "assistant",
+    content: [{ type: "text", id: "text", text: "complete" }],
+    time: { created: 3, completed: 4 },
+  } as SessionMessage
+  const stale = { ...live, content: [] } as SessionMessage
+
+  expect(reconcileCanonicalMessageSnapshot([live, prompt], [stale, old], true)).toEqual([live, prompt, old])
+  expect(reconcileCanonicalMessageSnapshot([live, prompt], [stale, old], false)).toEqual([stale, old])
 })
