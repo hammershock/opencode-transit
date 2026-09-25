@@ -93,7 +93,8 @@ test.each([false, true])("production V2 parent executes Task with default HTTP h
       const line = stdout.split("\n").find((item) => item.startsWith("TASK_V2_PARENT_RESULT:"))
       expect(line).toBeDefined()
       const result = JSON.parse(line!.slice("TASK_V2_PARENT_RESULT:".length)) as {
-        rows: Array<{ backend: string; state: string }>
+        parent: string
+        rows: Array<{ backend: string; state: string; child: string }>
         legacyMessages: number
         contextParts: Array<{ key: string; text: string }>
       }
@@ -108,8 +109,24 @@ test.each([false, true])("production V2 parent executes Task with default HTTP h
         '"name":"slash_command"',
       )
       expect(definitions).toContain("<available-subagents>")
+      expect(definitions).toContain("task_wait_target")
+      expect(definitions).toContain("120000")
       expect(result.contextParts.find((part) => part.key === "subagents")?.text).toContain("<available-subagents>")
       expect(result.contextParts.find((part) => part.key === "available-targets")?.text).toContain("<available-targets>")
+      const toolResult = hits.flatMap((hit) =>
+        Array.isArray(hit.body.messages)
+          ? (hit.body.messages as Array<{ role?: string; content?: string }>).filter((message) => message.role === "tool")
+          : [],
+      ).find((message) => message.content?.includes("<task_wait_target>"))?.content
+      expect(toolResult).toBeDefined()
+      const target = JSON.parse(toolResult!.match(/<task_wait_target>(.*?)<\/task_wait_target>/)?.[1] ?? "null")
+      expect(target).toMatchObject({
+        task_id: result.rows[0]?.child,
+        invocation: { parent_session_id: result.parent },
+      })
+      expect(target.input_id).toStartWith("msg_")
+      expect(target.invocation.parent_message_id).toStartWith("msg_")
+      expect(target.invocation.call_id).toBeTruthy()
       for (const name of [
         "task",
         "task_status",
@@ -121,6 +138,55 @@ test.each([false, true])("production V2 parent executes Task with default HTTP h
       ])
         expect(definitions).toContain(`"name":"${name}"`)
       expect(definitions).not.toContain('"name":"archive_unknown"')
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
+  )
+}, 60_000)
+
+test("production V2 task_wait reports an invalid request as a failed tool call with repair guidance", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const temp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true, config: testProviderConfig(llm.url) })),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      yield* llm.toolMatch(
+        (hit) => JSON.stringify(hit.body).includes("PARENT_WAIT_INVALID_MARKER"),
+        "task_wait",
+        { targets: [], timeout_ms: 120_000 },
+      )
+      yield* llm.textMatch((hit) => JSON.stringify(hit.body).includes('"name":"task_wait"'), "wait request corrected")
+      const child = Bun.spawn([process.execPath, "test/fixture/task-v2-parent-process.ts"], {
+        cwd: import.meta.dir + "/../..",
+        env: {
+          ...process.env,
+          OPENCODE_DB: `${temp.path}/task-v2-wait-invalid.sqlite`,
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            experimental: { background_subagents: true },
+          }),
+          TASK_V2_TEST_DIRECTORY: temp.path,
+          TASK_V2_TEST_LLM_URL: llm.url,
+          TASK_V2_TEST_CONTROL: "wait-invalid",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const [stdout, stderr, code] = yield* Effect.promise(() =>
+        Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
+      )
+      expect(code, stderr.slice(0, 4_096)).toBe(0)
+      expect(stdout).toContain("TASK_V2_PARENT_RESULT:")
+      const line = stdout.split("\n").find((item) => item.startsWith("TASK_V2_PARENT_RESULT:"))
+      const session = JSON.parse(line!.slice("TASK_V2_PARENT_RESULT:".length)) as {
+        messages: Array<{ data: { type: string; content?: Array<{ type: string; name?: string; state?: { status: string } }> } }>
+      }
+      expect(session.messages.flatMap((message) => message.data.content ?? []).find((part) => part.name === "task_wait")?.state?.status).toBe("error")
+      const hits = yield* llm.hits
+      const request = hits[1]?.body as { messages?: Array<{ role: string; content?: string }> }
+      const result = request.messages?.find((message) => message.role === "tool")
+      expect(result?.content).toContain("task_wait_invalid_request")
+      expect(result?.content).toContain("1–32 unique exact task_wait_target values")
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
   )
 }, 60_000)

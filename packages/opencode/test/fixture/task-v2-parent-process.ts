@@ -58,7 +58,9 @@ const outcome = await AppRuntime.runPromise(
             draft.model.update(model.providerID, model.id, () => {})
           }),
         ).pipe(Effect.provide(locations.get(location)))
-        const text = process.env.TASK_V2_TEST_CONTROL === "status" ? "PARENT_STATUS_MARKER" : "PARENT_TASK_MARKER"
+        const text = process.env.TASK_V2_TEST_CONTROL === "status" ? "PARENT_STATUS_MARKER"
+          : process.env.TASK_V2_TEST_CONTROL === "wait-invalid" ? "PARENT_WAIT_INVALID_MARKER"
+          : "PARENT_TASK_MARKER"
         const admitted = process.env.TASK_V2_TEST_COMMAND === "true" && http
           ? yield* Effect.promise(async () => {
               const response = await http.handler(
@@ -89,7 +91,7 @@ const outcome = await AppRuntime.runPromise(
             })
           : yield* session.prompt({ sessionID: parent.id, prompt: { text } })
         const db = (yield* Database.Service).db
-        if (process.env.TASK_V2_TEST_CONTROL === "status") {
+        if (process.env.TASK_V2_TEST_CONTROL === "status" || process.env.TASK_V2_TEST_CONTROL === "wait-invalid") {
           for (let attempt = 0; attempt < 240; attempt++) {
             if (yield* SessionInput.isSettled(db, parent.id, admitted.id))
               return {
@@ -100,7 +102,7 @@ const outcome = await AppRuntime.runPromise(
               }
             yield* Effect.sleep(Duration.millis(50))
           }
-          return yield* Effect.die("V2 parent status call never settled")
+          return yield* Effect.die("V2 parent control call never settled")
         }
         for (let attempt = 0; attempt < (process.env.TASK_V2_TEST_SETTLE === "true" ? 1200 : 240); attempt++) {
           const rows = yield* db

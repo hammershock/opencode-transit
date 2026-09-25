@@ -46,9 +46,13 @@ export const ReconcileReceipt = Schema.Struct({
 })
 
 export const WaitRequest = Schema.Struct({
-  targets: Schema.Array(ExactTarget),
+  targets: Schema.Array(ExactTarget).annotate({
+    description: "Provide 1–32 unique exact Task targets. Copy each task_wait_target from the Task result, or use task_status target and input_id.",
+  }),
   until: Schema.optional(Schema.Literals(["terminal", "change"])),
-  timeout_ms: Schema.optional(Schema.Int),
+  timeout_ms: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 120_000 }))).annotate({
+    description: "Wait duration in milliseconds, 1–120000. Defaults to 30000 when omitted.",
+  }),
 })
 
 export const View = Schema.Struct({
