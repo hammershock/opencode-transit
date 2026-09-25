@@ -158,6 +158,12 @@ function decode(file: { directory: string; filepath: string; primary: boolean },
     .replaceAll("\\", "/")
     .replace(/^(agent|agents|mode|modes)\//, "")
     .replace(/\.md$/, "")
+  // Legacy definition files written by the subagent manager (for example
+  // `.subagent-<id>-<hash>.md`) store their stable identity in the frontmatter
+  // `id`; the filename is only a storage artifact. The V1 loader keys agents by
+  // that `id`, so mirror it here to keep the V2 catalog and the Task tool
+  // resolving the same identity from the same file.
+  const id = typeof markdown.data.id === "string" && markdown.data.id.trim() !== "" ? markdown.data.id : name
   const body = markdown.content.trim()
   const legacy = Object.keys(markdown.data).some((key) => !agentKeys.has(key))
   const agent = Option.getOrUndefined(
@@ -171,7 +177,7 @@ function decode(file: { directory: string; filepath: string; primary: boolean },
   if (!agent) return
   const info = Option.getOrUndefined(
     decodeConfig({
-      agents: { [name]: file.primary ? { ...agent, mode: "primary" } : agent },
+      agents: { [id]: file.primary ? { ...agent, mode: "primary" } : agent },
     }),
   )
   if (!info) return
