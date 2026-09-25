@@ -101,11 +101,14 @@ test.skipIf(!binary)("packaged TUI keeps a background Task inspectable and the p
           }) as { id: string }
           await request(`/api/session/${created.id}/prompt`, { prompt: { text: "TUI_PARENT_START" } })
           const database = new Database(environment.OPENCODE_DB, { readonly: true })
-          let output = ""
+          const screen = new Terminal({ cols: 110, rows: 36, allowProposedApi: true })
           const terminal = new Bun.Terminal({
             cols: 110,
             rows: 36,
-            data(_terminal, data) { output += new TextDecoder().decode(data) },
+            data(_terminal, data) {
+              const chunk = new TextDecoder().decode(data)
+              screen.write(chunk)
+            },
           })
           const tui = Bun.spawn([binary!, "attach", base, "--dir", project.path, "--session", created.id], {
             cwd: project.path,
@@ -114,8 +117,7 @@ test.skipIf(!binary)("packaged TUI keeps a background Task inspectable and the p
             stderr: "pipe",
           })
           const visible = async () => {
-            const screen = new Terminal({ cols: 110, rows: 36, allowProposedApi: true })
-            await new Promise<void>((resolve) => screen.write(output, resolve))
+            await new Promise<void>((resolve) => screen.write("", resolve))
             return Array.from({ length: 36 }, (_, row) => screen.buffer.active.getLine(row)?.translateToString(true) ?? "").join("\n")
           }
           try {
@@ -125,6 +127,12 @@ test.skipIf(!binary)("packaged TUI keeps a background Task inspectable and the p
             }, "child active")
             await waitFor(async () => (await visible()).includes("active · observed") ? true : undefined, "live Task status")
             expect(await visible()).toContain("inspect live child")
+            const row = (await visible()).split("\n").findIndex((line) => line.includes("inspect live child"))
+            expect(row).toBeGreaterThanOrEqual(0)
+            terminal.write(`\x1b[<0;20;${row + 1}M\x1b[<0;20;${row + 1}m`)
+            await waitFor(async () => (await visible()).includes("Opened from task: inspect live child") ? true : undefined, "child navigation")
+            terminal.write("\x1b[A")
+            await waitFor(async () => (await visible()).includes("Parent acknowledged background work") ? true : undefined, "return to parent")
 
             releaseChild()
             await waitFor(async () => {
