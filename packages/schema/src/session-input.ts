@@ -7,6 +7,7 @@ import { DateTimeUtcFromMillis, NonNegativeInt } from "./schema"
 import { SessionDelivery } from "./session-delivery"
 import { SessionID } from "./session-id"
 import { SessionMessage } from "./session-message"
+import { SessionInputOrigin } from "./session-input-origin"
 
 export const Delivery = SessionDelivery.Delivery
 export type Delivery = SessionDelivery.Delivery
@@ -20,10 +21,5 @@ export const Admitted = Schema.Struct({
   delivery: Delivery,
   timeCreated: DateTimeUtcFromMillis,
   promotedSeq: NonNegativeInt.pipe(optional),
-  origin: Schema.Struct({
-    kind: Schema.Literal("delegation_result"),
-    invocationInputID: Schema.String,
-    terminalEventID: Schema.String,
-    version: Schema.Literal(1),
-  }).pipe(optional),
+  origin: SessionInputOrigin.Origin.pipe(optional),
 }).annotate({ identifier: "SessionInput.Admitted" })

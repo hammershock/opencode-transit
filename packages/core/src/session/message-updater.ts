@@ -141,6 +141,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.next.message.forked": (event) => adapter.appendMessage(event.data.message),
       "session.next.prompt.admitted": () => Effect.void,
+      "session.next.peer.message.sent": () => Effect.void,
+      "session.next.legacy.user.input": () => Effect.void,
       "session.next.title.generated": () => Effect.void,
       "session.next.delegation.result.recorded": () => Effect.void,
       "session.next.delegation.wake.revoked": () => Effect.void,

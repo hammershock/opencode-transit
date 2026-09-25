@@ -24,6 +24,8 @@ export type Event =
   | EventSessionNextPrompted
   | EventSessionNextMessageForked
   | EventSessionNextPromptAdmitted
+  | EventSessionNextPeerMessageSent
+  | EventSessionNextLegacyUserInput
   | EventSessionNextTitleGenerated
   | EventSessionNextDelegationResultRecorded
   | EventSessionNextDelegationWakeRevoked
@@ -1030,12 +1032,7 @@ export type GlobalEvent = {
           messageID: string
           prompt: Prompt
           delivery: "steer" | "queue"
-          origin?: {
-            kind: "delegation_result"
-            invocationInputID: string
-            terminalEventID: string
-            version: 1
-          }
+          origin?: SessionInputOrigin
         }
         durable?: {
           aggregateID: string
@@ -1066,6 +1063,7 @@ export type GlobalEvent = {
           messageID: string
           prompt: Prompt
           delivery: "steer" | "queue"
+          origin?: SessionInputOrigin
           task?:
             | {
                 kind: "invocation"
@@ -1090,6 +1088,43 @@ export type GlobalEvent = {
                 operationID: string
                 promptDigest: string
               }
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
+      }
+    | {
+        id: string
+        type: "session.next.peer.message.sent"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+          sourceSessionID: string
+          operationID: string
+          alias: string
+          kind: "request" | "reply" | "notice"
+          requestID?: string
+          text: string
+          backend: "v1" | "v2"
+          queued: boolean
+          resume: boolean
+        }
+        durable?: {
+          aggregateID: string
+          seq: number
+          version: number
+        }
+      }
+    | {
+        id: string
+        type: "session.next.legacy.user.input"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
         }
         durable?: {
           aggregateID: string
@@ -2369,6 +2404,8 @@ export type GlobalEvent = {
     | SyncEventSessionNextPrompted
     | SyncEventSessionNextMessageForked
     | SyncEventSessionNextPromptAdmitted
+    | SyncEventSessionNextPeerMessageSent
+    | SyncEventSessionNextLegacyUserInput
     | SyncEventSessionNextTitleGenerated
     | SyncEventSessionNextDelegationResultRecorded
     | SyncEventSessionNextDelegationWakeRevoked
@@ -3670,6 +3707,8 @@ export type SessionDurableEvent =
   | SessionNextPrompted
   | SessionNextMessageForked
   | SessionNextPromptAdmitted
+  | SessionNextPeerMessageSent
+  | SessionNextLegacyUserInput
   | SessionNextTitleGenerated
   | SessionNextDelegationResultRecorded
   | SessionNextDelegationWakeRevoked
@@ -3812,6 +3851,8 @@ export type V2Event =
   | SessionNextPrompted
   | SessionNextMessageForked
   | SessionNextPromptAdmitted
+  | SessionNextPeerMessageSent
+  | SessionNextLegacyUserInput
   | SessionNextTitleGenerated
   | SessionNextDelegationResultRecorded
   | SessionNextDelegationWakeRevoked
@@ -4135,6 +4176,22 @@ export type ModelContextGeneration = {
   sources: ModelContextSourceState
 }
 
+export type SessionInputOrigin =
+  | {
+      kind: "delegation_result"
+      invocationInputID: string
+      terminalEventID: string
+      version: 1
+    }
+  | {
+      kind: "peer_message"
+      sourceSessionID: string
+      alias: string
+      messageKind: "request" | "reply" | "notice"
+      requestID?: string
+      version: 1
+    }
+
 export type SessionMessageAgentSwitched = {
   id: string
   metadata?: {
@@ -4172,12 +4229,7 @@ export type SessionMessageUser = {
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillInvocation>
   type: "user"
-  origin?: {
-    kind: "delegation_result"
-    invocationInputID: string
-    terminalEventID: string
-    version: 1
-  }
+  origin?: SessionInputOrigin
 }
 
 export type SessionMessageSynthetic = {
@@ -4716,12 +4768,7 @@ export type SyncEventSessionNextPrompted = {
       messageID: string
       prompt: Prompt
       delivery: "steer" | "queue"
-      origin?: {
-        kind: "delegation_result"
-        invocationInputID: string
-        terminalEventID: string
-        version: 1
-      }
+      origin?: SessionInputOrigin
     }
   }
 }
@@ -4756,6 +4803,7 @@ export type SyncEventSessionNextPromptAdmitted = {
       messageID: string
       prompt: Prompt
       delivery: "steer" | "queue"
+      origin?: SessionInputOrigin
       task?:
         | {
             kind: "invocation"
@@ -4780,6 +4828,47 @@ export type SyncEventSessionNextPromptAdmitted = {
             operationID: string
             promptDigest: string
           }
+    }
+  }
+}
+
+export type SyncEventSessionNextPeerMessageSent = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.peer.message.sent.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+      sourceSessionID: string
+      operationID: string
+      alias: string
+      kind: "request" | "reply" | "notice"
+      requestID?: string
+      text: string
+      backend: "v1" | "v2"
+      queued: boolean
+      resume: boolean
+    }
+  }
+}
+
+export type SyncEventSessionNextLegacyUserInput = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.legacy.user.input.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
     }
   }
 }
@@ -5488,12 +5577,7 @@ export type SessionInputAdmitted = {
   delivery: "steer" | "queue"
   timeCreated: number
   promotedSeq?: number
-  origin?: {
-    kind: "delegation_result"
-    invocationInputID: string
-    terminalEventID: string
-    version: 1
-  }
+  origin?: SessionInputOrigin
 }
 
 export type SkillAdmittedIdentity = {
@@ -5622,12 +5706,7 @@ export type SessionNextPrompted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
-    origin?: {
-      kind: "delegation_result"
-      invocationInputID: string
-      terminalEventID: string
-      version: 1
-    }
+    origin?: SessionInputOrigin
   }
 }
 
@@ -5668,6 +5747,7 @@ export type SessionNextPromptAdmitted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    origin?: SessionInputOrigin
     task?:
       | {
           kind: "invocation"
@@ -5692,6 +5772,53 @@ export type SessionNextPromptAdmitted = {
           operationID: string
           promptDigest: string
         }
+  }
+}
+
+export type SessionNextPeerMessageSent = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.peer.message.sent"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    sourceSessionID: string
+    operationID: string
+    alias: string
+    kind: "request" | "reply" | "notice"
+    requestID?: string
+    text: string
+    backend: "v1" | "v2"
+    queued: boolean
+    resume: boolean
+  }
+}
+
+export type SessionNextLegacyUserInput = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.legacy.user.input"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    messageID: string
   }
 }
 
@@ -8532,12 +8659,7 @@ export type EventSessionNextPrompted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
-    origin?: {
-      kind: "delegation_result"
-      invocationInputID: string
-      terminalEventID: string
-      version: 1
-    }
+    origin?: SessionInputOrigin
   }
 }
 
@@ -8560,6 +8682,7 @@ export type EventSessionNextPromptAdmitted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue"
+    origin?: SessionInputOrigin
     task?:
       | {
           kind: "invocation"
@@ -8584,6 +8707,35 @@ export type EventSessionNextPromptAdmitted = {
           operationID: string
           promptDigest: string
         }
+  }
+}
+
+export type EventSessionNextPeerMessageSent = {
+  id: string
+  type: "session.next.peer.message.sent"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    sourceSessionID: string
+    operationID: string
+    alias: string
+    kind: "request" | "reply" | "notice"
+    requestID?: string
+    text: string
+    backend: "v1" | "v2"
+    queued: boolean
+    resume: boolean
+  }
+}
+
+export type EventSessionNextLegacyUserInput = {
+  id: string
+  type: "session.next.legacy.user.input"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
   }
 }
 

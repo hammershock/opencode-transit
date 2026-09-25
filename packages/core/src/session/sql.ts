@@ -93,7 +93,7 @@ export const SessionPeerRouteTable = sqliteTable(
       .$type<SessionSchema.ID>()
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
-    origin_kind: text().$type<"spawn" | "user_message" | "user_selection" | "legacy">().notNull(),
+    origin_kind: text().$type<"spawn" | "user_message" | "user_selection" | "legacy" | "peer_reply">().notNull(),
     origin_id: text().notNull(),
     can_inspect: integer({ mode: "boolean" }).notNull().default(true),
     can_interact: integer({ mode: "boolean" }).notNull().default(true),
@@ -119,6 +119,42 @@ export const SessionPeerUserMessageTable = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.session_id, table.message_id] })],
 )
+
+/** A durable peer envelope is separate from the recipient's native v1/v2 transcript. */
+export const SessionPeerMessageTable = sqliteTable(
+  "session_peer_message",
+  {
+    id: text().primaryKey(),
+    operation_id: text().notNull().unique(),
+    source_session_id: text().$type<SessionSchema.ID>().notNull(),
+    target_session_id: text().$type<SessionSchema.ID>().notNull(),
+    alias: text().notNull(),
+    kind: text().$type<"request" | "reply" | "notice">().notNull(),
+    request_id: text(),
+    reply_id: text(),
+    text: text().notNull(),
+    backend: text().$type<"v1" | "v2">().notNull(),
+    queued: integer({ mode: "boolean" }).notNull().default(false),
+    resume: integer({ mode: "boolean" }).notNull().default(false),
+    delivery: text().$type<"admitted" | "delivered" | "not_delivered">().notNull().default("admitted"),
+    failure_reason: text(),
+    time_created: integer().notNull(),
+    time_delivered: integer(),
+  },
+  (table) => [
+    index("session_peer_message_target_time_idx").on(table.target_session_id, table.time_created),
+    index("session_peer_message_source_time_idx").on(table.source_session_id, table.time_created),
+    index("session_peer_message_request_idx").on(table.request_id),
+  ],
+)
+
+/** One model delivery path owns each reply; Wait and inbox cannot both inject it. */
+export const SessionPeerReceiptTable = sqliteTable("session_peer_receipt", {
+  message_id: text().primaryKey(),
+  receiver_session_id: text().$type<SessionSchema.ID>().notNull(),
+  channel: text().$type<"wait" | "inbox">().notNull(),
+  time_consumed: integer().notNull(),
+})
 
 /** One exact execution interruption, including the authenticated actor and outcome. */
 export const SessionInterruptionTable = sqliteTable(
@@ -232,12 +268,7 @@ export const SessionInputTable = sqliteTable(
       .references(() => SessionTable.id, { onDelete: "cascade" }),
     prompt: text({ mode: "json" }).notNull().$type<(typeof Prompt)["Encoded"]>(),
     delivery: text().$type<SessionInput.Delivery>().notNull(),
-    origin: text({ mode: "json" }).$type<{
-      kind: "delegation_result"
-      invocationInputID: string
-      terminalEventID: string
-      version: 1
-    }>(),
+    origin: text({ mode: "json" }).$type<NonNullable<SessionInput.Admitted["origin"]>>(),
     admitted_seq: integer().notNull(),
     promoted_seq: integer(),
     time_created: integer()

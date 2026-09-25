@@ -9,6 +9,7 @@ import { SkillInvocation } from "./skill-invocation"
 import { DateTimeUtcFromMillis, RelativePath, statics } from "./schema"
 import { SessionID } from "./session-id"
 import { ascending } from "./identifier"
+import { SessionInputOrigin } from "./session-input-origin"
 
 export const ID = Schema.String.check(Schema.isStartsWith("msg_")).pipe(
   Schema.brand("Session.Message.ID"),
@@ -50,12 +51,7 @@ export const User = Schema.Struct({
   agents: Prompt.fields.agents,
   skills: Prompt.fields.invocations,
   type: Schema.Literal("user"),
-  origin: Schema.Struct({
-    kind: Schema.Literal("delegation_result"),
-    invocationInputID: Schema.String,
-    terminalEventID: Schema.String,
-    version: Schema.Literal(1),
-  }).pipe(optional),
+  origin: SessionInputOrigin.Origin.pipe(optional),
 }).annotate({ identifier: "Session.Message.User" })
 
 export interface Synthetic extends Schema.Schema.Type<typeof Synthetic> {}

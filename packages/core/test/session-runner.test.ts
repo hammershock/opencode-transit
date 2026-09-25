@@ -27,6 +27,8 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { Snapshot } from "@opencode-ai/core/snapshot"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionPeerMessage } from "@opencode-ai/core/session/peer-message"
+import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
 import { SessionTaskView } from "@opencode-ai/core/session/task-view"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Prompt } from "@opencode-ai/core/session/prompt"
@@ -42,7 +44,7 @@ import { AgentV2 } from "@opencode-ai/core/agent"
 import { Config } from "@opencode-ai/core/config"
 import { ConfigCompaction } from "@opencode-ai/core/config/compaction"
 import { Tool } from "@opencode-ai/core/tool/tool"
-import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionInputTable, SessionMessageTable, SessionPeerMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { SessionSkillCatalog } from "@opencode-ai/core/session/skill-catalog"
 import { SessionTurn } from "@opencode-ai/core/session/turn"
@@ -2230,6 +2232,57 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("delivers a peer progress request at the next provider boundary without cancelling the run", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* insertSession(otherSessionID)
+      yield* SessionPeerRoute.bind({
+        sourceSessionID: otherSessionID,
+        targetSessionID: sessionID,
+        alias: "/root/worker",
+        origin: { kind: "spawn", id: "peer-progress" },
+      })
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue original work" }), resume: false })
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      const peer = yield* SessionPeerMessage.send({
+        sourceSessionID: otherSessionID,
+        alias: "/root/worker",
+        text: "Report progress, then continue.",
+        operationID: "peer-progress-1",
+      })
+      expect(peer.delivery).toBe("admitted")
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* Fiber.join(run)
+      streamGate = undefined
+      streamStarted = undefined
+      expect(requests).toHaveLength(2)
+      expect(userTexts(requests[0]!)).toEqual(["Continue original work"])
+      expect(userTexts(requests[1]!).some((text) => text.includes("Report progress, then continue."))).toBe(true)
+      const db = (yield* Database.Service).db
+      expect(
+        (yield* db.select().from(SessionPeerMessageTable).where(eq(SessionPeerMessageTable.id, peer.id)).get())
+          ?.delivery,
+      ).toBe("delivered")
+    }),
+  )
+
   it.effect("promotes queued input after continuation ends", () =>
     Effect.gen(function* () {
       yield* setup
@@ -3484,6 +3537,39 @@ describe("SessionRunnerLLM", () => {
       expect(requests[1]?.tools).not.toEqual([])
       expect(requests[2]?.toolChoice).toMatchObject({ type: "none" })
       expect(executions).toEqual(["before", "after"])
+    }),
+  )
+
+  it.effect("keeps the configured step allowance when a peer progress request promotes", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* insertSession(otherSessionID)
+      yield* SessionPeerRoute.bind({ sourceSessionID: otherSessionID, targetSessionID: sessionID,
+        alias: "/root/worker", origin: { kind: "spawn", id: "peer-step-limit" } })
+      const agents = yield* AgentV2.Service
+      yield* agents.transform((editor) => editor.update(AgentV2.ID.make("build"), (agent) => { agent.steps = 2 }))
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Keep working" }), resume: false })
+      requests.length = 0
+      responses = [
+        [LLMEvent.stepStart({ index: 0 }), LLMEvent.toolCall({ id: "call-before-peer", name: "echo", input: { text: "before" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }), LLMEvent.finish({ reason: "tool-calls" })],
+        [LLMEvent.stepStart({ index: 0 }), LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" })],
+      ]
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      yield* SessionPeerMessage.send({ sourceSessionID: otherSessionID, alias: "/root/worker",
+        text: "How far? Reply and continue.", operationID: "peer-step-limit-request" })
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* Fiber.join(run)
+      streamGate = undefined
+      streamStarted = undefined
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.toolChoice).toMatchObject({ type: "none" })
+      expect(userTexts(requests[1]!).some((text) => text.includes("How far?"))).toBe(true)
     }),
   )
 

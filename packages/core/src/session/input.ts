@@ -16,6 +16,7 @@ import {
   SessionExecutionPauseTable,
   SessionInputTable,
   SessionMessageTable,
+  SessionPeerReceiptTable,
   SessionTaskSteerTable,
   SessionTaskTable,
 } from "./sql"
@@ -75,6 +76,17 @@ const withoutSettlement = (db: DatabaseService) =>
           ),
         ),
     ),
+    notExists(
+      db
+        .select({ id: SessionPeerReceiptTable.message_id })
+        .from(SessionPeerReceiptTable)
+        .where(
+          and(
+            eq(SessionPeerReceiptTable.message_id, SessionInputTable.id),
+            eq(SessionPeerReceiptTable.channel, "wait"),
+          ),
+        ),
+    ),
   )
 
 const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
@@ -112,6 +124,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly origin?: Admitted["origin"]
     readonly task?:
       | { readonly kind: "invocation"; readonly admission: SessionTaskEvent.Admission }
       | {
@@ -135,6 +148,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
         timestamp,
         prompt: input.prompt,
         delivery: input.delivery,
+        ...(input.origin ? { origin: input.origin } : {}),
         ...(input.task ? { task: input.task } : {}),
       },
       {
@@ -164,6 +178,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
                 prompt: input.prompt,
                 delivery: input.delivery,
                 timeCreated: timestamp,
+                ...(input.origin ? { origin: input.origin } : {}),
               }),
             ),
       ),
