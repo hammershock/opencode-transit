@@ -51,7 +51,9 @@ test.skipIf(!binary)(
             ])
             expect(completed[2], completed[1].slice(-2_000)).toBe(0)
             const hits = await Effect.runPromise(llm.hits)
-            expect(JSON.stringify(hits[0]?.body)).toContain('"name":"slash_command"')
+            expect(
+              JSON.stringify(hits.find((hit) => "tools" in hit.body && JSON.stringify(hit.body).includes("TARGET_LIST_MARKER"))?.body),
+            ).toContain('"name":"slash_command"')
             const results = hits.flatMap((hit) =>
               Array.isArray(hit.body.messages)
                 ? (hit.body.messages as unknown[]).flatMap((message) =>
