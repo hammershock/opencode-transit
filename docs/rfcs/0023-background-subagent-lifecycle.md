@@ -36,6 +36,10 @@ superseded-by: []
 
 [未接受的 RFC-0015 草案 / PR #437](https://github.com/hammershock/opencode-transit/pull/437) 曾提出父会话控制工具、调用身份、投递与等待的详细方案。本文实质纳入其控制、结果和 legacy 接入契约，并取代它成为唯一实施依据；RFC-0015 草案退休，不单独实施。已接受的 RFC-0014、0016、0018、0021 仍分别约束 economics、可调用 Agent、执行位置和权限；本文不替代它们。
 
+## RFC-0025 修订边界
+
+[RFC-0025](0025-agent-session-interaction.md) 已接受。独立 Session 的可见关系替代直属 child 作为新交互工具的授权依据；root 仅保留预算来源意义，不产生会话所有权。新契约规定双向消息、alias、Interrupt 来源、Wait 展示及非级联删除/停止。本文的旧 API 通过兼容适配保留，不能把 legacy 排队描述为 active delivery；持久调用身份、幂等、owner 观测与不自动恢复副作用的约束继续适用。新增能力是否可用以实施验收为准。该修订不将 parent_id 的历史含义改写为运行权限。
+
 ## 1. 问题、证据与功能参照
 
 ### 1.1 Transit 实测
