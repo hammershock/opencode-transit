@@ -240,6 +240,7 @@ export namespace Shell {
     schema: {
       ...Base,
       messageID: SessionMessage.ID,
+      userMessageID: SessionMessage.ID.pipe(optional),
       callID: Schema.String,
       command: Schema.String,
     },

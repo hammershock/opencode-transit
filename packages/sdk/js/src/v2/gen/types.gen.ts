@@ -1063,6 +1063,7 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           messageID: string
+          userMessageID?: string
           callID: string
           command: string
         }
@@ -4137,6 +4138,7 @@ export type SyncEventSessionNextShellStarted = {
       timestamp: number
       sessionID: string
       messageID: string
+      userMessageID?: string
       callID: string
       command: string
     }
@@ -4771,6 +4773,7 @@ export type SessionMessageShell = {
     completed?: number
   }
   type: "shell"
+  userMessageID?: string
   callID: string
   command: string
   output: string
@@ -5261,6 +5264,7 @@ export type SessionNextShellStarted = {
     timestamp: number
     sessionID: string
     messageID: string
+    userMessageID?: string
     callID: string
     command: string
   }
@@ -8051,6 +8055,7 @@ export type EventSessionNextShellStarted = {
     timestamp: number
     sessionID: string
     messageID: string
+    userMessageID?: string
     callID: string
     command: string
   }

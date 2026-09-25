@@ -178,7 +178,20 @@ const layer = Layer.effect(
     const runtimeContext = yield* RuntimeContext.Service
     const systemAssembly = yield* SystemAssembly.Service
     const { db } = database
+    const shellControllers = new Map<SessionID, AbortController>()
     const sessionLocation = (sessionID: SessionID) => locationAccess.require(sessionID).pipe(Effect.catch(Effect.die))
+    const isCanonical = Effect.fn("SessionPrompt.isCanonical")(function* (sessionID: SessionID) {
+      const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+      if (session.metadata?.["opencode.promptBackend"] === "v2") return true
+      const row = yield* db
+        .select({ id: SessionInputTable.id })
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.session_id, sessionID))
+        .limit(1)
+        .get()
+        .pipe(Effect.orDie)
+      return row !== undefined
+    })
     const contextAt = Effect.fn("SessionPrompt.contextAt")(function* (input: {
       sessionID: SessionID
       agent: string
@@ -207,6 +220,7 @@ const layer = Layer.effect(
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
+      shellControllers.get(sessionID)?.abort()
       yield* SessionTaskResult.stop(database, events, sessionID)
       yield* state.cancel(sessionID)
     })
@@ -725,6 +739,130 @@ const layer = Layer.effect(
           return { info: msg, parts: [part] }
         }),
       )
+    })
+
+    const shellCanonical = Effect.fn("SessionPrompt.shellCanonical")(function* (input: ShellInput) {
+      yield* locationAccess.require(input.sessionID).pipe(Effect.catch(Effect.die))
+      if (shellControllers.has(input.sessionID)) return yield* new Session.BusyError({ sessionID: input.sessionID })
+      const controller = new AbortController()
+      shellControllers.set(input.sessionID, controller)
+      return yield* Effect.gen(function* () {
+        const ctx = yield* InstanceState.context
+        const agent = yield* agents.get(input.agent)
+        if (!agent) throw new NamedError.Unknown({ message: `Agent not found: "${input.agent}"` })
+        const model = input.model ?? agent.model ?? (yield* currentModel(input.sessionID))
+        const userMessageID = input.messageID ?? MessageID.ascending()
+        const messageID = MessageID.ascending()
+        const callID = ulid()
+        const timestamp = yield* DateTime.now
+        const locationRef = yield* sessionLocation(input.sessionID)
+        const location = {
+          target: locationRef.target.type === "rexd" ? locationRef.target.targetID : "local",
+          directory: locationRef.directory,
+        }
+        const cfg = yield* config.get()
+        const shell = Shell.preferred(cfg.shell)
+        const continuity = cfg.experimental?.user_shell_cwd === true
+        const executionCwd = yield* userShell.current({ sessionID: input.sessionID, location, enabled: continuity })
+        const terminal = yield* Effect.promise(() => UserShellTerminal.create())
+        yield* events.publish(SessionEvent.Shell.Started, {
+          sessionID: input.sessionID,
+          messageID: SessionMessage.ID.make(messageID),
+          userMessageID: SessionMessage.ID.make(userMessageID),
+          callID,
+          command: input.command,
+          timestamp,
+        })
+        const run = Effect.gen(function* () {
+          const shellEnv = yield* plugin.trigger(
+            "shell.env",
+            { cwd: executionCwd, sessionID: input.sessionID, callID },
+            { env: {} },
+          )
+          const environment = yield* Effect.flatMap(LocationEnvironment.Service, (service) =>
+            service.environment({ ...shellEnv.env, TERM: "dumb" }),
+          ).pipe(Effect.provide(locations.get(locationRef)))
+          const selected =
+            locationRef.target.type === "local"
+              ? UserShellLocal.provider(shell, fsys, spawner)
+              : yield* UserShellLocation.provider.pipe(Effect.provide(locations.get(locationRef)))
+          const result = yield* userShell.execute({
+            sessionID: input.sessionID,
+            location,
+            command: input.command,
+            environment,
+            enabled: continuity,
+            provider: selected,
+            signal: controller.signal,
+            onOutput: (chunk) => Effect.promise(() => terminal.write(chunk)).pipe(Effect.asVoid),
+          })
+          if (result.timedOut)
+            yield* Effect.promise(() =>
+              terminal.write(`\n\n<metadata>\n${UserShellRuntime.TIMEOUT_GUIDANCE}\n</metadata>`),
+            )
+        })
+        const cancelled = Effect.promise(
+          () =>
+            new Promise<void>((resolve) => {
+              if (controller.signal.aborted) return resolve()
+              controller.signal.addEventListener("abort", () => resolve(), { once: true })
+            }),
+        ).pipe(Effect.andThen(Effect.interrupt))
+        const exit = yield* Effect.uninterruptibleMask((restore) =>
+          restore(Effect.raceFirst(run.pipe(Effect.scoped, Effect.orDie), cancelled)).pipe(Effect.exit),
+        )
+        if (controller.signal.aborted || (Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)))
+          yield* Effect.promise(() => terminal.write("\n\n<metadata>\nUser aborted the command\n</metadata>"))
+        const output = yield* truncate.output(terminal.snapshot(), {
+          maxLines: Truncate.MAX_LINES,
+          maxBytes: Truncate.MAX_BYTES,
+          direction: "tail",
+        })
+        terminal.dispose()
+        const completed = yield* DateTime.now
+        yield* events.publish(SessionEvent.Shell.Ended, {
+          sessionID: input.sessionID,
+          callID,
+          output: output.content,
+          timestamp: completed,
+        })
+        if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.failCause(exit.cause)
+        const started = DateTime.toEpochMillis(timestamp)
+        const ended = DateTime.toEpochMillis(completed)
+        const part: SessionV1.ToolPart = {
+          type: "tool",
+          id: PartID.ascending(),
+          messageID,
+          sessionID: input.sessionID,
+          tool: ShellID.ToolID,
+          callID,
+          state: {
+            status: "completed",
+            time: { start: started, end: ended },
+            input: { command: input.command },
+            title: "",
+            metadata: { output: output.content },
+            output: output.content,
+          },
+        }
+        return {
+          info: SessionV1.Assistant.make({
+            id: messageID,
+            sessionID: input.sessionID,
+            parentID: userMessageID,
+            mode: input.agent,
+            agent: input.agent,
+            cost: 0,
+            path: { cwd: ctx.directory, root: ctx.worktree },
+            time: { created: started, completed: ended },
+            role: "assistant",
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            modelID: model.modelID,
+            providerID: model.providerID,
+          }),
+          parts: [part],
+        }
+      }).pipe(Effect.ensuring(Effect.sync(() => shellControllers.delete(input.sessionID))))
     })
 
     const getModel = Effect.fn("SessionPrompt.getModel")(function* (
@@ -1535,6 +1673,7 @@ const layer = Layer.effect(
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
       "SessionPrompt.shell",
     )(function* (input: ShellInput) {
+      if (yield* isCanonical(input.sessionID)) return yield* shellCanonical(input)
       const ready = yield* Latch.make()
       return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
     })
@@ -1743,14 +1882,7 @@ const layer = Layer.effect(
         }
         const model = input.model ?? agent.model ?? (yield* currentModel(input.sessionID))
 
-        const canonical = yield* db
-          .select({ id: SessionInputTable.id })
-          .from(SessionInputTable)
-          .where(eq(SessionInputTable.session_id, input.sessionID))
-          .limit(1)
-          .get()
-          .pipe(Effect.orDie)
-        if (canonical || session.metadata?.["opencode.promptBackend"] === "v2") {
+        if (yield* isCanonical(input.sessionID)) {
           const locationRef = yield* sessionLocation(input.sessionID)
           const environment = yield* Effect.serviceOption(LocationEnvironment.Service).pipe(
             Effect.provide(locations.get(locationRef)),
