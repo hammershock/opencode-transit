@@ -67,7 +67,7 @@ const layer = Layer.effectDiscard(
             agent: context.agent,
             source,
           })
-        yield* assert(name, resources)
+        if (!(name === "task" && context.origin === "command")) yield* assert(name, resources)
         const { AppRuntime } = yield* Effect.promise(() => import("@/effect/app-runtime"))
         const { ToolRegistry } = yield* Effect.promise(() => import("./registry"))
         const result = yield* Effect.promise((signal) =>
@@ -91,6 +91,7 @@ const layer = Layer.effectDiscard(
                     agent: context.agent,
                     callID: context.toolCallID,
                     abort: signal,
+                    ...(context.origin === "command" ? { extra: { bypassAgentCheck: true } } : {}),
                     messages: [],
                     metadata: () => Effect.void,
                     ask: (request) => assert(request.permission, request.patterns).pipe(Effect.orDie),

@@ -772,6 +772,50 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("executes a durable command subtask before the next provider turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const applicationTools = yield* ApplicationTools.Service
+      const session = yield* SessionV2.Service
+      const calls: Array<{ prompt: string; origin?: string }> = []
+      yield* applicationTools.register({
+        task: Tool.make({
+          description: "Run a command subtask",
+          input: Schema.Struct({ prompt: Schema.String, description: Schema.String, subagent_type: Schema.String }),
+          output: Schema.String,
+          execute: (input, context) => Effect.sync(() => {
+            calls.push({ prompt: input.prompt, origin: context.origin })
+            return "Subtask done"
+          }),
+        }),
+      })
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Inspect the cache" }),
+        command: {
+          name: "inspect",
+          arguments: "cache",
+          subtask: {
+            agent: "build",
+            description: "Inspect cache",
+            prompt: "Inspect the cache",
+            model: { providerID: ProviderV2.ID.make("fake"), id: ModelV2.ID.make("fake-model") },
+          },
+        },
+        resume: false,
+      })
+      requests.length = 0
+      response = []
+      yield* session.resume(sessionID)
+      expect(calls).toEqual([{ prompt: "Inspect the cache", origin: "command" }])
+      expect(requests).toHaveLength(1)
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Inspect the cache" },
+        { type: "assistant", content: [{ type: "tool", name: "task", state: { status: "completed" } }] },
+      ])
+    }),
+  )
+
   it.effect("starts a real runner turn after default prompt recording", () =>
     Effect.gen(function* () {
       yield* setup
@@ -1120,6 +1164,41 @@ describe("SessionRunnerLLM", () => {
         ],
       ])
       expect((yield* session.messages({ sessionID })).filter((message) => message.type === "system")).toHaveLength(0)
+    }),
+  )
+
+  it.effect("scopes a command's agent and model to its promoted prompt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      const session = yield* SessionV2.Service
+      const selected = {
+        agent: "reviewer",
+        model: { id: ModelV2.ID.make("replacement"), providerID: ProviderV2.ID.make("fake") },
+      }
+      response = fragmentFixture("text", "command-answer", ["Reviewed"]).completeEvents
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Command" }),
+        selection: selected,
+        command: { name: "review", arguments: "file.ts" },
+        resume: false,
+      })
+      yield* session.resume(sessionID)
+      expect(requests[0]?.model).toEqual(replacementModel)
+      expect((yield* session.messages({ sessionID })).find((message) => message.type === "assistant")).toMatchObject({
+        agent: "reviewer",
+      })
+
+      response = fragmentFixture("text", "ordinary-answer", ["Continued"]).completeEvents
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Ordinary follow-up" }), resume: false })
+      yield* session.resume(sessionID)
+      expect(requests[1]?.model).toEqual(model)
+      expect((yield* session.messages({ sessionID })).find((message) => message.type === "assistant")).toMatchObject({
+        agent: "build",
+      })
+      expect((yield* session.get(sessionID)).agent).toBeUndefined()
+      expect((yield* session.get(sessionID)).model).toBeUndefined()
     }),
   )
 

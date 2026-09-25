@@ -40,6 +40,8 @@ import { MAX_STEPS_PROMPT } from "./max-steps"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
+import { SessionInputTable } from "../sql"
+import { and, desc, eq, isNotNull } from "drizzle-orm"
 
 /**
  * Runs one durable coding-agent Session until it settles.
@@ -126,7 +128,11 @@ const layer = Layer.effect(
       if (!first || first.type !== "user") return
       const titleAgent = yield* agents.get(AgentV2.ID.make("title"))
       if (!titleAgent) return
-      const model = yield* models.resolve({ ...session, model: titleAgent.model ?? session.model })
+      const admitted = yield* SessionInput.find(db, first.id)
+      const model = yield* models.resolve({
+        ...session,
+        model: titleAgent.model ?? admitted?.prompt.selection?.model ?? session.model,
+      })
       const chunks: string[] = []
       let failed = false
       yield* llm
@@ -223,13 +229,12 @@ const layer = Layer.effect(
         !Equal.equals(session.location.target, location.target)
       )
         return yield* Effect.interrupt
-      const agent = yield* agents.select(session.agent)
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
       let currentStep = step
+      let promoted: ReadonlyArray<SessionInput.Admitted> = []
       if (promotion) {
         const cutoff = yield* EventV2.latestSequence(db, session.id)
-        let promoted: ReadonlyArray<SessionInput.Admitted> = []
         if (promotion === "steer") promoted = yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
         if (promotion === "queue") {
           const queued = yield* SessionInput.promoteNextQueued(db, events, session.id)
@@ -243,18 +248,81 @@ const layer = Layer.effect(
           currentStep = 1
         }
       }
-      const model = yield* models.resolve(session).pipe(
+      const latest = yield* db
+        .select({ id: SessionInputTable.id })
+        .from(SessionInputTable)
+        .where(and(eq(SessionInputTable.session_id, session.id), isNotNull(SessionInputTable.promoted_seq)))
+        .orderBy(desc(SessionInputTable.promoted_seq))
+        .limit(1)
+        .get()
+        .pipe(Effect.orDie)
+      const selection = latest ? (yield* SessionInput.find(db, SessionMessage.ID.make(latest.id)))?.prompt.selection : undefined
+      const selected = {
+        ...session,
+        agent: selection?.agent ? AgentV2.ID.make(selection.agent) : session.agent,
+        model: selection?.model ?? session.model,
+      }
+      const agent = yield* agents.select(selected.agent)
+      const model = yield* models.resolve(selected).pipe(
         Effect.tapError((error) =>
           createLLMEventPublisher(events, {
             sessionID: session.id,
             agent: agent.id,
-            model: session.model ?? {
+            model: selected.model ?? {
               providerID: ProviderV2.ID.make("unknown"),
               id: ModelV2.ID.make("unknown"),
             },
           }).failAssistant(error.message),
         ),
       )
+      const commandTasks = promoted.flatMap((input) =>
+        input.prompt.command?.subtask ? [input.prompt.command.subtask] : [],
+      )
+      if (commandTasks.length > 0) {
+        const materialized = yield* tools.materialize()
+        let resultMessageID: SessionMessage.ID | undefined
+        for (const task of commandTasks) {
+          const publisher = createLLMEventPublisher(events, {
+            sessionID: session.id,
+            agent: task.agent,
+            model: task.model,
+          })
+          const call = LLMEvent.toolCall({
+            id: crypto.randomUUID(),
+            name: "task",
+            input: {
+              prompt: task.prompt,
+              description: task.description,
+              subagent_type: task.agent,
+            },
+          })
+          yield* publisher.publish(call)
+          const assistantMessageID = yield* publisher.assistantMessageID(call.id)
+          const settlement = yield* materialized.settle({
+            sessionID: session.id,
+            agent: AgentV2.ID.make(task.agent),
+            assistantMessageID,
+            call,
+            origin: "command",
+          })
+          yield* publisher.publish(LLMEvent.toolResult({
+            id: call.id,
+            name: call.name,
+            result: settlement.result,
+            output: settlement.output,
+          }), settlement.outputPaths ?? [])
+          yield* events.publish(SessionEvent.Step.Ended, {
+            sessionID: session.id,
+            timestamp: yield* DateTime.now,
+            assistantMessageID,
+            finish: "tool-calls",
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          })
+          resultMessageID = assistantMessageID
+        }
+        return { needsContinuation: true, step: currentStep, failed: false, resultMessageID }
+      }
       const runtimeParts = yield* runtime.assemble(session.id, agent)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id)
       const context = entries.map((entry) => entry.message)
@@ -292,7 +360,7 @@ const layer = Layer.effect(
         model: {
           id: ModelV2.ID.make(model.id),
           providerID: ProviderV2.ID.make(model.provider),
-          ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
+          ...(selected.model?.variant === undefined ? {} : { variant: selected.model.variant }),
         },
         snapshot: startSnapshot,
       })

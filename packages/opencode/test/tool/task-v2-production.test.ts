@@ -7,6 +7,52 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
 
+test("production HTTP command runs a configured V2 subtask through the durable Task adapter", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const temp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true, config: testProviderConfig(llm.url) })),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      yield* llm.textMatch((hit) => JSON.stringify(hit.body).includes("Inspect cache"), "child complete")
+      yield* llm.text("parent complete")
+      const child = Bun.spawn([process.execPath, "test/fixture/task-v2-parent-process.ts"], {
+        cwd: import.meta.dir + "/../..",
+        env: {
+          ...process.env,
+          OPENCODE_DB: `${temp.path}/command-v2.sqlite`,
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            command: { inspect: { template: "Inspect $ARGUMENTS", agent: "general", model: "test/test-model", subtask: true } },
+          }),
+          TASK_V2_TEST_DIRECTORY: temp.path,
+          TASK_V2_TEST_LLM_URL: llm.url,
+          TASK_V2_TEST_HTTP: "true",
+          TASK_V2_TEST_COMMAND: "true",
+          TASK_V2_TEST_SETTLE: "true",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const [stdout, stderr, code] = yield* Effect.promise(() =>
+        Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
+      )
+      expect(code, stderr.slice(0, 4_096)).toBe(0)
+      const line = stdout.split("\n").find((item) => item.startsWith("TASK_V2_PARENT_RESULT:"))
+      expect(line).toBeDefined()
+      const result = JSON.parse(line!.slice("TASK_V2_PARENT_RESULT:".length)) as {
+        rows: Array<{ backend: string; state: string; outcome?: string }>
+        legacyMessages: number
+      }
+      expect(result.rows).toHaveLength(1)
+      expect(result.rows[0]).toMatchObject({ backend: "v2", state: "settled", outcome: "completed" })
+      expect(result.legacyMessages).toBe(0)
+      expect((yield* llm.hits).some((hit) => JSON.stringify(hit.body).includes("Inspect cache"))).toBe(true)
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
+  )
+}, 60_000)
+
 test.each([false, true])("production V2 parent executes Task with default HTTP handler first: %p", async (handlerFirst) => {
   await Effect.runPromise(
     Effect.gen(function* () {

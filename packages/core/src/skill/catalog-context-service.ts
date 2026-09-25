@@ -58,6 +58,8 @@ export const retryEquivalent = (recorded: Prompt, expected: Prompt, input: Reado
     text: recorded.text,
     files: recorded.files,
     agents: recorded.agents,
+    selection: recorded.selection,
+    command: recorded.command,
   })
   if (!Prompt.equivalence(base, expected)) return false
   const mentions = normalize(input)

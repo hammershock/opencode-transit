@@ -669,6 +669,21 @@ export type SessionsPromptOutput = {
           readonly status: "loaded"
         }
       }>
+      readonly selection?: {
+        readonly agent?: string
+        readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      }
+      readonly command?: {
+        readonly name: string
+        readonly arguments: string
+        readonly digest?: string
+        readonly subtask?: {
+          readonly agent: string
+          readonly description: string
+          readonly prompt: string
+          readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
+        }
+      }
     }
     readonly delivery: "steer" | "queue"
     readonly timeCreated: number
@@ -1295,6 +1310,21 @@ export type SessionsHistoryOutput = {
                 readonly status: "loaded"
               }
             }>
+            readonly selection?: {
+              readonly agent?: string
+              readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+            }
+            readonly command?: {
+              readonly name: string
+              readonly arguments: string
+              readonly digest?: string
+              readonly subtask?: {
+                readonly agent: string
+                readonly description: string
+                readonly prompt: string
+                readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
+              }
+            }
           }
           readonly delivery: "steer" | "queue"
           readonly origin?: {
@@ -1567,6 +1597,21 @@ export type SessionsHistoryOutput = {
                 readonly status: "loaded"
               }
             }>
+            readonly selection?: {
+              readonly agent?: string
+              readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+            }
+            readonly command?: {
+              readonly name: string
+              readonly arguments: string
+              readonly digest?: string
+              readonly subtask?: {
+                readonly agent: string
+                readonly description: string
+                readonly prompt: string
+                readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
+              }
+            }
           }
           readonly delivery: "steer" | "queue"
           readonly task?:
@@ -2447,6 +2492,21 @@ export type SessionsEventsOutput =
               readonly status: "loaded"
             }
           }>
+          readonly selection?: {
+            readonly agent?: string
+            readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+          }
+          readonly command?: {
+            readonly name: string
+            readonly arguments: string
+            readonly digest?: string
+            readonly subtask?: {
+              readonly agent: string
+              readonly description: string
+              readonly prompt: string
+              readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
+            }
+          }
         }
         readonly delivery: "steer" | "queue"
         readonly origin?:
@@ -2721,6 +2781,21 @@ export type SessionsEventsOutput =
               readonly status: "loaded"
             }
           }>
+          readonly selection?: {
+            readonly agent?: string
+            readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+          }
+          readonly command?: {
+            readonly name: string
+            readonly arguments: string
+            readonly digest?: string
+            readonly subtask?: {
+              readonly agent: string
+              readonly description: string
+              readonly prompt: string
+              readonly model: { readonly id: string; readonly providerID: string; readonly variant?: string }
+            }
+          }
         }
         readonly delivery: "steer" | "queue"
         readonly task?:

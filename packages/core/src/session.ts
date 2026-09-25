@@ -227,6 +227,8 @@ export interface Interface {
     prompt: PromptInput.Prompt
     delivery?: SessionInput.Delivery
     resume?: boolean
+    selection?: Prompt["selection"]
+    command?: Prompt["command"]
   }) => Effect.Effect<
     SessionInput.Admitted,
     NotFoundError | PromptConflictError | OperationUnavailableError | SkillCatalogContextService.AdmissionError
@@ -460,6 +462,8 @@ const layer = Layer.effect(
         prompt: PromptInput.Prompt
         delivery?: SessionInput.Delivery
         resume?: boolean
+        selection?: Prompt["selection"]
+        command?: Prompt["command"]
       }) =>
         activity.withActivity(
           input.sessionID,
@@ -470,7 +474,11 @@ const layer = Layer.effect(
               const session = yield* result.get(input.sessionID)
               const messageID = input.id ?? SessionMessage.ID.create()
               const delivery = input.delivery ?? "steer"
-              const base = resolvePrompt(input.prompt)
+              const base = Prompt.make({
+                ...resolvePrompt(input.prompt),
+                selection: input.selection,
+                command: input.command,
+              })
               const recorded = input.id === undefined ? undefined : yield* SessionInput.find(db, messageID)
               if (recorded) {
                 if (
