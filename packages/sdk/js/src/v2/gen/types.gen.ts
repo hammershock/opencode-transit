@@ -23,6 +23,7 @@ export type Event =
   | EventSessionNextLocationRebound
   | EventSessionNextPrompted
   | EventSessionNextPromptAdmitted
+  | EventSessionNextTitleGenerated
   | EventSessionNextDelegationResultRecorded
   | EventSessionNextDelegationWakeRevoked
   | EventSessionNextTurnSettled
@@ -978,6 +979,15 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.title.generated"
+        properties: {
+          timestamp: number
+          sessionID: string
+          title: string
+        }
+      }
+    | {
+        id: string
         type: "session.next.delegation.result.recorded"
         properties: {
           timestamp: number
@@ -1063,6 +1073,7 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           messageID: string
+          userMessageID?: string
           callID: string
           command: string
         }
@@ -1827,6 +1838,7 @@ export type GlobalEvent = {
     | SyncEventSessionNextLocationRebound
     | SyncEventSessionNextPrompted
     | SyncEventSessionNextPromptAdmitted
+    | SyncEventSessionNextTitleGenerated
     | SyncEventSessionNextDelegationResultRecorded
     | SyncEventSessionNextDelegationWakeRevoked
     | SyncEventSessionNextTurnSettled
@@ -3126,6 +3138,7 @@ export type SessionDurableEvent =
   | SessionNextLocationRebound
   | SessionNextPrompted
   | SessionNextPromptAdmitted
+  | SessionNextTitleGenerated
   | SessionNextDelegationResultRecorded
   | SessionNextDelegationWakeRevoked
   | SessionNextTurnSettled
@@ -3266,6 +3279,7 @@ export type V2Event =
   | SessionNextLocationRebound
   | SessionNextPrompted
   | SessionNextPromptAdmitted
+  | SessionNextTitleGenerated
   | SessionNextDelegationResultRecorded
   | SessionNextDelegationWakeRevoked
   | SessionNextTurnSettled
@@ -3996,6 +4010,22 @@ export type SyncEventSessionNextPromptAdmitted = {
   }
 }
 
+export type SyncEventSessionNextTitleGenerated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.title.generated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      title: string
+    }
+  }
+}
+
 export type SyncEventSessionNextDelegationResultRecorded = {
   type: "sync"
   id: string
@@ -4137,6 +4167,7 @@ export type SyncEventSessionNextShellStarted = {
       timestamp: number
       sessionID: string
       messageID: string
+      userMessageID?: string
       callID: string
       command: string
     }
@@ -4771,6 +4802,7 @@ export type SessionMessageShell = {
     completed?: number
   }
   type: "shell"
+  userMessageID?: string
   callID: string
   command: string
   output: string
@@ -5095,6 +5127,25 @@ export type SessionNextPromptAdmitted = {
   }
 }
 
+export type SessionNextTitleGenerated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.title.generated"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    title: string
+  }
+}
+
 export type SessionNextDelegationResultRecorded = {
   id: string
   metadata?: {
@@ -5261,6 +5312,7 @@ export type SessionNextShellStarted = {
     timestamp: number
     sessionID: string
     messageID: string
+    userMessageID?: string
     callID: string
     command: string
   }
@@ -7957,6 +8009,16 @@ export type EventSessionNextPromptAdmitted = {
   }
 }
 
+export type EventSessionNextTitleGenerated = {
+  id: string
+  type: "session.next.title.generated"
+  properties: {
+    timestamp: number
+    sessionID: string
+    title: string
+  }
+}
+
 export type EventSessionNextDelegationResultRecorded = {
   id: string
   type: "session.next.delegation.result.recorded"
@@ -8051,6 +8113,7 @@ export type EventSessionNextShellStarted = {
     timestamp: number
     sessionID: string
     messageID: string
+    userMessageID?: string
     callID: string
     command: string
   }

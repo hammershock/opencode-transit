@@ -77,6 +77,7 @@ export interface Shell extends Schema.Schema.Type<typeof Shell> {}
 export const Shell = Schema.Struct({
   ...Base,
   type: Schema.Literal("shell"),
+  userMessageID: ID.pipe(optional),
   callID: Schema.String,
   command: Schema.String,
   output: Schema.String,

@@ -174,6 +174,75 @@ export function projectCanonicalSessionMessages(input: {
       ]
       return [{ message: message as Message, parts }]
     }
+    if (item.type === "shell") {
+      const userID = item.userMessageID ?? `${item.id}-user`
+      const user = {
+        id: userID,
+        sessionID: input.sessionID,
+        role: "user",
+        time: { created: item.time.created },
+        agent: input.agent,
+        model: {
+          providerID: input.model?.providerID ?? "unknown",
+          modelID: input.model?.id ?? "unknown",
+          variant: input.model?.variant,
+        },
+      } satisfies UserMessage
+      const assistant = {
+        id: item.id,
+        sessionID: input.sessionID,
+        role: "assistant",
+        time: item.time,
+        parentID: userID,
+        modelID: input.model?.id ?? "unknown",
+        providerID: input.model?.providerID ?? "unknown",
+        mode: input.agent,
+        agent: input.agent,
+        path: { cwd: input.directory, root: input.directory },
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      } satisfies AssistantMessage
+      const part: Part = {
+        id: `${item.id}-shell`,
+        sessionID: input.sessionID,
+        messageID: item.id,
+        type: "tool",
+        callID: item.callID,
+        tool: "bash",
+        state: item.time.completed
+          ? {
+              status: "completed",
+              input: { command: item.command },
+              output: item.output,
+              title: "",
+              metadata: { output: item.output },
+              time: { start: item.time.created, end: item.time.completed },
+            }
+          : {
+              status: "running",
+              input: { command: item.command },
+              title: "",
+              metadata: { output: item.output },
+              time: { start: item.time.created },
+            },
+      }
+      return [
+        { message: assistant as Message, parts: [part] },
+        {
+          message: user as Message,
+          parts: [
+            {
+              id: `${userID}-text`,
+              sessionID: input.sessionID,
+              messageID: userID,
+              type: "text",
+              text: "The following tool was executed by the user",
+              synthetic: true,
+            } satisfies TextPart,
+          ],
+        },
+      ]
+    }
     if (item.type !== "assistant") return []
     const message = {
       id: item.id,

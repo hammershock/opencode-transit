@@ -4,7 +4,7 @@ import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Config, Effect, Exit, Layer } from "effect"
+import { Cause, Config, Effect, Exit, Fiber, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
@@ -296,7 +296,10 @@ describe("session HttpApi", () => {
         expect(reload.status).toBe(200)
         expect((yield* json<SessionV1.WithParts>(reload)).parts).toContainEqual(
           expect.objectContaining({
-            state: expect.objectContaining({ status: "completed", output: expect.stringContaining("Environment generation") }),
+            state: expect.objectContaining({
+              status: "completed",
+              output: expect.stringContaining("Environment generation"),
+            }),
           }),
         )
       }),
@@ -370,6 +373,111 @@ describe("session HttpApi", () => {
         ).toBe(0)
       }),
     { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "runs a User shell command without switching a V2 session to the V1 transcript",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory, "content-type": "application/json" },
+          body: JSON.stringify({ location: { directory: test.directory, target: { type: "local" } } }),
+        })
+        const sessionID = SessionID.make(created.data.id)
+        const response = yield* request(pathFor(SessionPaths.shell, { sessionID }), {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory, "content-type": "application/json" },
+          body: JSON.stringify({
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            command: "printf transit-shell-ok",
+            messageID: "msg_http_shell_user",
+          }),
+        })
+        expect(response.status).toBe(200)
+        const shell = yield* json<SessionV1.WithParts>(response)
+        expect(shell.info).toMatchObject({ parentID: "msg_http_shell_user" })
+        expect(shell.parts).toContainEqual(
+          expect.objectContaining({
+            state: expect.objectContaining({ output: expect.stringContaining("transit-shell-ok") }),
+          }),
+        )
+        const admitted = yield* request(`/api/session/${created.data.id}/prompt`, {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory, "content-type": "application/json" },
+          body: JSON.stringify({ prompt: { text: "continue" }, resume: false }),
+        })
+        expect(admitted.status).toBe(200)
+        const { db } = yield* Database.Service
+        expect(
+          (yield* db
+            .select({ id: MessageTable.id })
+            .from(MessageTable)
+            .where(eq(MessageTable.session_id, sessionID))
+            .all()).length,
+        ).toBe(0)
+        expect(
+          (yield* db
+            .select({ type: SessionMessageTable.type, data: SessionMessageTable.data })
+            .from(SessionMessageTable)
+            .where(eq(SessionMessageTable.session_id, sessionID))
+            .all()).some(
+            (row) =>
+              row.type === "shell" && "userMessageID" in row.data && row.data.userMessageID === "msg_http_shell_user",
+          ),
+        ).toBe(true)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "settles a cancelled V2 User shell command",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ location: { directory: test.directory, target: { type: "local" } } }),
+        })
+        const sessionID = SessionID.make(created.data.id)
+        const started = Date.now()
+        const running = yield* request(pathFor(SessionPaths.shell, { sessionID }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            command: "sleep 10",
+          }),
+        }).pipe(Effect.forkChild)
+        const { db } = yield* Database.Service
+        yield* pollWithTimeout(
+          db
+            .select({ id: SessionMessageTable.id })
+            .from(SessionMessageTable)
+            .where(eq(SessionMessageTable.session_id, sessionID))
+            .get()
+            .pipe(Effect.map((row) => row?.id)),
+          "V2 shell did not start",
+        )
+        expect((yield* request(pathFor(SessionPaths.abort, { sessionID }), { method: "POST", headers })).status).toBe(
+          200,
+        )
+        const result = yield* Fiber.join(running)
+        expect(result.status).toBe(200)
+        expect(Date.now() - started).toBeLessThan(8_000)
+        expect((yield* json<SessionV1.WithParts>(result)).parts).toContainEqual(
+          expect.objectContaining({
+            state: expect.objectContaining({ output: expect.stringContaining("User aborted") }),
+          }),
+        )
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+    15_000,
   )
 
   it.effect("maps busy sessions to public session busy errors", () =>

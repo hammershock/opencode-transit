@@ -83,6 +83,31 @@ describe("projectCanonicalSessionMessages", () => {
     ])
   })
 
+  test("projects a V2 User shell result into the existing command card", () => {
+    const messages = [
+      {
+        id: "msg_shell",
+        type: "shell",
+        userMessageID: "msg_user_shell",
+        callID: "call-shell",
+        command: "printf shell-ok",
+        output: "shell-ok",
+        time: { created: 10, completed: 20 },
+      },
+    ] satisfies SessionMessage[]
+    const projected = projectCanonicalSessionMessages({
+      sessionID: "session",
+      directory: "/workspace",
+      agent: "build",
+      messages,
+    })
+    expect(projected.map((item) => item.message.role)).toEqual(["assistant", "user"])
+    expect(projected[0]?.parts).toMatchObject([
+      { type: "tool", tool: "bash", state: { status: "completed", output: "shell-ok" } },
+    ])
+    expect(projected[0]?.message).toMatchObject({ parentID: "msg_user_shell" })
+  })
+
   test("restores a canonical skill mention without exposing its injected content", () => {
     const message = {
       id: "user",

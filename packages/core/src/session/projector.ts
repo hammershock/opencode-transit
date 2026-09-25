@@ -610,6 +610,24 @@ const layer = Layer.effectDiscard(
           })
       }),
     )
+    yield* events.project(SessionEvent.TitleGenerated, (event) =>
+      Effect.gen(function* () {
+        const current = yield* db
+          .select({ title: SessionTable.title, parentID: SessionTable.parent_id })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!current || current.parentID) return
+        if (!/^New session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(current.title)) return
+        yield* db
+          .update(SessionTable)
+          .set({ title: event.data.title, time_updated: DateTime.toEpochMillis(event.data.timestamp) })
+          .where(and(eq(SessionTable.id, event.data.sessionID), eq(SessionTable.title, current.title)))
+          .run()
+          .pipe(Effect.orDie)
+      }),
+    )
     yield* events.project(SessionEvent.DelegationResultRecorded, (event) => SessionTaskResult.project(db, event))
     yield* events.project(SessionEvent.DelegationWakeRevoked, (event) => SessionTaskResult.projectRevocation(db, event))
     yield* events.project(SessionEvent.Turn.Settled, () => Effect.void)

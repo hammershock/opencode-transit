@@ -899,6 +899,68 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("generates and persists a title for a V2 primary session", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const agents = yield* AgentV2.Service
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      yield* agents.transform((draft) =>
+        draft.update(AgentV2.ID.make("title"), (agent) => {
+          agent.system = "Generate a concise title"
+        }),
+      )
+      yield* db
+        .update(SessionTable)
+        .set({ title: "New session - 2026-01-01T00:00:00.000Z" })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+      responses = [[], [LLMEvent.textDelta({ id: "title", text: "修复会话兼容性" })]]
+      requests.length = 0
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "请修复会话兼容性" }), resume: false })
+      yield* execution.wakeAndWait(sessionID)
+      const current = yield* db
+        .select({ title: SessionTable.title })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+      expect(current?.title).toBe("修复会话兼容性")
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.system).toHaveLength(1)
+    }),
+  )
+
+  it.effect("keeps the default title when generation fails and retries on a later prompt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const agents = yield* AgentV2.Service
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      yield* agents.transform((draft) =>
+        draft.update(AgentV2.ID.make("title"), (agent) => {
+          agent.system = "Generate a concise title"
+        }),
+      )
+      yield* db
+        .update(SessionTable)
+        .set({ title: "New session - 2026-01-01T00:00:00.000Z" })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+      responses = [[], []]
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Please fix the Session" }), resume: false })
+      yield* execution.wakeAndWait(sessionID)
+      expect((yield* db.select({ title: SessionTable.title }).from(SessionTable).get())?.title).toBe(
+        "New session - 2026-01-01T00:00:00.000Z",
+      )
+      responses = [[], [LLMEvent.textDelta({ id: "title-retry", text: "Session repair" })]]
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Continue" }), resume: false })
+      yield* execution.wakeAndWait(sessionID)
+      expect((yield* db.select({ title: SessionTable.title }).from(SessionTable).get())?.title).toBe("Session repair")
+    }),
+  )
+
   it.effect("delivers device-local Skill startup guidance without adding Session history", () =>
     Effect.gen(function* () {
       yield* setup

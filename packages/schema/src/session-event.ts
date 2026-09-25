@@ -136,6 +136,16 @@ export const PromptAdmitted = Event.define({
 })
 export type PromptAdmitted = typeof PromptAdmitted.Type
 
+export const TitleGenerated = Event.define({
+  type: "session.next.title.generated",
+  ...options,
+  schema: {
+    ...Base,
+    title: Schema.String,
+  },
+})
+export type TitleGenerated = typeof TitleGenerated.Type
+
 /** One parent aggregate event projects both the result and its optional inbox input. */
 export const DelegationResultRecorded = Event.define({
   type: "session.next.delegation.result.recorded",
@@ -240,6 +250,7 @@ export namespace Shell {
     schema: {
       ...Base,
       messageID: SessionMessage.ID,
+      userMessageID: SessionMessage.ID.pipe(optional),
       callID: Schema.String,
       command: Schema.String,
     },
@@ -566,6 +577,7 @@ export const DurableDefinitions = Event.inventory(
   LocationRebound,
   Prompted,
   PromptAdmitted,
+  TitleGenerated,
   DelegationResultRecorded,
   DelegationWakeRevoked,
   Turn.Settled,
@@ -603,6 +615,7 @@ export const Definitions = Event.inventory(
   LocationRebound,
   Prompted,
   PromptAdmitted,
+  TitleGenerated,
   DelegationResultRecorded,
   DelegationWakeRevoked,
   Turn.Settled,

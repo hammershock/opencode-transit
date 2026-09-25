@@ -140,6 +140,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         )
       },
       "session.next.prompt.admitted": () => Effect.void,
+      "session.next.title.generated": () => Effect.void,
       "session.next.delegation.result.recorded": () => Effect.void,
       "session.next.delegation.wake.revoked": () => Effect.void,
       "session.next.turn.settled": () => Effect.void,
@@ -180,6 +181,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           SessionMessage.Shell.make({
             id: event.data.messageID,
             type: "shell",
+            userMessageID: event.data.userMessageID,
             metadata: event.metadata,
             callID: event.data.callID,
             command: event.data.command,
