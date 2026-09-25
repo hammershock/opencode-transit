@@ -11,6 +11,7 @@ import { Database } from "../../database/database"
 import { SessionTaskOwner } from "../task-owner"
 import { SessionExecutionPauseTable, SessionTaskTable } from "../sql"
 import { SessionTask } from "../task"
+import { SessionIdleCache } from "../idle-cache"
 import { SessionTaskScheduler } from "../task-scheduler"
 import { SessionTaskResult } from "../task-result"
 import { EventV2 } from "../../event"
@@ -25,11 +26,14 @@ const layer = Layer.effect(
     const access = yield* SessionLocationAccess.Service
     const database = yield* Database.Service
     const events = yield* EventV2.Service
+    const idleCache = yield* SessionIdleCache.Service
     // The coordinator cannot schedule its successor until construction completes.
     let wake: (sessionID: SessionSchema.ID) => Effect.Effect<void> = () => Effect.void
     const exact: { bind?: SessionRunCoordinator.Coordinator<SessionSchema.ID, SessionRunner.RunError>["bindExact"] } =
       {}
     const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, SessionRunner.RunError>({
+      onActive: idleCache.active,
+      onIdle: idleCache.idle,
       drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, force) {
         const session = yield* store.get(sessionID)
         if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
@@ -134,7 +138,14 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: SessionExecution.Service,
   layer,
-  deps: [SessionStore.node, LocationServiceMap.node, SessionLocationAccess.node, Database.node, EventV2.node],
+  deps: [
+    SessionStore.node,
+    LocationServiceMap.node,
+    SessionLocationAccess.node,
+    Database.node,
+    EventV2.node,
+    SessionIdleCache.node,
+  ],
 })
 
 export * as SessionExecutionLocal from "./local"

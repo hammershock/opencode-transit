@@ -44,6 +44,9 @@ export const make = <Key, E>(options: {
   readonly drain: (key: Key, force: boolean) => Effect.Effect<void, E>
   /** Test/diagnostic observation only; callback failures never affect execution. */
   readonly onAdmission?: (event: { readonly key: Key; readonly type: "started" | "joined" }) => void
+  /** Synchronous owner-boundary signals; they must not block or throw. */
+  readonly onActive?: (key: Key) => void
+  readonly onIdle?: (key: Key) => void
 }): Effect.Effect<Coordinator<Key, E>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const active = new Map<Key, Entry<E>>()
@@ -85,8 +88,10 @@ export const make = <Key, E>(options: {
       }
 
       const successor = entry.pendingWake ? makeEntry() : undefined
-      if (successor === undefined) active.delete(key)
-      else {
+      if (successor === undefined) {
+        active.delete(key)
+        options.onIdle?.(key)
+      } else {
         successor.wakeDone = entry.wakeDone
         active.set(key, successor)
         start(key, successor, false, true)
@@ -106,6 +111,7 @@ export const make = <Key, E>(options: {
 
         const next = makeEntry()
         active.set(key, next)
+        options.onActive?.(key)
         observe(key, "started")
         start(key, next, true)
         return restore(Deferred.await(next.done))
@@ -123,6 +129,7 @@ export const make = <Key, E>(options: {
         const next = makeEntry()
         next.wakeDone = Deferred.makeUnsafe<void, E>()
         active.set(key, next)
+        options.onActive?.(key)
         start(key, next, false)
         return next.wakeDone
       })
@@ -140,6 +147,7 @@ export const make = <Key, E>(options: {
             if (active.has(key)) return undefined
             const entry = makeEntry()
             active.set(key, entry)
+            options.onActive?.(key)
             return entry
           })
           if (entry === undefined) return { busy: true as const }
