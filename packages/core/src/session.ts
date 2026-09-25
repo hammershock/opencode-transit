@@ -652,6 +652,7 @@ const layer = Layer.effect(
               path: path.relative(project.directory, input.location.directory).replaceAll("\\", "/"),
               workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
               title: `New session - ${new Date(now).toISOString()}`,
+              metadata: { "opencode.promptBackend": "v2" },
               approvalMode: input.approvalMode ?? "normal",
               permission: input.permission,
               permissionBoundary: input.permissionBoundary,

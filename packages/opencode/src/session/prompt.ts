@@ -76,6 +76,11 @@ import { TargetRegistry } from "@opencode-ai/core/target-registry"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { SessionActivity } from "@opencode-ai/core/session/activity"
 import { SessionTaskResult } from "@opencode-ai/core/session/task-result"
+import { SessionEvent } from "@opencode-ai/core/session/event"
+import { Prompt } from "@opencode-ai/core/session/prompt"
+import { SessionInputTable } from "@opencode-ai/core/session/sql"
+import { SessionMessage } from "@opencode-ai/core/session/message"
+import { DateTime } from "effect"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1738,6 +1743,140 @@ const layer = Layer.effect(
         }
         const model = input.model ?? agent.model ?? (yield* currentModel(input.sessionID))
 
+        const canonical = yield* db
+          .select({ id: SessionInputTable.id })
+          .from(SessionInputTable)
+          .where(eq(SessionInputTable.session_id, input.sessionID))
+          .limit(1)
+          .get()
+          .pipe(Effect.orDie)
+        if (canonical || session.metadata?.["opencode.promptBackend"] === "v2") {
+          const locationRef = yield* sessionLocation(input.sessionID)
+          const environment = yield* Effect.serviceOption(LocationEnvironment.Service).pipe(
+            Effect.provide(locations.get(locationRef)),
+          )
+          const result = yield* runSlashCommand(
+            input.command,
+            targetRegistry,
+            Option.getOrUndefined(environment),
+            locationRef.target,
+          )
+          const userID = SessionMessage.ID.make(input.messageID ?? MessageID.ascending())
+          const assistantID = SessionMessage.ID.create()
+          const callID = ulid()
+          const timestamp = yield* DateTime.now
+          const base = { sessionID: input.sessionID, timestamp }
+          yield* events.publish(SessionEvent.Prompted, {
+            ...base,
+            messageID: userID,
+            prompt: Prompt.make({ text: input.command }),
+            delivery: "steer",
+          })
+          yield* events.publish(SessionEvent.Step.Started, {
+            ...base,
+            assistantMessageID: assistantID,
+            agent: input.agent,
+            model: {
+              providerID: ProviderV2.ID.make(model.providerID),
+              id: ModelV2.ID.make(model.modelID),
+            },
+          })
+          yield* events.publish(SessionEvent.Tool.Input.Started, {
+            ...base,
+            assistantMessageID: assistantID,
+            callID,
+            name: "slash_command",
+          })
+          yield* events.publish(SessionEvent.Tool.Input.Ended, {
+            ...base,
+            assistantMessageID: assistantID,
+            callID,
+            text: JSON.stringify({ command: input.command }),
+          })
+          yield* events.publish(SessionEvent.Tool.Called, {
+            ...base,
+            assistantMessageID: assistantID,
+            callID,
+            tool: "slash_command",
+            input: { command: input.command },
+            provider: { executed: false },
+          })
+          const output = result.stdout || result.stderr
+          if (result.status === "completed")
+            yield* events.publish(SessionEvent.Tool.Success, {
+              ...base,
+              assistantMessageID: assistantID,
+              callID,
+              structured: { ...result, command: input.command },
+              content: [{ type: "text", text: output }],
+              provider: { executed: false },
+            })
+          if (result.status !== "completed")
+            yield* events.publish(SessionEvent.Tool.Failed, {
+              ...base,
+              assistantMessageID: assistantID,
+              callID,
+              error: { type: "unknown", message: output },
+              result,
+              provider: { executed: false },
+            })
+          yield* events.publish(SessionEvent.Step.Ended, {
+            ...base,
+            assistantMessageID: assistantID,
+            finish: "stop",
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          })
+          yield* events.publish(SessionEvent.Turn.Settled, {
+            ...base,
+            messageID: userID,
+            outcome: result.status === "completed" ? "completed" : "failed",
+          })
+          const now = DateTime.toEpochMillis(timestamp)
+          const part: SessionV1.ToolPart = {
+            type: "tool",
+            id: PartID.ascending(),
+            messageID: MessageID.make(assistantID),
+            sessionID: input.sessionID,
+            tool: "slash_command",
+            callID,
+            state:
+              result.status === "completed"
+                ? {
+                    status: "completed",
+                    time: { start: now, end: now },
+                    input: { command: input.command },
+                    title: input.command,
+                    metadata: result,
+                    output,
+                  }
+                : {
+                    status: "error",
+                    time: { start: now, end: now },
+                    input: { command: input.command },
+                    error: output,
+                    metadata: result,
+                  },
+          }
+          return {
+            info: SessionV1.Assistant.make({
+              id: MessageID.make(assistantID),
+              sessionID: input.sessionID,
+              parentID: MessageID.make(userID),
+              mode: input.agent,
+              agent: input.agent,
+              cost: 0,
+              path: { cwd: ctx.directory, root: ctx.worktree },
+              time: { created: now, completed: now },
+              role: "assistant",
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              modelID: model.modelID,
+              providerID: model.providerID,
+            }),
+            parts: [part],
+          }
+        }
+
         const userMsg: SessionV1.User = {
           id: input.messageID ?? MessageID.ascending(),
           sessionID: input.sessionID,
@@ -1788,9 +1927,15 @@ const layer = Layer.effect(
         yield* sessions.updatePart(part)
 
         const locationRef = yield* sessionLocation(input.sessionID)
-        const result = yield* Effect.flatMap(LocationEnvironment.Service, (environment) =>
-          runSlashCommand(input.command, targetRegistry, environment, locationRef.target),
-        ).pipe(Effect.provide(locations.get(locationRef)))
+        const environment = yield* Effect.serviceOption(LocationEnvironment.Service).pipe(
+          Effect.provide(locations.get(locationRef)),
+        )
+        const result = yield* runSlashCommand(
+          input.command,
+          targetRegistry,
+          Option.getOrUndefined(environment),
+          locationRef.target,
+        )
 
         const completed = Date.now()
         msg.time.completed = completed
