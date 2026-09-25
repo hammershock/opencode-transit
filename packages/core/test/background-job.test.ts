@@ -86,6 +86,27 @@ describe("BackgroundJob", () => {
     }).pipe(Effect.provide(jobsLayer)),
   )
 
+  it.live("keeps a queued follow-up after the current invocation is interrupted", () =>
+    Effect.gen(function* () {
+      const jobs = yield* BackgroundJob.Service
+      const started = yield* Deferred.make<void>()
+      const stop = yield* Deferred.make<void>()
+      const next = yield* Deferred.make<void>()
+      const job = yield* jobs.start({
+        type: "test",
+        run: Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(stop)),
+          Effect.andThen(Effect.interrupt),
+        ),
+      })
+      yield* Deferred.await(started)
+      expect(yield* jobs.extend({ id: job.id, run: Deferred.await(next).pipe(Effect.as("continued")) })).toBe(true)
+      yield* Deferred.succeed(stop, undefined)
+      yield* Deferred.succeed(next, undefined)
+      expect(yield* jobs.wait({ id: job.id })).toMatchObject({ info: { status: "completed", output: "continued" } })
+    }).pipe(Effect.provide(jobsLayer)),
+  )
+
   it.live("interrupts live work without promising settlement after the owning process-local scope closes", () =>
     Effect.gen(function* () {
       const scope = yield* Scope.make()

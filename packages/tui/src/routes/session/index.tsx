@@ -46,6 +46,7 @@ import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
 import { Dynamic, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "../../context/sdk"
+import { interruptSession } from "../../util/interrupt"
 import { useEditorContext } from "../../context/editor"
 import { localEditorDirectory } from "../../util/session-location-access"
 import { openEditor } from "../../editor"
@@ -1168,10 +1169,7 @@ export function Session() {
               })
               return
             }
-            await Promise.all([
-              sdk.client.v2.session.interrupt({ sessionID }, { throwOnError: true }),
-              sdk.client.session.abort({ sessionID }, { throwOnError: true }),
-            ])
+            await interruptSession(sdk, sessionID)
             const staged = await sdk.client.v2.session.revert.stage(
               { sessionID, messageID: message.id },
               { throwOnError: true },

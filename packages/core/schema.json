@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "2ec13ad9-f4ee-43cd-baf6-9fcea4c2c60c",
+  "id": "1efcf6a2-016f-418e-bfce-c6aa241bdda6",
   "prevIds": [
-    "fdfaeae0-e78e-4319-82f6-25e4b65cbfe9"
+    "2ec13ad9-f4ee-43cd-baf6-9fcea4c2c60c"
   ],
   "ddl": [
     {
@@ -75,7 +75,15 @@
       "entityType": "tables"
     },
     {
+      "name": "session_execution_pause",
+      "entityType": "tables"
+    },
+    {
       "name": "session_input",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_interruption",
       "entityType": "tables"
     },
     {
@@ -1130,6 +1138,36 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_execution_pause"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "operation_id",
+      "entityType": "columns",
+      "table": "session_execution_pause"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_execution_pause"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "id",
       "entityType": "columns",
       "table": "session_input"
@@ -1203,6 +1241,96 @@
       "name": "time_created",
       "entityType": "columns",
       "table": "session_input"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "operation_id",
+      "entityType": "columns",
+      "table": "session_interruption"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_interruption"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "backend",
+      "entityType": "columns",
+      "table": "session_interruption"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "session_interruption"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "actor_kind",
+      "entityType": "columns",
+      "table": "session_interruption"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "actor_id",
+      "entityType": "columns",
+      "table": "session_interruption"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "session_interruption"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_requested",
+      "entityType": "columns",
+      "table": "session_interruption"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_settled",
+      "entityType": "columns",
+      "table": "session_interruption"
     },
     {
       "type": "text",
@@ -2825,9 +2953,39 @@
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
+      "name": "fk_session_execution_pause_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_execution_pause"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
       "name": "fk_session_input_session_id_session_id_fk",
       "entityType": "fks",
       "table": "session_input"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_interruption_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_interruption"
     },
     {
       "columns": [
@@ -3245,11 +3403,29 @@
     },
     {
       "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_execution_pause_pk",
+      "table": "session_execution_pause",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         "id"
       ],
       "nameExplicit": false,
       "name": "session_input_pk",
       "table": "session_input",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "operation_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_interruption_pk",
+      "table": "session_interruption",
       "entityType": "pks"
     },
     {
@@ -3528,6 +3704,24 @@
       "name": "session_input_session_promoted_seq_idx",
       "entityType": "indexes",
       "table": "session_input"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "time_requested",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_interruption_session_time_idx",
+      "entityType": "indexes",
+      "table": "session_interruption"
     },
     {
       "columns": [

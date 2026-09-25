@@ -1,6 +1,7 @@
 export * as SessionRunCoordinator from "./run-coordinator"
 
-import { Deferred, Effect, Exit, Fiber, FiberSet, Scope } from "effect"
+import { randomUUID } from "node:crypto"
+import { Cause, Deferred, Effect, Exit, Fiber, FiberSet, Scope } from "effect"
 
 /** Serializes execution for each key while allowing different keys to run concurrently. */
 export interface Coordinator<Key, E> {
@@ -19,6 +20,10 @@ export interface Coordinator<Key, E> {
   ) => Effect.Effect<{ busy: true } | { busy: false; value: A }, E2, R>
   /** Stops active execution and waits for its cleanup. */
   readonly interrupt: (key: Key) => Effect.Effect<void>
+  /** Captures the current drain, including ordinary Sessions with no Task invocation. */
+  readonly generation: (key: Key) => Effect.Effect<string | undefined>
+  /** Stops only that drain; a late request cannot interrupt its successor. */
+  readonly interruptGeneration: (key: Key, generation: string) => Effect.Effect<"interrupted" | "completed" | "stale">
   /** Bind an exact execution while its owner lease is held. */
   readonly bindExact: (key: Key, inputID: string, ownerGeneration: string) => () => void
   /** Compare and signal the bound fiber without waiting for cleanup under a child gate. */
@@ -26,6 +31,7 @@ export interface Coordinator<Key, E> {
 }
 
 type Entry<E> = {
+  readonly generation: string
   readonly done: Deferred.Deferred<void, E>
   wakeDone?: Deferred.Deferred<void, E>
   owner?: Fiber.Fiber<void>
@@ -44,6 +50,7 @@ export const make = <Key, E>(options: {
     const fork = yield* FiberSet.makeRuntime<never, void, never>()
 
     const makeEntry = (): Entry<E> => ({
+      generation: randomUUID(),
       done: Deferred.makeUnsafe<void, E>(),
       pendingWake: false,
       stopping: false,
@@ -143,14 +150,27 @@ export const make = <Key, E>(options: {
         }),
       )
 
-    const interrupt = (key: Key): Effect.Effect<void> =>
+    const generation = (key: Key) => Effect.sync(() => active.get(key)?.generation)
+
+    const interruptGeneration = (key: Key, expected: string): Effect.Effect<"interrupted" | "completed" | "stale"> =>
       Effect.suspend(() => {
         const entry = active.get(key)
-        if (entry?.owner === undefined) return Effect.void
+        if (entry?.owner === undefined || entry.generation !== expected) return Effect.succeed("stale" as const)
         entry.stopping = true
         entry.pendingWake = false
-        return Fiber.interrupt(entry.owner)
+        entry.owner.interruptUnsafe()
+        return Deferred.await(entry.done).pipe(
+          Effect.exit,
+          Effect.map((exit) =>
+            Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause) ? ("interrupted" as const) : ("completed" as const),
+          ),
+        )
       })
+
+    const interrupt = (key: Key): Effect.Effect<void> =>
+      generation(key).pipe(
+        Effect.flatMap((current) => (current ? interruptGeneration(key, current).pipe(Effect.asVoid) : Effect.void)),
+      )
 
     const bindExact = (key: Key, inputID: string, ownerGeneration: string) => {
       const entry = active.get(key)
@@ -179,6 +199,8 @@ export const make = <Key, E>(options: {
       wakeAndWait,
       exclusive,
       interrupt,
+      generation,
+      interruptGeneration,
       bindExact,
       requestInterruptExact,
     }

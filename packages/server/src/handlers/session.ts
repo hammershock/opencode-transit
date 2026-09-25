@@ -28,6 +28,7 @@ import { SessionTaskControl } from "@opencode-ai/core/session/task-control"
 import { SessionTaskResult } from "@opencode-ai/core/session/task-result"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionInterruption } from "@opencode-ai/core/session/interruption"
 import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
 import { MessageTable } from "@opencode-ai/core/session/sql"
 import { eq } from "drizzle-orm"
@@ -631,7 +632,23 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.interrupt",
         Effect.fn(function* (ctx) {
-          yield* session.interrupt(ctx.params.sessionID)
+          const request = yield* HttpServerRequest.HttpServerRequest
+          yield* SessionInterruption.request({
+            sessionID: ctx.params.sessionID,
+            operationID: request.headers["x-opencode-interrupt-id"] ?? crypto.randomUUID(),
+            actor: { kind: "user", id: "direct_user" },
+          }).pipe(
+            Effect.mapError((error) =>
+              error instanceof SessionInterruption.UnknownOrForbidden
+                ? new SessionNotFoundError({ sessionID: ctx.params.sessionID, message: "Session unavailable" })
+                : error instanceof SessionInterruption.Conflict
+                  ? new ConflictError({ message: "Interrupt operation conflicts with an existing request" })
+                  : new ServiceUnavailableError({
+                      service: "session_interrupt",
+                      message: "Execution owner unavailable",
+                    }),
+            ),
+          )
           return HttpApiSchema.NoContent.make()
         }),
       )

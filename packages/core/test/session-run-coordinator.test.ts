@@ -7,21 +7,23 @@ const it = testEffect(Layer.empty)
 
 describe("SessionRunCoordinator", () => {
   it.effect("reserves manual work, rejects concurrent work, and runs a wake after release", () =>
-    Effect.scoped(Effect.gen(function* () {
-      const started = yield* Deferred.make<void>()
-      const gate = yield* Deferred.make<void>()
-      const drained = yield* Deferred.make<void>()
-      const coordinator = yield* SessionRunCoordinator.make({ drain: () => Deferred.succeed(drained, undefined) })
-      const manual = yield* coordinator.exclusive("session", Deferred.succeed(started, undefined).pipe(
-        Effect.andThen(Deferred.await(gate)),
-      )).pipe(Effect.forkChild)
-      yield* Deferred.await(started)
-      expect(yield* coordinator.exclusive("session", Effect.void)).toEqual({ busy: true })
-      yield* coordinator.wake("session")
-      yield* Deferred.succeed(gate, undefined)
-      expect(yield* Fiber.join(manual)).toEqual({ busy: false, value: undefined })
-      yield* Deferred.await(drained)
-    })),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>()
+        const gate = yield* Deferred.make<void>()
+        const drained = yield* Deferred.make<void>()
+        const coordinator = yield* SessionRunCoordinator.make({ drain: () => Deferred.succeed(drained, undefined) })
+        const manual = yield* coordinator
+          .exclusive("session", Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(gate))))
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(started)
+        expect(yield* coordinator.exclusive("session", Effect.void)).toEqual({ busy: true })
+        yield* coordinator.wake("session")
+        yield* Deferred.succeed(gate, undefined)
+        expect(yield* Fiber.join(manual)).toEqual({ busy: false, value: undefined })
+        yield* Deferred.await(drained)
+      }),
+    ),
   )
 
   it.effect("joins concurrent resumes for one key", () =>
@@ -229,6 +231,29 @@ describe("SessionRunCoordinator", () => {
       Effect.gen(function* () {
         const coordinator = yield* SessionRunCoordinator.make({ drain: () => Effect.void })
         yield* coordinator.interrupt("session")
+      }),
+    ),
+  )
+
+  it.effect("an old generation cannot interrupt a later run", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>()
+        const gate = yield* Deferred.make<void>()
+        const coordinator = yield* SessionRunCoordinator.make({
+          drain: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(gate))),
+        })
+        const first = yield* coordinator.run("session").pipe(Effect.forkChild)
+        yield* Deferred.await(started)
+        const generation = yield* coordinator.generation("session")
+        expect(generation).toBeDefined()
+        expect(yield* coordinator.interruptGeneration("session", generation!)).toBe("interrupted")
+        yield* Fiber.await(first)
+        const second = yield* coordinator.run("session").pipe(Effect.forkChild)
+        yield* Effect.yieldNow
+        expect(yield* coordinator.interruptGeneration("session", generation!)).toBe("stale")
+        yield* Deferred.succeed(gate, undefined)
+        yield* Fiber.join(second)
       }),
     ),
   )

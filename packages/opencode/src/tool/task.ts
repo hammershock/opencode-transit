@@ -24,12 +24,18 @@ import { SessionTaskDelivery } from "@opencode-ai/core/session/task-delivery"
 import { SessionTaskResult } from "@opencode-ai/core/session/task-result"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { SessionInterruption } from "@opencode-ai/core/session/interruption"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionTaskEvent } from "@opencode-ai/schema/session-task-event"
 import { ModelV2 } from "@opencode-ai/core/model"
-import { SessionMessageTable, SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
+import {
+  SessionExecutionPauseTable,
+  SessionMessageTable,
+  SessionTable,
+  SessionTaskTable,
+} from "@opencode-ai/core/session/sql"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { and, eq } from "drizzle-orm"
 import path from "path"
@@ -714,9 +720,14 @@ export const TaskTool = Tool.define(
           ),
         )
         .get()
-      const assistant = canonical?.type === "assistant"
-        ? Schema.decodeUnknownOption(SessionMessage.Assistant)({ ...canonical.data, id: canonical.id, type: "assistant" }).valueOrUndefined
-        : undefined
+      const assistant =
+        canonical?.type === "assistant"
+          ? Schema.decodeUnknownOption(SessionMessage.Assistant)({
+              ...canonical.data,
+              id: canonical.id,
+              type: "assistant",
+            }).valueOrUndefined
+          : undefined
       const legacy = assistant
         ? undefined
         : yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
@@ -724,14 +735,15 @@ export const TaskTool = Tool.define(
             Effect.orDie,
           )
       const legacyAssistant = legacy?.info.role === "assistant" ? legacy.info : undefined
-      if (!assistant && !legacyAssistant)
-        return yield* Effect.fail(new Error("Not an assistant message"))
+      if (!assistant && !legacyAssistant) return yield* Effect.fail(new Error("Not an assistant message"))
       const useV2 = taskBackend.id === "session_v2" && assistant !== undefined
       const variant = assistant?.model.variant ?? legacyAssistant?.variant
 
-      const model = destAgent.model ?? (assistant
-        ? { modelID: assistant.model.id, providerID: assistant.model.providerID }
-        : { modelID: legacyAssistant!.modelID, providerID: legacyAssistant!.providerID })
+      const model =
+        destAgent.model ??
+        (assistant
+          ? { modelID: assistant.model.id, providerID: assistant.model.providerID }
+          : { modelID: legacyAssistant!.modelID, providerID: legacyAssistant!.providerID })
       const previous = ctx.callID
         ? yield* SessionTask.findInvocation(database.db, { parentMessageID: ctx.messageID, callID: ctx.callID })
         : undefined
@@ -887,30 +899,32 @@ export const TaskTool = Tool.define(
               })
               return { inputID, state: "admitted" as const, fresh: true as const }
             })
-        const accepted = yield* SessionTaskResult.withParent(SessionV2.ID.make(ctx.sessionID))(admissionEffect.pipe(
-          Effect.map((value) => ({ value }) as const),
-          Effect.catchDefect((defect) => {
-            if (defect instanceof SessionTask.AdmissionConflict)
-              return SessionTask.findInvocation(database.db, {
-                parentMessageID: ctx.messageID,
-                callID: ctx.callID!,
-              }).pipe(
-                Effect.flatMap((row) =>
-                  row && row.backend === "v2" && matchesPrior(row)
-                    ? Effect.succeed({ prior: row } as const)
-                    : Effect.fail(new TaskPlacementError(defect.code, defect.message)),
-                ),
-              )
-            if (defect instanceof SessionTask.CapacityError || defect instanceof SessionTask.OwnerUnknown)
-              return Effect.fail(new TaskPlacementError(defect.code, defect.message))
-            return Effect.die(defect)
-          }),
-          Effect.tap((receipt) =>
-            runInBackground && "value" in receipt && receipt.value.fresh
-              ? SessionTaskResult.authorizeWithin(database, SessionV2.ID.make(ctx.sessionID), receipt.value.inputID)
-              : Effect.void,
+        const accepted = yield* SessionTaskResult.withParent(SessionV2.ID.make(ctx.sessionID))(
+          admissionEffect.pipe(
+            Effect.map((value) => ({ value }) as const),
+            Effect.catchDefect((defect) => {
+              if (defect instanceof SessionTask.AdmissionConflict)
+                return SessionTask.findInvocation(database.db, {
+                  parentMessageID: ctx.messageID,
+                  callID: ctx.callID!,
+                }).pipe(
+                  Effect.flatMap((row) =>
+                    row && row.backend === "v2" && matchesPrior(row)
+                      ? Effect.succeed({ prior: row } as const)
+                      : Effect.fail(new TaskPlacementError(defect.code, defect.message)),
+                  ),
+                )
+              if (defect instanceof SessionTask.CapacityError || defect instanceof SessionTask.OwnerUnknown)
+                return Effect.fail(new TaskPlacementError(defect.code, defect.message))
+              return Effect.die(defect)
+            }),
+            Effect.tap((receipt) =>
+              runInBackground && "value" in receipt && receipt.value.fresh
+                ? SessionTaskResult.authorizeWithin(database, SessionV2.ID.make(ctx.sessionID), receipt.value.inputID)
+                : Effect.void,
+            ),
           ),
-        ))
+        )
         if ("prior" in accepted) return yield* priorReceipt(accepted.prior)
         const admitted = accepted.value
         if (!admitted.fresh) {
@@ -1131,6 +1145,9 @@ export const TaskTool = Tool.define(
       }
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
+        yield* SessionInterruption.waitUntilResumed(SessionV2.ID.make(nextSession.id)).pipe(
+          Effect.provideService(Database.Service, database),
+        )
         let promoted = false
         let ownerLost = false
         let resultMessageID: string | undefined
@@ -1157,6 +1174,14 @@ export const TaskTool = Tool.define(
             })
             resultMessageID = result.info.id
             if (result.info.role === "assistant" && result.info.error) {
+              if (
+                yield* database.db
+                  .select({ session_id: SessionExecutionPauseTable.session_id })
+                  .from(SessionExecutionPauseTable)
+                  .where(eq(SessionExecutionPauseTable.session_id, SessionV2.ID.make(nextSession.id)))
+                  .get()
+              )
+                return yield* Effect.interrupt
               const message =
                 "message" in result.info.error.data && typeof result.info.error.data.message === "string"
                   ? result.info.error.data.message

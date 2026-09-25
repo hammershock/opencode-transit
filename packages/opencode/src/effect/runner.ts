@@ -1,4 +1,5 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Latch, Schema, Scope, SynchronizedRef } from "effect"
+import { randomUUID } from "node:crypto"
 
 export interface Runner<A, E = never> {
   readonly state: State<A, E>
@@ -6,6 +7,8 @@ export interface Runner<A, E = never> {
   readonly ensureRunning: (work: Effect.Effect<A, E>) => Effect.Effect<A, E>
   readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch) => Effect.Effect<A, E | Busy>
   readonly cancel: Effect.Effect<void>
+  readonly generation: string | undefined
+  readonly interruptGeneration: (generation: string) => Effect.Effect<"interrupted" | "completed" | "stale">
 }
 
 export class Cancelled extends Schema.TaggedErrorClass<Cancelled>()("RunnerCancelled", {}) {}
@@ -49,6 +52,7 @@ export const make = <A, E = never>(
   const onBusy = opts?.onBusy ?? Effect.void
   const onInterrupt = opts?.onInterrupt
   let ids = 0
+  const instance = randomUUID()
 
   const state = () => SynchronizedRef.getUnsafe(ref)
   const next = () => {
@@ -201,6 +205,42 @@ export const make = <A, E = never>(
     }
   }).pipe(Effect.flatten)
 
+  const interruptGeneration = (expected: string) =>
+    SynchronizedRef.modify(ref, (st): readonly [Effect.Effect<"interrupted" | "completed" | "stale">, State<A, E>] => {
+      if (st._tag === "Idle") return [Effect.succeed("stale"), st]
+      const id = st._tag === "Running" ? st.run.id : st.shell.id
+      if (`${instance}:${id}` !== expected) return [Effect.succeed("stale"), st]
+      if (st._tag === "Running")
+        return [
+          Effect.gen(function* () {
+            yield* Fiber.interrupt(st.run.fiber)
+            const exit = yield* Fiber.await(st.run.fiber)
+            if (Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)) {
+              yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
+              yield* idleIfCurrent()
+              return "interrupted" as const
+            }
+            yield* idleIfCurrent()
+            return "completed" as const
+          }),
+          { _tag: "Idle" },
+        ]
+      return [
+        Effect.gen(function* () {
+          if (st.shell.ready) yield* st.shell.ready.await.pipe(Effect.exit, Effect.asVoid)
+          yield* Deferred.succeed(st.shell.cancelled, undefined).pipe(Effect.asVoid)
+          yield* Fiber.interrupt(st.shell.fiber)
+          const exit = yield* Fiber.await(st.shell.fiber)
+          if (st._tag === "ShellThenRun") yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
+          yield* idleIfCurrent()
+          return Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)
+            ? ("interrupted" as const)
+            : ("completed" as const)
+        }),
+        { _tag: "Idle" },
+      ]
+    }).pipe(Effect.flatten)
+
   return {
     get state() {
       return state()
@@ -208,9 +248,18 @@ export const make = <A, E = never>(
     get busy() {
       return state()._tag !== "Idle"
     },
+    get generation() {
+      const current = state()
+      return current._tag === "Running"
+        ? `${instance}:${current.run.id}`
+        : current._tag === "Shell" || current._tag === "ShellThenRun"
+          ? `${instance}:${current.shell.id}`
+          : undefined
+    },
     ensureRunning,
     startShell,
     cancel,
+    interruptGeneration,
   }
 }
 

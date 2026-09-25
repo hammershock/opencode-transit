@@ -43,6 +43,9 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
+import { EventV2 } from "@opencode-ai/core/event"
+import { SessionInterruption } from "@opencode-ai/core/session/interruption"
+import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "@opencode-ai/core/shell"
@@ -194,6 +197,7 @@ const promptRoot = LayerNode.group([
   BackgroundJob.node,
   SessionStatus.node,
   SessionRunState.node,
+  EventV2.node,
   Database.node,
   EventV2Bridge.node,
   Question.node,
@@ -317,20 +321,23 @@ const withCommandHooks = testEffect(
     [RuntimeFlags.node, runtimeFlags],
     [LocationServiceMap.node, locationServiceMapLayer],
     [SessionExecution.node, SessionExecution.noopLayer],
-    [Plugin.node, Layer.mock(Plugin.Service)({
-      trigger: <Name extends string, Input, Output>(name: Name, _input: Input, output: Output) =>
-        Effect.sync(() => {
-          commandHookCalls.push(name)
-          if (name === "chat.message") {
-            const parts = (output as { parts: SessionV1.Part[] }).parts
-            const text = parts.find((part) => part.type === "text")
-            if (text?.type === "text") text.text += " [hooked]"
-          }
-          return output
-        }),
-      list: () => Effect.succeed([]),
-      init: () => Effect.void,
-    })],
+    [
+      Plugin.node,
+      Layer.mock(Plugin.Service)({
+        trigger: <Name extends string, Input, Output>(name: Name, _input: Input, output: Output) =>
+          Effect.sync(() => {
+            commandHookCalls.push(name)
+            if (name === "chat.message") {
+              const parts = (output as { parts: SessionV1.Part[] }).parts
+              const text = parts.find((part) => part.type === "text")
+              if (text?.type === "text") text.text += " [hooked]"
+            }
+            return output
+          }),
+        list: () => Effect.succeed([]),
+        init: () => Effect.void,
+      }),
+    ],
   ]),
 )
 const unix = process.platform !== "win32" ? it.instance : it.instance.skip
@@ -1924,6 +1931,30 @@ it.instance("assertNotBusy fails with BusyError when loop running", () =>
   }),
 )
 
+it.instance("user interruption reaches the live legacy owner and records its actor", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    yield* llm.hang
+
+    const chat = yield* sessions.create({})
+    yield* user(chat.id, "hi")
+    const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+    yield* llm.wait(1)
+    yield* waitForBusy(chat.id)
+    const receipt = yield* SessionInterruption.request({
+      sessionID: SessionSchema.ID.make(chat.id),
+      operationID: crypto.randomUUID(),
+      actor: { kind: "user", id: "direct_user" },
+    })
+    expect(receipt?.state).toBe("interrupted")
+    expect(receipt && "backend" in receipt ? receipt.backend : undefined).toBe("v1")
+    expect((yield* SessionInterruption.latest(SessionSchema.ID.make(chat.id)))?.actor_kind).toBe("user")
+    yield* Fiber.await(fiber)
+  }),
+)
+
 noLLMServer.instance("assertNotBusy succeeds when idle", () =>
   Effect.gen(function* () {
     const run = yield* SessionRunState.Service
@@ -2275,9 +2306,8 @@ unix(
   30_000,
 )
 
-withSessionActivation.instance(
-  "V2 configured command admits once and exact retry does not write V1 messages",
-  () => Effect.gen(function* () {
+withSessionActivation.instance("V2 configured command admits once and exact retry does not write V1 messages", () =>
+  Effect.gen(function* () {
     const { dir } = yield* useServerConfig((url) => ({
       ...providerCfg(url),
       command: { probe: { template: "Review $ARGUMENTS" } },
@@ -2300,7 +2330,9 @@ withSessionActivation.instance(
     expect(admitted?.prompt.text).toBe("Review hello")
     expect(admitted?.prompt.command).toMatchObject({ name: "probe", arguments: "hello" })
     expect(admitted?.prompt.selection?.agent).toBe("build")
-    expect(yield* database.db.select().from(MessageTable).where(eq(MessageTable.session_id, chat.id)).all()).toHaveLength(0)
+    expect(
+      yield* database.db.select().from(MessageTable).where(eq(MessageTable.session_id, chat.id)).all(),
+    ).toHaveLength(0)
     const conflict = yield* prompt.command({ ...input, arguments: "changed" }).pipe(Effect.exit)
     expect(Exit.isFailure(conflict)).toBe(true)
     if (Exit.isFailure(conflict)) expect(Cause.squash(conflict.cause)).toBeInstanceOf(SessionV2.PromptConflictError)
@@ -2331,7 +2363,9 @@ withSessionActivation.instance("V2 subtask command retains its direct Task reque
       model: { providerID: "test", id: "test-model" },
     })
     expect(admitted?.prompt.selection?.agent).toBe("build")
-    expect(yield* database.db.select().from(MessageTable).where(eq(MessageTable.session_id, chat.id)).all()).toHaveLength(0)
+    expect(
+      yield* database.db.select().from(MessageTable).where(eq(MessageTable.session_id, chat.id)).all(),
+    ).toHaveLength(0)
   }),
 )
 
@@ -2354,8 +2388,9 @@ withCommandHooks.instance("V2 configured command preserves both legacy hooks onc
     yield* prompt.command(input)
     yield* prompt.command(input)
     expect(commandHookCalls).toEqual(["command.execute.before", "chat.message"])
-    expect((yield* SessionInput.find(database.db, SessionMessage.ID.make(input.messageID)))?.prompt.text)
-      .toBe("Inspect cache [hooked]")
+    expect((yield* SessionInput.find(database.db, SessionMessage.ID.make(input.messageID)))?.prompt.text).toBe(
+      "Inspect cache [hooked]",
+    )
   }),
 )
 

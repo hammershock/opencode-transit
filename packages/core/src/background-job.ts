@@ -148,7 +148,8 @@ export const make = Effect.gen(function* () {
         Exit.isSuccess(exit) && (!job.output || sequence > job.output.sequence)
           ? { sequence, text: exit.value }
           : job.output
-      if (Exit.isSuccess(exit) && pending > 0) {
+      // A stopped invocation does not discard follow-ups already admitted for this Session.
+      if ((Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)) && pending > 0) {
         return [{}, new Map(jobs).set(id, { ...job, pending, output })]
       }
       const status: Exclude<Status, "running"> = Exit.isSuccess(exit)

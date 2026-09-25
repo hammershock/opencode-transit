@@ -613,7 +613,7 @@ export function make(options: ClientOptions) {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/interrupt`,
             successStatus: 204,
-            declaredStatuses: [404, 400, 401],
+            declaredStatuses: [404, 409, 503, 400, 401],
             empty: true,
           },
           requestOptions,

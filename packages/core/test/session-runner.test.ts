@@ -270,6 +270,8 @@ const execution = Layer.effect(
       wake: coordinator.wake,
       wakeAndWait: coordinator.wakeAndWait,
       interrupt: coordinator.interrupt,
+      generation: coordinator.generation,
+      interruptGeneration: coordinator.interruptGeneration,
       compactManual: (input) => sessionRunner.compactManual(input),
       requestInterruptExact: () => Effect.succeed(false),
     })

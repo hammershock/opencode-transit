@@ -1519,7 +1519,7 @@ test.each(["canonical", "mixed", "legacy", "reopened", "slash", "failed-submit"]
       })
 
       expect(editor.plainText).toBe(message.text)
-      expect(paths).toContain("/api/session/dummy/interrupt")
+      expect(paths).toContain("/session/dummy/abort")
       expect(paths).toContain("/api/session/dummy/revert/stage")
       expect(paths).not.toContain("/session/dummy/revert")
 
@@ -1537,7 +1537,7 @@ test.each(["canonical", "mixed", "legacy", "reopened", "slash", "failed-submit"]
       const earlier = await waitForEditorText(setup, previous.text)
 
       expect(earlier.plainText).toBe(previous.text)
-      expect(paths.filter((path) => path === "/api/session/dummy/interrupt")).toHaveLength(2)
+      expect(paths.filter((path) => path === "/session/dummy/abort")).toHaveLength(2)
       expect(paths.filter((path) => path === "/api/session/dummy/revert/stage")).toHaveLength(2)
 
       events.emit({
@@ -2344,8 +2344,8 @@ test.each(["legacy", "v2"] as const)("Escape interrupts %s execution after promp
     else await Bun.sleep(50)
     expect(paths).toEqual([])
     setup.mockInput.pressEscape()
-    await waitForRequestCount(paths, "/api/session/dummy/interrupt", 1)
-    expect(paths).toContain("/session/dummy/abort")
+    await waitForRequestCount(paths, "/session/dummy/abort", 1)
+    expect(paths).not.toContain("/api/session/dummy/interrupt")
 
     process.emit("SIGHUP")
     await task

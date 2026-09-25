@@ -33,6 +33,11 @@ export interface Interface {
   >
   /** Interrupt active work owned by this process. Idle interruption is a no-op. */
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly generation: (sessionID: SessionSchema.ID) => Effect.Effect<string | undefined>
+  readonly interruptGeneration: (
+    sessionID: SessionSchema.ID,
+    generation: string,
+  ) => Effect.Effect<"interrupted" | "completed" | "stale">
   /** Signal only the bound invocation generation. This never waits for settlement. */
   readonly requestInterruptExact: (
     sessionID: SessionSchema.ID,
@@ -56,6 +61,8 @@ export const noopLayer = Layer.succeed(
     wakeAndWait: () => Effect.void,
     compactManual: () => Effect.void,
     interrupt: () => Effect.void,
+    generation: () => Effect.succeed(undefined),
+    interruptGeneration: () => Effect.succeed("stale"),
     requestInterruptExact: () => Effect.succeed(false),
   }),
 )
