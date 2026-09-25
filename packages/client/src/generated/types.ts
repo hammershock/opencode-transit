@@ -688,12 +688,21 @@ export type SessionsPromptOutput = {
     readonly delivery: "steer" | "queue"
     readonly timeCreated: number
     readonly promotedSeq?: number
-    readonly origin?: {
-      readonly kind: "delegation_result"
-      readonly invocationInputID: string
-      readonly terminalEventID: string
-      readonly version: 1
-    }
+    readonly origin?:
+      | {
+          readonly kind: "delegation_result"
+          readonly invocationInputID: string
+          readonly terminalEventID: string
+          readonly version: 1
+        }
+      | {
+          readonly kind: "peer_message"
+          readonly sourceSessionID: string
+          readonly alias: string
+          readonly messageKind: "request" | "reply" | "notice"
+          readonly requestID?: string
+          readonly version: 1
+        }
   }
 }["data"]
 
@@ -785,12 +794,21 @@ export type SessionsContextOutput = {
           }
         }>
         readonly type: "user"
-        readonly origin?: {
-          readonly kind: "delegation_result"
-          readonly invocationInputID: string
-          readonly terminalEventID: string
-          readonly version: 1
-        }
+        readonly origin?:
+          | {
+              readonly kind: "delegation_result"
+              readonly invocationInputID: string
+              readonly terminalEventID: string
+              readonly version: 1
+            }
+          | {
+              readonly kind: "peer_message"
+              readonly sourceSessionID: string
+              readonly alias: string
+              readonly messageKind: "request" | "reply" | "notice"
+              readonly requestID?: string
+              readonly version: 1
+            }
       }
     | {
         readonly id: string
@@ -1327,12 +1345,21 @@ export type SessionsHistoryOutput = {
             }
           }
           readonly delivery: "steer" | "queue"
-          readonly origin?: {
-            readonly kind: "delegation_result"
-            readonly invocationInputID: string
-            readonly terminalEventID: string
-            readonly version: 1
-          } | null
+          readonly origin?:
+            | {
+                readonly kind: "delegation_result"
+                readonly invocationInputID: string
+                readonly terminalEventID: string
+                readonly version: 1
+              }
+            | {
+                readonly kind: "peer_message"
+                readonly sourceSessionID: string
+                readonly alias: string
+                readonly messageKind: "request" | "reply" | "notice"
+                readonly requestID?: string
+                readonly version: 1
+              }
         }
       }
     | {
@@ -1396,12 +1423,21 @@ export type SessionsHistoryOutput = {
                   }
                 }>
                 readonly type: "user"
-                readonly origin?: {
-                  readonly kind: "delegation_result"
-                  readonly invocationInputID: string
-                  readonly terminalEventID: string
-                  readonly version: 1
-                }
+                readonly origin?:
+                  | {
+                      readonly kind: "delegation_result"
+                      readonly invocationInputID: string
+                      readonly terminalEventID: string
+                      readonly version: 1
+                    }
+                  | {
+                      readonly kind: "peer_message"
+                      readonly sourceSessionID: string
+                      readonly alias: string
+                      readonly messageKind: "request" | "reply" | "notice"
+                      readonly requestID?: string
+                      readonly version: 1
+                    }
               }
             | {
                 readonly id: string
@@ -1614,6 +1650,21 @@ export type SessionsHistoryOutput = {
             }
           }
           readonly delivery: "steer" | "queue"
+          readonly origin?:
+            | {
+                readonly kind: "delegation_result"
+                readonly invocationInputID: string
+                readonly terminalEventID: string
+                readonly version: 1
+              }
+            | {
+                readonly kind: "peer_message"
+                readonly sourceSessionID: string
+                readonly alias: string
+                readonly messageKind: "request" | "reply" | "notice"
+                readonly requestID?: string
+                readonly version: 1
+              }
           readonly task?:
             | {
                 readonly kind: "invocation"
@@ -1640,6 +1691,45 @@ export type SessionsHistoryOutput = {
               }
             | null
         }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.peer.message.sent"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: {
+          readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+          readonly directory: string
+          readonly workspaceID?: string
+          readonly lastKnownTargetName?: string
+        }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly messageID: string
+          readonly sourceSessionID: string
+          readonly operationID: string
+          readonly alias: string
+          readonly kind: "request" | "reply" | "notice"
+          readonly requestID?: string
+          readonly text: string
+          readonly backend: "v1" | "v2"
+          readonly queued: boolean
+          readonly resume: boolean
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.legacy.user.input"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: {
+          readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+          readonly directory: string
+          readonly workspaceID?: string
+          readonly lastKnownTargetName?: string
+        }
+        readonly data: { readonly timestamp: number; readonly sessionID: string; readonly messageID: string }
       }
     | {
         readonly id: string
@@ -2516,7 +2606,14 @@ export type SessionsEventsOutput =
               readonly terminalEventID: string
               readonly version: 1
             }
-          | undefined
+          | {
+              readonly kind: "peer_message"
+              readonly sourceSessionID: string
+              readonly alias: string
+              readonly messageKind: "request" | "reply" | "notice"
+              readonly requestID?: string
+              readonly version: 1
+            }
       }
     }
   | {
@@ -2580,12 +2677,21 @@ export type SessionsEventsOutput =
                 }
               }>
               readonly type: "user"
-              readonly origin?: {
-                readonly kind: "delegation_result"
-                readonly invocationInputID: string
-                readonly terminalEventID: string
-                readonly version: 1
-              }
+              readonly origin?:
+                | {
+                    readonly kind: "delegation_result"
+                    readonly invocationInputID: string
+                    readonly terminalEventID: string
+                    readonly version: 1
+                  }
+                | {
+                    readonly kind: "peer_message"
+                    readonly sourceSessionID: string
+                    readonly alias: string
+                    readonly messageKind: "request" | "reply" | "notice"
+                    readonly requestID?: string
+                    readonly version: 1
+                  }
             }
           | {
               readonly id: string
@@ -2798,6 +2904,21 @@ export type SessionsEventsOutput =
           }
         }
         readonly delivery: "steer" | "queue"
+        readonly origin?:
+          | {
+              readonly kind: "delegation_result"
+              readonly invocationInputID: string
+              readonly terminalEventID: string
+              readonly version: 1
+            }
+          | {
+              readonly kind: "peer_message"
+              readonly sourceSessionID: string
+              readonly alias: string
+              readonly messageKind: "request" | "reply" | "notice"
+              readonly requestID?: string
+              readonly version: 1
+            }
         readonly task?:
           | {
               readonly kind: "invocation"
@@ -2824,6 +2945,45 @@ export type SessionsEventsOutput =
             }
           | undefined
       }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.peer.message.sent"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: {
+        readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+        readonly directory: string
+        readonly workspaceID?: string
+        readonly lastKnownTargetName?: string
+      }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly messageID: string
+        readonly sourceSessionID: string
+        readonly operationID: string
+        readonly alias: string
+        readonly kind: "request" | "reply" | "notice"
+        readonly requestID?: string
+        readonly text: string
+        readonly backend: "v1" | "v2"
+        readonly queued: boolean
+        readonly resume: boolean
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.legacy.user.input"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: {
+        readonly target?: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+        readonly directory: string
+        readonly workspaceID?: string
+        readonly lastKnownTargetName?: string
+      }
+      readonly data: { readonly timestamp: number; readonly sessionID: string; readonly messageID: string }
     }
   | {
       readonly id: string
@@ -3937,12 +4097,21 @@ export type SessionsMessageOutput = {
           }
         }>
         readonly type: "user"
-        readonly origin?: {
-          readonly kind: "delegation_result"
-          readonly invocationInputID: string
-          readonly terminalEventID: string
-          readonly version: 1
-        }
+        readonly origin?:
+          | {
+              readonly kind: "delegation_result"
+              readonly invocationInputID: string
+              readonly terminalEventID: string
+              readonly version: 1
+            }
+          | {
+              readonly kind: "peer_message"
+              readonly sourceSessionID: string
+              readonly alias: string
+              readonly messageKind: "request" | "reply" | "notice"
+              readonly requestID?: string
+              readonly version: 1
+            }
       }
     | {
         readonly id: string
@@ -4143,12 +4312,21 @@ export type MessagesListOutput = {
           }
         }>
         readonly type: "user"
-        readonly origin?: {
-          readonly kind: "delegation_result"
-          readonly invocationInputID: string
-          readonly terminalEventID: string
-          readonly version: 1
-        }
+        readonly origin?:
+          | {
+              readonly kind: "delegation_result"
+              readonly invocationInputID: string
+              readonly terminalEventID: string
+              readonly version: 1
+            }
+          | {
+              readonly kind: "peer_message"
+              readonly sourceSessionID: string
+              readonly alias: string
+              readonly messageKind: "request" | "reply" | "notice"
+              readonly requestID?: string
+              readonly version: 1
+            }
       }
     | {
         readonly id: string

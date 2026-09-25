@@ -58,8 +58,15 @@ import { PermissionContext } from "@/agent/permission-context"
 import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
-import { eq } from "drizzle-orm"
-import { SessionTable } from "@opencode-ai/core/session/sql"
+import { and, asc, eq, ne } from "drizzle-orm"
+import {
+  SessionExecutionPauseTable,
+  SessionPeerMessageTable,
+  SessionPeerReceiptTable,
+  SessionTable,
+} from "@opencode-ai/core/session/sql"
+import { SessionLegacyOwner } from "@opencode-ai/core/session/legacy-owner"
+import { SessionPeerMessage } from "@opencode-ai/core/session/peer-message"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { SystemAssembly } from "./system-assembly"
@@ -128,6 +135,13 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  readonly admitPeer: (input: {
+    sessionID: SessionID
+    messageID: string
+    text: string
+    wake: boolean
+    queue?: boolean
+  }) => Effect.Effect<void, unknown>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly completeShell: (input: ShellCompletionInput) => Effect.Effect<ShellCompletionResult, unknown>
@@ -1336,6 +1350,12 @@ const layer = Layer.effect(
       yield* revert.cleanup(session)
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
+      if (!input.parts.some((part) => part.type === "text" && part.synthetic === true))
+        yield* events.publish(SessionEvent.LegacyUserInput, {
+          sessionID: SessionV2.ID.make(input.sessionID),
+          messageID: SessionMessage.ID.make(message.info.id),
+          timestamp: yield* DateTime.now,
+        })
 
       const permissions: PermissionV1.Rule[] = []
       for (const [t, enabled] of Object.entries(input.tools ?? {})) {
@@ -1387,6 +1407,19 @@ const layer = Layer.effect(
           let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
             Effect.provideService(Database.Service, database),
           )
+          const consumedReplies = yield* database.db
+            .select({ id: SessionPeerReceiptTable.message_id })
+            .from(SessionPeerReceiptTable)
+            .where(
+              and(
+                eq(SessionPeerReceiptTable.receiver_session_id, SessionV2.ID.make(sessionID)),
+                eq(SessionPeerReceiptTable.channel, "wait"),
+              ),
+            )
+            .all()
+            .pipe(Effect.orDie)
+          const consumedIDs = new Set(consumedReplies.map((item) => item.id))
+          msgs = msgs.filter((item) => !consumedIDs.has(item.info.id))
 
           const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
@@ -1505,6 +1538,40 @@ const layer = Layer.effect(
             Effect.provideService(Session.Service, sessions),
             Effect.provideService(FSUtil.Service, locationFilesystem),
           )
+
+          const peerIDs = new Set(msgs.filter((item) => item.info.role === "user").map((item) => item.info.id))
+          const pendingPeers = yield* database.db
+            .select({ id: SessionPeerMessageTable.id, kind: SessionPeerMessageTable.kind })
+            .from(SessionPeerMessageTable)
+            .where(
+              and(
+                eq(SessionPeerMessageTable.target_session_id, SessionV2.ID.make(sessionID)),
+                eq(SessionPeerMessageTable.backend, "v1"),
+                ne(SessionPeerMessageTable.delivery, "delivered"),
+              ),
+            )
+            .all()
+            .pipe(Effect.orDie)
+          for (const peer of pendingPeers.filter((item) => peerIDs.has(MessageID.make(item.id)))) {
+            if (peer.kind === "reply")
+              yield* database.db
+                .insert(SessionPeerReceiptTable)
+                .values({
+                  message_id: peer.id,
+                  receiver_session_id: SessionV2.ID.make(sessionID),
+                  channel: "inbox",
+                  time_consumed: Date.now(),
+                })
+                .onConflictDoNothing()
+                .run()
+                .pipe(Effect.orDie)
+            yield* database.db
+              .update(SessionPeerMessageTable)
+              .set({ delivery: "delivered", time_delivered: Date.now() })
+              .where(and(eq(SessionPeerMessageTable.id, peer.id), ne(SessionPeerMessageTable.delivery, "delivered")))
+              .run()
+              .pipe(Effect.orDie)
+          }
 
           const msg: SessionV1.Assistant = {
             id: MessageID.ascending(),
@@ -1666,11 +1733,52 @@ const layer = Layer.effect(
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
-      return yield* state.ensureRunning(
+      let result = yield* state.ensureRunning(
         input.sessionID,
         lastAssistant(input.sessionID),
         activity.withActivity(input.sessionID, "process_execution", runLoop(input.sessionID).pipe(Effect.scoped)),
       )
+      const attempted = new Set<string>()
+      while (true) {
+        const paused = yield* database.db
+          .select({ id: SessionExecutionPauseTable.session_id })
+          .from(SessionExecutionPauseTable)
+          .where(eq(SessionExecutionPauseTable.session_id, SessionV2.ID.make(input.sessionID)))
+          .get()
+          .pipe(Effect.orDie)
+        if (paused) return result
+        const queued = yield* database.db
+          .select()
+          .from(SessionPeerMessageTable)
+          .where(
+            and(
+              eq(SessionPeerMessageTable.target_session_id, SessionV2.ID.make(input.sessionID)),
+              eq(SessionPeerMessageTable.backend, "v1"),
+              eq(SessionPeerMessageTable.queued, true),
+              ne(SessionPeerMessageTable.delivery, "delivered"),
+            ),
+          )
+          .orderBy(asc(SessionPeerMessageTable.time_created), asc(SessionPeerMessageTable.id))
+          .get()
+          .pipe(Effect.orDie)
+        if (!queued || attempted.has(queued.id)) return result
+        attempted.add(queued.id)
+        const prior = yield* sessions
+          .findMessage(input.sessionID, (item) => item.info.id === queued.id)
+          .pipe(Effect.orDie)
+        if (Option.isNone(prior))
+          yield* prompt({
+            sessionID: input.sessionID,
+            messageID: MessageID.make(queued.id),
+            parts: [{ type: "text", text: SessionPeerMessage.render(queued), synthetic: true }],
+            noReply: true,
+          }).pipe(Effect.orDie)
+        result = yield* state.ensureRunning(
+          input.sessionID,
+          lastAssistant(input.sessionID),
+          activity.withActivity(input.sessionID, "process_execution", runLoop(input.sessionID).pipe(Effect.scoped)),
+        )
+      }
     })
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
@@ -1743,14 +1851,16 @@ const layer = Layer.effect(
       yield* locationAccess.require(input.sessionID).pipe(Effect.catch(Effect.die))
       const canonical = yield* isCanonical(input.sessionID)
       const digest = new Bun.CryptoHasher("sha256")
-        .update(JSON.stringify({
-          command: input.command,
-          arguments: input.arguments,
-          agent: input.agent,
-          model: input.model,
-          variant: input.variant,
-          parts: input.parts,
-        }))
+        .update(
+          JSON.stringify({
+            command: input.command,
+            arguments: input.arguments,
+            agent: input.agent,
+            model: input.model,
+            variant: input.variant,
+            parts: input.parts,
+          }),
+        )
         .digest("hex")
       const canonicalReply = (admitted: SessionInput.Admitted): SessionV1.WithParts => {
         const selected = admitted.prompt.selection
@@ -1768,13 +1878,15 @@ const layer = Layer.effect(
               variant: selected.model.variant,
             },
           },
-          parts: [{
-            id: PartID.make(`prt_${admitted.id.slice(4)}`),
-            messageID: MessageID.make(admitted.id),
-            sessionID: input.sessionID,
-            type: "text",
-            text: admitted.prompt.text,
-          }],
+          parts: [
+            {
+              id: PartID.make(`prt_${admitted.id.slice(4)}`),
+              messageID: MessageID.make(admitted.id),
+              sessionID: input.sessionID,
+              type: "text",
+              text: admitted.prompt.text,
+            },
+          ],
         }
       }
       if (canonical && input.messageID) {
@@ -1879,7 +1991,8 @@ const layer = Layer.effect(
         input.parts?.filter((part) => new URL(part.url).protocol === "file:").map((part) => fileURLToPath(part.url)),
       )
       const uniqueTemplateParts = templateParts.filter(
-        (part) => part.type !== "file" || new URL(part.url).protocol !== "file:" || !inputFiles.has(fileURLToPath(part.url)),
+        (part) =>
+          part.type !== "file" || new URL(part.url).protocol !== "file:" || !inputFiles.has(fileURLToPath(part.url)),
       )
       const isSubtask = (agent.mode === "subagent" && cmd.subtask !== false) || cmd.subtask === true
       const parts = isSubtask
@@ -1966,19 +2079,26 @@ const layer = Layer.effect(
           id: SessionMessage.ID.make(messageID),
           sessionID: SessionV2.ID.make(input.sessionID),
           prompt: {
-            text: subtasks[0]?.prompt ?? normalizedParts.filter((part) => part.type === "text").map((part) => part.text).join("\n\n"),
-            files: normalizedParts.filter((part) => part.type === "file").map((part) => ({
-              uri: part.url,
-              mime: part.mime,
-              name: part.filename,
-              source: part.source
-                ? {
-                    start: part.source.text.start,
-                    end: part.source.text.end,
-                    text: part.source.text.value,
-                  }
-                : undefined,
-            })),
+            text:
+              subtasks[0]?.prompt ??
+              normalizedParts
+                .filter((part) => part.type === "text")
+                .map((part) => part.text)
+                .join("\n\n"),
+            files: normalizedParts
+              .filter((part) => part.type === "file")
+              .map((part) => ({
+                uri: part.url,
+                mime: part.mime,
+                name: part.filename,
+                source: part.source
+                  ? {
+                      start: part.source.text.start,
+                      end: part.source.text.end,
+                      text: part.source.text.value,
+                    }
+                  : undefined,
+              })),
             agents: normalizedParts.filter((part) => part.type === "agent").map((part) => ({ name: part.name })),
           },
           selection: { agent: message.agent, model: selectedModel },
@@ -2268,9 +2388,59 @@ const layer = Layer.effect(
       })
     })
 
+    const admitPeer: Interface["admitPeer"] = Effect.fn("SessionPrompt.admitPeer")(function* (input) {
+      if (input.queue && SessionLegacyOwner.generation(SessionV2.ID.make(input.sessionID))) {
+        yield* loop({ sessionID: input.sessionID }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Legacy queued peer wake failed", { cause: Cause.pretty(cause) }),
+          ),
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
+        return
+      }
+      const paused = yield* database.db
+        .select({ id: SessionExecutionPauseTable.session_id })
+        .from(SessionExecutionPauseTable)
+        .where(eq(SessionExecutionPauseTable.session_id, SessionV2.ID.make(input.sessionID)))
+        .get()
+        .pipe(Effect.orDie)
+      if (input.queue && paused) return
+      const queued = input.queue
+        ? yield* database.db
+            .select()
+            .from(SessionPeerMessageTable)
+            .where(
+              and(
+                eq(SessionPeerMessageTable.target_session_id, SessionV2.ID.make(input.sessionID)),
+                eq(SessionPeerMessageTable.backend, "v1"),
+                eq(SessionPeerMessageTable.queued, true),
+                ne(SessionPeerMessageTable.delivery, "delivered"),
+              ),
+            )
+            .orderBy(asc(SessionPeerMessageTable.time_created), asc(SessionPeerMessageTable.id))
+            .get()
+            .pipe(Effect.orDie)
+        : undefined
+      const messageID = queued?.id ?? input.messageID
+      const prior = yield* sessions.findMessage(input.sessionID, (item) => item.info.id === messageID)
+      if (Option.isNone(prior))
+        yield* prompt({
+          sessionID: input.sessionID,
+          messageID: MessageID.make(messageID),
+          parts: [{ type: "text", text: queued ? SessionPeerMessage.render(queued) : input.text, synthetic: true }],
+          noReply: true,
+        })
+      if (input.wake)
+        yield* loop({ sessionID: input.sessionID }).pipe(
+          Effect.catchCause((cause) => Effect.logWarning("Legacy peer wake failed", { cause: Cause.pretty(cause) })),
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
+    })
+
     return Service.of({
       cancel,
       prompt,
+      admitPeer,
       loop,
       shell,
       completeShell,

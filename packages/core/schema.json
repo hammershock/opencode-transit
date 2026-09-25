@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "1efcf6a2-016f-418e-bfce-c6aa241bdda6",
+  "id": "6b57f8b7-49e8-4dbc-bbd7-b5b08429300a",
   "prevIds": [
-    "2ec13ad9-f4ee-43cd-baf6-9fcea4c2c60c"
+    "1efcf6a2-016f-418e-bfce-c6aa241bdda6"
   ],
   "ddl": [
     {
@@ -88,6 +88,14 @@
     },
     {
       "name": "session_message",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_peer_message",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_peer_receipt",
       "entityType": "tables"
     },
     {
@@ -1401,6 +1409,206 @@
       "name": "data",
       "entityType": "columns",
       "table": "session_message"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "operation_id",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_session_id",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_session_id",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "alias",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reply_id",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "text",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "backend",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "queued",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "resume",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'admitted'",
+      "generated": null,
+      "name": "delivery",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "failure_reason",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_delivered",
+      "entityType": "columns",
+      "table": "session_peer_message"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "message_id",
+      "entityType": "columns",
+      "table": "session_peer_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "receiver_session_id",
+      "entityType": "columns",
+      "table": "session_peer_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "channel",
+      "entityType": "columns",
+      "table": "session_peer_receipt"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_consumed",
+      "entityType": "columns",
+      "table": "session_peer_receipt"
     },
     {
       "type": "text",
@@ -3439,6 +3647,24 @@
     },
     {
       "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "session_peer_message_pk",
+      "table": "session_peer_message",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "message_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_peer_receipt_pk",
+      "table": "session_peer_receipt",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         "session_id"
       ],
       "nameExplicit": false,
@@ -3804,6 +4030,56 @@
         {
           "value": "target_session_id",
           "isExpression": false
+        },
+        {
+          "value": "time_created",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_peer_message_target_time_idx",
+      "entityType": "indexes",
+      "table": "session_peer_message"
+    },
+    {
+      "columns": [
+        {
+          "value": "source_session_id",
+          "isExpression": false
+        },
+        {
+          "value": "time_created",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_peer_message_source_time_idx",
+      "entityType": "indexes",
+      "table": "session_peer_message"
+    },
+    {
+      "columns": [
+        {
+          "value": "request_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_peer_message_request_idx",
+      "entityType": "indexes",
+      "table": "session_peer_message"
+    },
+    {
+      "columns": [
+        {
+          "value": "target_session_id",
+          "isExpression": false
         }
       ],
       "isUnique": false,
@@ -4026,6 +4302,15 @@
       "name": "todo_session_idx",
       "entityType": "indexes",
       "table": "todo"
+    },
+    {
+      "columns": [
+        "operation_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_peer_message_operation_id_unique",
+      "entityType": "uniques",
+      "table": "session_peer_message"
     },
     {
       "columns": [

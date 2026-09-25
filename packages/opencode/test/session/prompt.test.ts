@@ -26,7 +26,7 @@ import { Image } from "../../src/image/image"
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
-import { MessageTable, SessionMessageTable } from "@opencode-ai/core/session/sql"
+import { MessageTable, SessionMessageTable, SessionPeerMessageTable } from "@opencode-ai/core/session/sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -41,10 +41,14 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionInterruption } from "@opencode-ai/core/session/interruption"
+import { SessionPeerMessage } from "@opencode-ai/core/session/peer-message"
+import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
+import { SessionPeerWait } from "@opencode-ai/core/session/peer-wait"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
@@ -1160,6 +1164,227 @@ it.instance("static loop returns assistant text through local provider", () =>
     expect(result.parts.some((part) => part.type === "text" && part.text === "world")).toBe(true)
     expect(yield* llm.hits).toHaveLength(1)
     expect(yield* llm.pending).toBe(0)
+  }),
+)
+
+it.instance("legacy peer message enters the native prompt loop and records delivery", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const db = (yield* Database.Service).db
+    const session = yield* sessions.create({ title: "Peer recipient" })
+    const source = yield* sessions.create({ title: "Peer sender" })
+    yield* user(session.id, "Original work")
+    yield* SessionPeerRoute.bind({
+      sourceSessionID: SessionSchema.ID.make(source.id),
+      targetSessionID: SessionSchema.ID.make(session.id),
+      alias: "/root/worker",
+      origin: { kind: "spawn", id: "legacy-peer-test" },
+    })
+    const failed = yield* SessionPeerMessage.send({
+      sourceSessionID: SessionSchema.ID.make(source.id),
+      alias: "/root/worker",
+      text: "Progress? Continue the original work.",
+      operationID: "legacy-peer-1",
+      deliverLegacy: () => Effect.fail(new Error("adapter offline")),
+    }).pipe(Effect.provide(SessionExecution.noopLayer))
+    expect(failed.delivery).toBe("not_delivered")
+    yield* llm.text("Seven steps done; continuing")
+    const row = yield* SessionPeerMessage.send({
+      sourceSessionID: SessionSchema.ID.make(source.id),
+      alias: "/root/worker",
+      text: "Progress? Continue the original work.",
+      operationID: "legacy-peer-1",
+      deliverLegacy: (message) =>
+        prompt.admitPeer({
+          sessionID: session.id,
+          messageID: message.id,
+          text: SessionPeerMessage.render(message),
+          wake: message.kind !== "notice",
+        }),
+    }).pipe(Effect.provide(SessionExecution.noopLayer))
+    yield* llm.wait(1)
+    expect(
+      (yield* db.select().from(SessionPeerMessageTable).where(eq(SessionPeerMessageTable.id, row.id)).get())?.delivery,
+    ).toBe("delivered")
+    expect((yield* sessions.findMessage(session.id, (item) => item.info.id === row.id))._tag).toBe("Some")
+  }),
+)
+
+it.instance("routes messages from V1 to V2 and from V2 to V1 without changing either history", () =>
+  Effect.gen(function* () {
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const db = (yield* Database.Service).db
+    const events = yield* EventV2.Service
+    const v1 = yield* sessions.create({ title: "V1 peer" })
+    const v2 = yield* sessions.create({ title: "V2 peer" })
+    yield* user(v1.id, "Continue V1 work")
+    yield* SessionInput.admit(db, events, {
+      id: SessionMessage.ID.create(),
+      sessionID: SessionSchema.ID.make(v2.id),
+      prompt: Prompt.make({ text: "Continue V2 work" }),
+      delivery: "steer",
+    })
+    yield* SessionPeerRoute.bind({
+      sourceSessionID: SessionSchema.ID.make(v1.id),
+      targetSessionID: SessionSchema.ID.make(v2.id),
+      alias: "/root/v2",
+      origin: { kind: "spawn", id: "cross-v1-v2" },
+    })
+    yield* SessionPeerRoute.bind({
+      sourceSessionID: SessionSchema.ID.make(v2.id),
+      targetSessionID: SessionSchema.ID.make(v1.id),
+      alias: "/root/v1",
+      origin: { kind: "spawn", id: "cross-v2-v1" },
+    })
+    const toV2 = yield* SessionPeerMessage.send({
+      sourceSessionID: SessionSchema.ID.make(v1.id),
+      alias: "/root/v2",
+      text: "Progress on V2?",
+      operationID: "cross-v1-v2-message",
+    }).pipe(Effect.provide(SessionExecution.noopLayer))
+    expect(toV2).toMatchObject({ backend: "v2", delivery: "admitted" })
+    expect(
+      (yield* SessionInput.promoteSteers(db, events, SessionSchema.ID.make(v2.id), Number.MAX_SAFE_INTEGER)).some(
+        (input) => input.id === toV2.id,
+      ),
+    ).toBe(true)
+    const toV1 = yield* SessionPeerMessage.send({
+      sourceSessionID: SessionSchema.ID.make(v2.id),
+      alias: "/root/v1",
+      text: "Progress on V1?",
+      operationID: "cross-v2-v1-message",
+      deliverLegacy: (message) =>
+        prompt.admitPeer({
+          sessionID: v1.id,
+          messageID: message.id,
+          text: SessionPeerMessage.render(message),
+          wake: false,
+        }),
+    }).pipe(Effect.provide(SessionExecution.noopLayer))
+    expect(toV1).toMatchObject({ backend: "v1", delivery: "admitted" })
+    expect((yield* sessions.findMessage(v1.id, (item) => item.info.id === toV1.id))._tag).toBe("Some")
+    expect(
+      yield* db
+        .select()
+        .from(MessageTable)
+        .where(eq(MessageTable.session_id, SessionSchema.ID.make(v2.id)))
+        .all(),
+    ).toHaveLength(0)
+  }),
+)
+
+it.instance("keeps a queued legacy peer message until the current run finishes", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const source = yield* sessions.create({ title: "Queue sender" })
+    const target = yield* sessions.create({ title: "Queue target" })
+    yield* user(target.id, "Finish the original task")
+    yield* SessionPeerRoute.bind({
+      sourceSessionID: SessionSchema.ID.make(source.id),
+      targetSessionID: SessionSchema.ID.make(target.id),
+      alias: "/root/queued",
+      origin: { kind: "spawn", id: "legacy-queue-test" },
+    })
+    const running = yield* prompt.loop({ sessionID: target.id }).pipe(Effect.forkChild)
+    yield* llm.wait(1)
+    const queued = yield* SessionPeerMessage.send({
+      sourceSessionID: SessionSchema.ID.make(source.id),
+      alias: "/root/queued",
+      text: "Start only after the original task",
+      operationID: "legacy-queue-message",
+      queue: true,
+      deliverLegacy: (message) =>
+        prompt.admitPeer({
+          sessionID: target.id,
+          messageID: message.id,
+          text: SessionPeerMessage.render(message),
+          wake: true,
+          queue: message.queued,
+        }),
+    }).pipe(Effect.provide(SessionExecution.noopLayer))
+    expect(queued).toMatchObject({ backend: "v1", queued: true, delivery: "admitted" })
+    expect((yield* sessions.findMessage(target.id, (item) => item.info.id === queued.id))._tag).toBe("None")
+    yield* llm.text("Original work done")
+    yield* llm.wait(2)
+    expect((yield* sessions.findMessage(target.id, (item) => item.info.id === queued.id))._tag).toBe("Some")
+    yield* llm.text("Queued work done")
+    yield* Fiber.join(running).pipe(Effect.timeout("5 seconds"))
+    expect(yield* llm.hits).toHaveLength(2)
+  }),
+)
+
+it.instance("legacy Wait consumes a reply once before its native prompt resumes", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const parent = yield* sessions.create({ title: "Peer parent" })
+    const child = yield* sessions.create({ title: "Peer child" })
+    yield* user(parent.id, "Await the other Agent")
+    yield* user(child.id, "Continue original work")
+    yield* SessionPeerRoute.bind({
+      sourceSessionID: SessionSchema.ID.make(parent.id),
+      targetSessionID: SessionSchema.ID.make(child.id),
+      alias: "/root/worker",
+      origin: { kind: "spawn", id: "legacy-wait-test" },
+    })
+    const deliverLegacy = (message: typeof SessionPeerMessageTable.$inferSelect) =>
+      prompt.admitPeer({
+        sessionID: SessionID.make(message.target_session_id),
+        messageID: message.id,
+        text: SessionPeerMessage.render(message),
+        wake: false,
+      })
+    const request = yield* SessionPeerMessage.send({
+      sourceSessionID: SessionSchema.ID.make(parent.id),
+      alias: "/root/worker",
+      text: "What is done?",
+      operationID: "legacy-wait-request",
+      deliverLegacy,
+    }).pipe(Effect.provide(SessionExecution.noopLayer))
+    yield* SessionPeerMessage.send({
+      sourceSessionID: SessionSchema.ID.make(child.id),
+      alias: `/contacts/requester_${parent.id.slice(4, 16)}`,
+      kind: "reply",
+      replyTo: request.id,
+      text: "Seven steps are done.",
+      operationID: "legacy-wait-reply",
+      deliverLegacy,
+    }).pipe(Effect.provide(SessionExecution.noopLayer))
+    expect(
+      (yield* SessionPeerWait.waitReply({
+        sessionID: SessionSchema.ID.make(parent.id),
+        requestIDs: [request.id],
+        timeoutMs: 1000,
+      })).reason,
+    ).toBe("reply")
+    yield* llm.text("Continuing")
+    yield* prompt.loop({ sessionID: parent.id })
+    expect(JSON.stringify(yield* llm.inputs)).not.toContain("Seven steps are done.")
+    const next = yield* SessionPeerMessage.send({
+      sourceSessionID: SessionSchema.ID.make(parent.id),
+      alias: "/root/worker",
+      text: "A later progress request",
+      operationID: "legacy-wait-later",
+      deliverLegacy,
+    }).pipe(Effect.provide(SessionExecution.noopLayer))
+    const waiting = yield* SessionPeerWait.waitReply({
+      sessionID: SessionSchema.ID.make(parent.id),
+      requestIDs: [next.id],
+      timeoutMs: 1000,
+    }).pipe(Effect.forkChild)
+    yield* Effect.yieldNow
+    yield* prompt.prompt({
+      sessionID: parent.id,
+      noReply: true,
+      parts: [{ type: "text", text: "A new user question" }],
+    })
+    expect((yield* Fiber.join(waiting)).reason).toBe("parent_input")
   }),
 )
 

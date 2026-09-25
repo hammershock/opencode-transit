@@ -16,7 +16,14 @@ import { SessionInput } from "./input"
 import { RevertHistory } from "./revert-history"
 import { SessionSchema } from "./schema"
 import { WorkspaceV2 } from "../workspace"
-import { MessageTable, PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
+import {
+  MessageTable,
+  PartTable,
+  SessionInputTable,
+  SessionMessageTable,
+  SessionPeerMessageTable,
+  SessionTable,
+} from "./sql"
 import { AbsolutePath, type DeepMutable } from "../schema"
 import { SessionPolicy } from "@opencode-ai/schema/session-policy"
 import { SessionPolicyStore } from "./policy"
@@ -600,6 +607,7 @@ const layer = Layer.effectDiscard(
           prompt: event.data.prompt,
           delivery: event.data.delivery,
           timeCreated: event.data.timestamp,
+          origin: event.data.origin,
         })
         if (event.data.task?.kind === "steer")
           yield* SessionTask.projectSteerAdmitted(db, {
@@ -630,6 +638,78 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionEvent.DelegationResultRecorded, (event) => SessionTaskResult.project(db, event))
+    yield* events.project(SessionEvent.PeerMessageSent, (event) =>
+      Effect.gen(function* () {
+        const inserted = yield* db
+          .insert(SessionPeerMessageTable)
+          .values({
+            id: event.data.messageID,
+            operation_id: event.data.operationID,
+            source_session_id: event.data.sourceSessionID,
+            target_session_id: event.data.sessionID,
+            alias: event.data.alias,
+            kind: event.data.kind,
+            request_id: event.data.requestID ?? null,
+            text: event.data.text,
+            backend: event.data.backend,
+            queued: event.data.queued,
+            resume: event.data.resume,
+            time_created: DateTime.toEpochMillis(event.data.timestamp),
+          })
+          .onConflictDoNothing()
+          .returning({ id: SessionPeerMessageTable.id })
+          .get()
+          .pipe(Effect.orDie)
+        if (!inserted) {
+          const prior = yield* db.select().from(SessionPeerMessageTable)
+            .where(eq(SessionPeerMessageTable.operation_id, event.data.operationID)).get().pipe(Effect.orDie)
+          if (!prior || prior.id !== event.data.messageID || prior.target_session_id !== event.data.sessionID ||
+            prior.source_session_id !== event.data.sourceSessionID || prior.alias !== event.data.alias ||
+            prior.text !== event.data.text || prior.kind !== event.data.kind ||
+            prior.request_id !== (event.data.requestID ?? null) || prior.backend !== event.data.backend ||
+            prior.queued !== event.data.queued || prior.resume !== event.data.resume)
+            return yield* Effect.die("Conflicting peer message projection")
+        }
+        if (event.data.kind === "reply" && event.data.requestID)
+          yield* db
+            .update(SessionPeerMessageTable)
+            .set({ reply_id: event.data.messageID })
+            .where(
+              and(
+                eq(SessionPeerMessageTable.id, event.data.requestID),
+                eq(SessionPeerMessageTable.kind, "request"),
+                or(
+                  isNull(SessionPeerMessageTable.reply_id),
+                  eq(SessionPeerMessageTable.reply_id, event.data.messageID),
+                ),
+              ),
+            )
+            .run()
+            .pipe(Effect.orDie)
+        if (event.data.kind === "request") {
+          const prior = yield* db
+            .select({ id: SessionPeerMessageTable.id })
+            .from(SessionPeerMessageTable)
+            .where(
+              and(
+                eq(SessionPeerMessageTable.request_id, event.data.messageID),
+                eq(SessionPeerMessageTable.kind, "reply"),
+              ),
+            )
+            .limit(1)
+            .get()
+            .pipe(Effect.orDie)
+          if (prior)
+            yield* db
+              .update(SessionPeerMessageTable)
+              .set({ reply_id: prior.id })
+              .where(eq(SessionPeerMessageTable.id, event.data.messageID))
+              .run()
+              .pipe(Effect.orDie)
+        }
+      }),
+    )
+    yield* events.project(SessionEvent.LegacyUserInput, () => Effect.void)
     yield* events.project(SessionEvent.DelegationWakeRevoked, (event) => SessionTaskResult.projectRevocation(db, event))
     yield* events.project(SessionEvent.Turn.Settled, () => Effect.void)
     yield* events.project(SessionEvent.ContextUpdated, (event) => run(db, event))

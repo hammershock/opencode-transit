@@ -40,8 +40,8 @@ import { MAX_STEPS_PROMPT } from "./max-steps"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
-import { SessionInputTable } from "../sql"
-import { and, desc, eq, isNotNull } from "drizzle-orm"
+import { SessionInputTable, SessionPeerMessageTable, SessionPeerReceiptTable } from "../sql"
+import { and, desc, eq, inArray, isNotNull, ne } from "drizzle-orm"
 
 /**
  * Runs one durable coding-agent Session until it settles.
@@ -265,7 +265,8 @@ const layer = Layer.effect(
           return { needsContinuation: false, step: currentStep, failed: false }
         if (promoted.length > 0) {
           onPromoted(promoted)
-          currentStep = 1
+          if (promoted.some((input) => input.origin?.kind !== "peer_message" || input.delivery === "queue"))
+            currentStep = 1
         }
       }
       const latest = yield* db
@@ -396,6 +397,47 @@ const layer = Layer.effect(
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
         withPublication(publisher.publish(event, outputPaths))
       let overflowFailure: ProviderErrorEvent | undefined
+      const visiblePeerIDs = context.map((item) => item.id)
+      if (visiblePeerIDs.length > 0)
+        yield* Effect.gen(function* () {
+          const replies = yield* db
+            .select({ id: SessionPeerMessageTable.id })
+            .from(SessionPeerMessageTable)
+            .where(
+              and(
+                eq(SessionPeerMessageTable.target_session_id, session.id),
+                eq(SessionPeerMessageTable.kind, "reply"),
+                inArray(SessionPeerMessageTable.id, visiblePeerIDs),
+              ),
+            )
+            .all()
+            .pipe(Effect.orDie)
+          for (const reply of replies)
+            yield* db
+              .insert(SessionPeerReceiptTable)
+              .values({
+                message_id: reply.id,
+                receiver_session_id: session.id,
+                channel: "inbox",
+                time_consumed: Date.now(),
+              })
+              .onConflictDoNothing()
+              .run()
+              .pipe(Effect.orDie)
+          yield* db
+            .update(SessionPeerMessageTable)
+            .set({ delivery: "delivered", time_delivered: Date.now() })
+            .where(
+              and(
+                eq(SessionPeerMessageTable.target_session_id, session.id),
+                eq(SessionPeerMessageTable.backend, "v2"),
+                ne(SessionPeerMessageTable.delivery, "delivered"),
+                inArray(SessionPeerMessageTable.id, visiblePeerIDs),
+              ),
+            )
+            .run()
+            .pipe(Effect.orDie)
+        })
       const providerStream = llm.stream(request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {

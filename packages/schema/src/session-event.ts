@@ -15,6 +15,7 @@ import { Revert } from "./revert"
 import { ModelContext } from "./model-context"
 import { SkillInvocation } from "./skill-invocation"
 import { SessionTaskEvent } from "./session-task-event"
+import { SessionInputOrigin } from "./session-input-origin"
 
 export { FileAttachment }
 
@@ -106,14 +107,7 @@ export const Prompted = Event.define({
   ...options,
   schema: {
     ...PromptFields,
-    origin: Schema.optional(
-      Schema.Struct({
-        kind: Schema.Literal("delegation_result"),
-        invocationInputID: Schema.String,
-        terminalEventID: Schema.String,
-        version: Schema.Literal(1),
-      }),
-    ),
+    origin: SessionInputOrigin.Origin.pipe(optional),
   },
 })
 export type Prompted = typeof Prompted.Type
@@ -134,6 +128,7 @@ export const PromptAdmitted = Event.define({
   ...options,
   schema: {
     ...PromptFields,
+    origin: SessionInputOrigin.Origin.pipe(optional),
     task: Schema.optional(
       Schema.Union([
         Schema.Struct({ kind: Schema.Literal("invocation"), admission: SessionTaskEvent.Admission }),
@@ -148,6 +143,32 @@ export const PromptAdmitted = Event.define({
   },
 })
 export type PromptAdmitted = typeof PromptAdmitted.Type
+
+export const PeerMessageSent = Event.define({
+  type: "session.next.peer.message.sent",
+  ...options,
+  schema: {
+    ...Base,
+    messageID: SessionMessage.ID,
+    sourceSessionID: SessionID,
+    operationID: Schema.String,
+    alias: Schema.String,
+    kind: Schema.Literals(["request", "reply", "notice"]),
+    requestID: Schema.String.pipe(optional),
+    text: Schema.String,
+    backend: Schema.Literals(["v1", "v2"]),
+    queued: Schema.Boolean,
+    resume: Schema.Boolean,
+  },
+})
+export type PeerMessageSent = typeof PeerMessageSent.Type
+
+export const LegacyUserInput = Event.define({
+  type: "session.next.legacy.user.input",
+  ...options,
+  schema: { ...Base, messageID: SessionMessage.ID },
+})
+export type LegacyUserInput = typeof LegacyUserInput.Type
 
 export const TitleGenerated = Event.define({
   type: "session.next.title.generated",
@@ -591,6 +612,8 @@ export const DurableDefinitions = Event.inventory(
   Prompted,
   MessageForked,
   PromptAdmitted,
+  PeerMessageSent,
+  LegacyUserInput,
   TitleGenerated,
   DelegationResultRecorded,
   DelegationWakeRevoked,
@@ -630,6 +653,8 @@ export const Definitions = Event.inventory(
   Prompted,
   MessageForked,
   PromptAdmitted,
+  PeerMessageSent,
+  LegacyUserInput,
   TitleGenerated,
   DelegationResultRecorded,
   DelegationWakeRevoked,
