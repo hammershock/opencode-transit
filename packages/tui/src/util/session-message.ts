@@ -16,6 +16,22 @@ import type { PromptInfo, SkillMentionPart } from "../prompt/history"
 export const SESSION_MESSAGE_LIMIT = 100
 export const SESSION_RENDER_MESSAGE_LIMIT = 20
 
+export function insertCanonicalSessionMessage(
+  messages: SessionMessage[],
+  item: SessionMessage,
+  sequence: Map<string, number>,
+  seq?: number,
+) {
+  if (messages.some((message) => message.id === item.id)) return
+  if (seq === undefined) {
+    messages.unshift(item)
+    return
+  }
+  sequence.set(item.id, seq)
+  const index = messages.findIndex((message) => (sequence.get(message.id) ?? Number.NEGATIVE_INFINITY) < seq)
+  messages.splice(index === -1 ? messages.length : index, 0, item)
+}
+
 export function reconcileCanonicalMessageSnapshot(
   current: readonly SessionMessage[],
   snapshot: readonly SessionMessage[],
@@ -23,9 +39,7 @@ export function reconcileCanonicalMessageSnapshot(
 ) {
   if (!eventsDuringFetch) return snapshot.slice(0, SESSION_MESSAGE_LIMIT)
   const live = new Set(current.map((message) => message.id))
-  return [...current, ...snapshot.filter((message) => !live.has(message.id))]
-    .toSorted((left, right) => right.time.created - left.time.created || right.id.localeCompare(left.id))
-    .slice(0, SESSION_MESSAGE_LIMIT)
+  return [...current, ...snapshot.filter((message) => !live.has(message.id))].slice(0, SESSION_MESSAGE_LIMIT)
 }
 
 export function sessionMessageWindow<T extends { id: string }>(

@@ -3,6 +3,7 @@ import type { Message, SessionMessage, SessionMessageUser } from "@opencode-ai/s
 import {
   canonicalUserText,
   commitCanonicalRevert,
+  insertCanonicalSessionMessage,
   mergeCanonicalSessionMessages,
   projectCanonicalSessionMessages,
   reconcileCanonicalMessageSnapshot,
@@ -273,4 +274,27 @@ test("a delayed history refresh preserves prompts and assistant updates received
 
   expect(reconcileCanonicalMessageSnapshot([live, prompt], [stale, old], true)).toEqual([live, prompt, old])
   expect(reconcileCanonicalMessageSnapshot([live, prompt], [stale, old], false)).toEqual([stale, old])
+})
+
+test("live canonical events keep durable order when a steer arrives before an older assistant event", () => {
+  const messages: SessionMessage[] = []
+  const sequence = new Map<string, number>()
+  const oldUser = { id: "old-user", type: "user", text: "original", time: { created: 10 } } as SessionMessage
+  const steer = { id: "steer", type: "user", text: "stop", time: { created: 53 } } as SessionMessage
+  const oldAssistant = {
+    id: "old-assistant",
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "provider", id: "model" },
+    content: [],
+    time: { created: 60 },
+  } as SessionMessage
+
+  insertCanonicalSessionMessage(messages, oldUser, sequence, 1)
+  insertCanonicalSessionMessage(messages, steer, sequence, 53)
+  insertCanonicalSessionMessage(messages, oldAssistant, sequence, 46)
+  expect(messages.map((message) => message.id)).toEqual(["steer", "old-assistant", "old-user"])
+  expect(
+    reconcileCanonicalMessageSnapshot(messages, [oldAssistant, oldUser], true).map((message) => message.id),
+  ).toEqual(["steer", "old-assistant", "old-user"])
 })

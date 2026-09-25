@@ -25,6 +25,7 @@ import { useEvent } from "./event"
 import { batch, createSignal, onCleanup, onMount } from "solid-js"
 import {
   mergeCanonicalSessionMessages,
+  insertCanonicalSessionMessage,
   projectCanonicalSessionMessages,
   reconcileCanonicalMessageSnapshot,
   SESSION_MESSAGE_LIMIT,
@@ -76,6 +77,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       directory: sdk.directory ?? process.cwd(),
     })
     const messageVersion = new Map<string, number>()
+    const messageSequence = new Map<string, Map<string, number>>()
     const refreshVersion = new Map<string, number>()
 
     const message = {
@@ -88,12 +90,24 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             const messages = (draft[sessionID] ??= [])
             fn(messages)
             if (messages.length > SESSION_MESSAGE_LIMIT) messages.splice(SESSION_MESSAGE_LIMIT)
+            const sequence = messageSequence.get(sessionID)
+            if (sequence) {
+              const retained = new Set(messages.map((item) => item.id))
+              Array.from(sequence.keys())
+                .filter((id) => !retained.has(id))
+                .forEach((id) => sequence.delete(id))
+            }
           }),
         )
       },
-      prepend(messages: SessionMessage[], item: SessionMessage) {
-        if (messages.some((existing) => existing.id === item.id)) return
-        messages.unshift(item)
+      prepend(
+        messages: SessionMessage[],
+        item: SessionMessage,
+        event: { data: { sessionID: string }; durable?: { seq: number } },
+      ) {
+        const sequence = messageSequence.get(event.data.sessionID) ?? new Map<string, number>()
+        messageSequence.set(event.data.sessionID, sequence)
+        insertCanonicalSessionMessage(messages, item, sequence, event.durable?.seq)
       },
       activeAssistant(messages: SessionMessage[]) {
         const item = messages.find((item) => item.type === "assistant" && !item.time.completed)
@@ -135,36 +149,48 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.next.agent.switched":
           message.update(event.data.sessionID, (draft) => {
-            message.prepend(draft, {
-              id: event.data.messageID,
-              type: "agent-switched",
-              agent: event.data.agent,
-              time: { created: event.data.timestamp },
-            })
+            message.prepend(
+              draft,
+              {
+                id: event.data.messageID,
+                type: "agent-switched",
+                agent: event.data.agent,
+                time: { created: event.data.timestamp },
+              },
+              event,
+            )
           })
           break
         case "session.next.model.switched":
           message.update(event.data.sessionID, (draft) => {
-            message.prepend(draft, {
-              id: event.data.messageID,
-              type: "model-switched",
-              model: event.data.model,
-              time: { created: event.data.timestamp },
-            })
+            message.prepend(
+              draft,
+              {
+                id: event.data.messageID,
+                type: "model-switched",
+                model: event.data.model,
+                time: { created: event.data.timestamp },
+              },
+              event,
+            )
           })
           break
         case "session.next.prompted": {
           message.update(event.data.sessionID, (draft) => {
-            message.prepend(draft, {
-              id: event.data.messageID,
-              type: "user",
-              text: event.data.prompt.text,
-              files: event.data.prompt.files,
-              agents: event.data.prompt.agents,
-              skills: event.data.prompt.invocations,
-              ...(event.data.origin ? { origin: event.data.origin } : {}),
-              time: { created: event.data.timestamp },
-            })
+            message.prepend(
+              draft,
+              {
+                id: event.data.messageID,
+                type: "user",
+                text: event.data.prompt.text,
+                files: event.data.prompt.files,
+                agents: event.data.prompt.agents,
+                skills: event.data.prompt.invocations,
+                ...(event.data.origin ? { origin: event.data.origin } : {}),
+                time: { created: event.data.timestamp },
+              },
+              event,
+            )
           })
           break
         }
@@ -231,35 +257,47 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.next.context.updated":
           message.update(event.data.sessionID, (draft) => {
-            message.prepend(draft, {
-              id: event.data.messageID,
-              type: "system",
-              text: event.data.text,
-              time: { created: event.data.timestamp },
-            })
+            message.prepend(
+              draft,
+              {
+                id: event.data.messageID,
+                type: "system",
+                text: event.data.text,
+                time: { created: event.data.timestamp },
+              },
+              event,
+            )
           })
           break
         case "session.next.synthetic":
           message.update(event.data.sessionID, (draft) => {
-            message.prepend(draft, {
-              id: event.data.messageID,
-              type: "synthetic",
-              sessionID: event.data.sessionID,
-              text: event.data.text,
-              time: { created: event.data.timestamp },
-            })
+            message.prepend(
+              draft,
+              {
+                id: event.data.messageID,
+                type: "synthetic",
+                sessionID: event.data.sessionID,
+                text: event.data.text,
+                time: { created: event.data.timestamp },
+              },
+              event,
+            )
           })
           break
         case "session.next.shell.started":
           message.update(event.data.sessionID, (draft) => {
-            message.prepend(draft, {
-              id: event.data.messageID,
-              type: "shell",
-              callID: event.data.callID,
-              command: event.data.command,
-              output: "",
-              time: { created: event.data.timestamp },
-            })
+            message.prepend(
+              draft,
+              {
+                id: event.data.messageID,
+                type: "shell",
+                callID: event.data.callID,
+                command: event.data.command,
+                output: "",
+                time: { created: event.data.timestamp },
+              },
+              event,
+            )
           })
           break
         case "session.next.shell.ended":
@@ -275,15 +313,19 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             if (draft.some((message) => message.id === event.data.assistantMessageID)) return
             const currentAssistant = message.activeAssistant(draft)
             if (currentAssistant) currentAssistant.time.completed = event.data.timestamp
-            message.prepend(draft, {
-              id: event.data.assistantMessageID,
-              type: "assistant",
-              agent: event.data.agent,
-              model: event.data.model,
-              content: [],
-              snapshot: event.data.snapshot ? { start: event.data.snapshot } : undefined,
-              time: { created: event.data.timestamp },
-            })
+            message.prepend(
+              draft,
+              {
+                id: event.data.assistantMessageID,
+                type: "assistant",
+                agent: event.data.agent,
+                model: event.data.model,
+                content: [],
+                snapshot: event.data.snapshot ? { start: event.data.snapshot } : undefined,
+                time: { created: event.data.timestamp },
+              },
+              event,
+            )
           })
           break
         case "session.next.step.ended":
@@ -444,14 +486,18 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.next.compaction.ended":
           message.update(event.data.sessionID, (draft) => {
-            message.prepend(draft, {
-              id: event.data.messageID,
-              type: "compaction",
-              reason: event.data.reason,
-              summary: event.data.text,
-              recent: event.data.recent,
-              time: { created: event.data.timestamp },
-            })
+            message.prepend(
+              draft,
+              {
+                id: event.data.messageID,
+                type: "compaction",
+                reason: event.data.reason,
+                summary: event.data.text,
+                recent: event.data.recent,
+                time: { created: event.data.timestamp },
+              },
+              event,
+            )
           })
           break
         case "permission.v2.asked":
