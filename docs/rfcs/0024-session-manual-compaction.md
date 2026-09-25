@@ -1,7 +1,7 @@
 ---
 id: 0024
 title: Session V2 Manual Compaction Compatibility
-status: draft
+status: accepted
 authors:
   - hammershock
 created: 2026-09-25
@@ -40,4 +40,4 @@ The operation uses the Session's Location and existing provider credentials. It 
 
 ## Implementation boundary
 
-Issue #623 owns the domain operation, legacy adapter, tests, and generated artifacts if its public API changes. This RFC describes the target contract; its `draft` status does not authorize implementation.
+Issue #623 owns the domain operation, legacy adapter, tests, and generated artifacts if its public API changes. The accepted contract authorizes implementation after issue #623 meets the Ready criteria.
