@@ -46,6 +46,7 @@ import { SessionActivity } from "@opencode-ai/core/session/activity"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
+import { SessionInterruption } from "@opencode-ai/core/session/interruption"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { Provider } from "@/provider/provider"
@@ -300,8 +301,29 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: { params: { sessionID: SessionID } }) {
-      yield* execution.interrupt(ctx.params.sessionID)
-      yield* promptSvc.cancel(ctx.params.sessionID)
+      yield* requireSession(ctx.params.sessionID).pipe(
+        Effect.mapError(
+          () =>
+            new InvalidRequestError({
+              kind: "session_not_found",
+              message: "Session unavailable",
+            }),
+        ),
+      )
+      const request = yield* HttpServerRequest.HttpServerRequest
+      yield* SessionInterruption.request({
+        sessionID: SessionV2.ID.make(ctx.params.sessionID),
+        operationID: request.headers["x-opencode-interrupt-id"] ?? crypto.randomUUID(),
+        actor: { kind: "user", id: "direct_user" },
+      }).pipe(
+        Effect.mapError(
+          (error) =>
+            new InvalidRequestError({
+              kind: "session_interrupt_unavailable",
+              message: String(error),
+            }),
+        ),
+      )
       return true
     })
 

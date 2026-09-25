@@ -4,7 +4,7 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm"
 import { Effect } from "effect"
 import type { Database } from "../database/database"
 import { SessionSchema } from "./schema"
-import { SessionTaskTable } from "./sql"
+import { SessionExecutionPauseTable, SessionTaskTable } from "./sql"
 import { SessionTask } from "./task"
 
 /**
@@ -70,7 +70,19 @@ export const reassess = Effect.fn("SessionTaskScheduler.reassess")(function* (
       }),
     { behavior: "immediate" },
   )
-  const ready = yield* Effect.filter(candidates.children, input.executable)
+  const paused = candidates.children.length
+    ? yield* database.db
+        .select({ sessionID: SessionExecutionPauseTable.session_id })
+        .from(SessionExecutionPauseTable)
+        .where(inArray(SessionExecutionPauseTable.session_id, candidates.children))
+        .all()
+        .pipe(Effect.orDie)
+    : []
+  const blocked = new Set(paused.map((row) => row.sessionID))
+  const ready = yield* Effect.filter(
+    candidates.children.filter((child) => !blocked.has(child)),
+    input.executable,
+  )
   const selected = ready.slice(0, candidates.slots)
   yield* Effect.forEach(selected, input.wake, { discard: true })
   return selected

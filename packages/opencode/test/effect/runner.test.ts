@@ -9,6 +9,26 @@ const waitForState = <A, E>(runner: Runner.Runner<A, E>, tag: Runner.State<A, E>
   }).pipe(Effect.timeout("1 second"))
 
 describe("Runner", () => {
+  it.live(
+    "stale interruption cannot stop a later run",
+    Effect.gen(function* () {
+      const runner = Runner.make<string>(yield* Scope.Scope, { onInterrupt: Effect.succeed("interrupted") })
+      const first = yield* runner.ensureRunning(Effect.never).pipe(Effect.forkChild)
+      yield* waitForState(runner, "Running")
+      const generation = runner.generation
+      expect(generation).toBeDefined()
+      expect(yield* runner.interruptGeneration(generation!)).toBe("interrupted")
+      expect(yield* Fiber.join(first)).toBe("interrupted")
+
+      const gate = yield* Deferred.make<void>()
+      const second = yield* runner.ensureRunning(Deferred.await(gate).pipe(Effect.as("done"))).pipe(Effect.forkChild)
+      yield* waitForState(runner, "Running")
+      expect(yield* runner.interruptGeneration(generation!)).toBe("stale")
+      yield* Deferred.succeed(gate, undefined)
+      expect(yield* Fiber.join(second)).toBe("done")
+    }),
+  )
+
   // --- ensureRunning semantics ---
 
   it.live(

@@ -11,7 +11,14 @@ import { SessionTask } from "./task"
 import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
-import { MessageTable, SessionInputTable, SessionMessageTable, SessionTaskSteerTable, SessionTaskTable } from "./sql"
+import {
+  MessageTable,
+  SessionExecutionPauseTable,
+  SessionInputTable,
+  SessionMessageTable,
+  SessionTaskSteerTable,
+  SessionTaskTable,
+} from "./sql"
 import { EventTable } from "../event/sql"
 
 type DatabaseService = Database.Interface["db"]
@@ -231,8 +238,7 @@ export const projectPrompted = Effect.fn("SessionInput.projectPrompted")(functio
     .pipe(Effect.orDie)
   if (updated) {
     const stored = fromRow(updated)
-    if (!matchesProjection(stored, input))
-      return yield* Effect.die(new LifecycleConflict({ id: input.id }))
+    if (!matchesProjection(stored, input)) return yield* Effect.die(new LifecycleConflict({ id: input.id }))
     return
   }
 
@@ -303,8 +309,10 @@ export const equivalent = (
     readonly delivery: Delivery
     readonly origin?: Admitted["origin"]
   },
-) => input.delivery === expected.delivery &&
-  JSON.stringify(input.origin) === JSON.stringify(expected.origin) && matchesPrompt(input, expected)
+) =>
+  input.delivery === expected.delivery &&
+  JSON.stringify(input.origin) === JSON.stringify(expected.origin) &&
+  matchesPrompt(input, expected)
 
 const matchesPrompt = (input: Admitted, expected: { readonly sessionID: SessionSchema.ID; readonly prompt: Prompt }) =>
   input.sessionID === expected.sessionID &&
@@ -405,6 +413,13 @@ export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(fun
   events: EventV2.Interface,
   sessionID: SessionSchema.ID,
 ) {
+  const paused = yield* db
+    .select({ session_id: SessionExecutionPauseTable.session_id })
+    .from(SessionExecutionPauseTable)
+    .where(eq(SessionExecutionPauseTable.session_id, sessionID))
+    .get()
+    .pipe(Effect.orDie)
+  if (paused) return undefined
   const row = yield* db
     .select()
     .from(SessionInputTable)

@@ -21,6 +21,7 @@ import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
 import { Spinner } from "../spinner"
 import { useSDK } from "../../context/sdk"
+import { interruptSession } from "../../util/interrupt"
 import { useRoute } from "../../context/route"
 import { useProject } from "../../context/project"
 import { useSync } from "../../context/sync"
@@ -442,6 +443,7 @@ export function Prompt(props: PromptProps) {
     mode: "normal" | "shell"
     extmarkToPartIndex: Map<number, number>
     interrupt: number
+    interruptSessionID?: string
     placeholder: number
   }>({
     placeholder: randomIndex(list().length),
@@ -452,13 +454,19 @@ export function Prompt(props: PromptProps) {
     mode: "normal",
     extmarkToPartIndex: new Map(),
     interrupt: 0,
+    interruptSessionID: undefined,
   })
+  let interruptResetTimer: ReturnType<typeof setTimeout> | undefined
+  onCleanup(() => clearTimeout(interruptResetTimer))
 
   createEffect(
     on(
       () => props.sessionID,
       () => {
+        clearTimeout(interruptResetTimer)
         setStore("placeholder", randomIndex(list().length))
+        setStore("interrupt", 0)
+        setStore("interruptSessionID", undefined)
       },
       { defer: true },
     ),
@@ -558,21 +566,25 @@ export function Prompt(props: PromptProps) {
             setStore("mode", "normal")
             return
           }
-          if (!props.sessionID) return
+          const sessionID = props.sessionID
+          if (!sessionID) return
+          const count = store.interruptSessionID === sessionID ? store.interrupt + 1 : 1
+          setStore("interruptSessionID", sessionID)
+          setStore("interrupt", count)
 
-          setStore("interrupt", store.interrupt + 1)
-
-          setTimeout(() => {
+          clearTimeout(interruptResetTimer)
+          interruptResetTimer = setTimeout(() => {
+            if (store.interruptSessionID !== sessionID) return
             setStore("interrupt", 0)
+            setStore("interruptSessionID", undefined)
           }, 5000)
 
-          if (store.interrupt >= 2) {
+          if (count >= 2) {
             setStore("interrupt", 0)
-            const interrupted = await Promise.allSettled([
-              sdk.client.v2.session.interrupt({ sessionID: props.sessionID }, { throwOnError: true }),
-              sdk.client.session.abort({ sessionID: props.sessionID }, { throwOnError: true }),
-            ])
-            if (interrupted.every((result) => result.status === "rejected")) {
+            setStore("interruptSessionID", undefined)
+            try {
+              await interruptSession(sdk, sessionID)
+            } catch {
               toast.show({ message: "Failed to interrupt session", variant: "error" })
             }
           }

@@ -120,6 +120,36 @@ export const SessionPeerUserMessageTable = sqliteTable(
   (table) => [primaryKey({ columns: [table.session_id, table.message_id] })],
 )
 
+/** One exact execution interruption, including the authenticated actor and outcome. */
+export const SessionInterruptionTable = sqliteTable(
+  "session_interruption",
+  {
+    operation_id: text().primaryKey(),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    backend: text().$type<"v1" | "v2">().notNull(),
+    generation: text().notNull(),
+    actor_kind: text().$type<"user" | "agent" | "system" | "unknown">().notNull(),
+    actor_id: text().notNull(),
+    state: text().$type<"requested" | "interrupted" | "completed" | "stale">().notNull(),
+    time_requested: integer().notNull(),
+    time_settled: integer(),
+  },
+  (table) => [index("session_interruption_session_time_idx").on(table.session_id, table.time_requested)],
+)
+
+/** An interrupted Session keeps old queued work dormant until explicit resume. */
+export const SessionExecutionPauseTable = sqliteTable("session_execution_pause", {
+  session_id: text()
+    .$type<SessionSchema.ID>()
+    .primaryKey()
+    .references(() => SessionTable.id, { onDelete: "cascade" }),
+  operation_id: text().notNull(),
+  time_created: integer().notNull(),
+})
+
 export const MessageTable = sqliteTable(
   "message",
   {

@@ -74,6 +74,8 @@ const executionLayer = Layer.succeed(
     wake: () => Effect.sync(() => void executionState.wakes++),
     wakeAndWait: () => Effect.sync(() => void executionState.wakes++),
     interrupt: () => Effect.void,
+    generation: () => Effect.succeed(undefined),
+    interruptGeneration: () => Effect.succeed("stale"),
     compactManual: () => Effect.void,
     requestInterruptExact: () => Effect.succeed(false),
   }),

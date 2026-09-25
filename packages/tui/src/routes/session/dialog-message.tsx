@@ -3,6 +3,7 @@ import { useSync } from "../../context/sync"
 import { useData } from "../../context/data"
 import { DialogSelect } from "../../ui/dialog-select"
 import { useSDK } from "../../context/sdk"
+import { interruptSession } from "../../util/interrupt"
 import { useRoute } from "../../context/route"
 import { useClipboard } from "../../context/clipboard"
 import type { PromptInfo } from "../../component/prompt/history"
@@ -59,10 +60,7 @@ export function DialogMessage(props: {
                   })
                   return
                 }
-                await Promise.all([
-                  sdk.client.v2.session.interrupt({ sessionID: props.sessionID }, { throwOnError: true }),
-                  sdk.client.session.abort({ sessionID: props.sessionID }, { throwOnError: true }),
-                ])
+                await interruptSession(sdk, props.sessionID)
                 const staged = await sdk.client.v2.session.revert.stage(
                   { sessionID: props.sessionID, messageID: current.id },
                   { throwOnError: true },
@@ -79,10 +77,7 @@ export function DialogMessage(props: {
             if (!msg) return
 
             try {
-              await Promise.all([
-                sdk.client.v2.session.interrupt({ sessionID: props.sessionID }, { throwOnError: true }),
-                sdk.client.session.abort({ sessionID: props.sessionID }, { throwOnError: true }),
-              ])
+              await interruptSession(sdk, props.sessionID)
               const staged = await sdk.client.v2.session.revert.stage(
                 {
                   sessionID: props.sessionID,

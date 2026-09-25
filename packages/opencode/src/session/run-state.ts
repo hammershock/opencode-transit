@@ -1,6 +1,8 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceState } from "@/effect/instance-state"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { SessionLegacyOwner } from "@opencode-ai/core/session/legacy-owner"
+import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { Runner } from "@/effect/runner"
 import { BackgroundJob } from "@/background/job"
 import { Effect, Latch, Layer, Scope, Context } from "effect"
@@ -60,10 +62,15 @@ const layer = Layer.effect(
       const next = Runner.make<SessionV1.WithParts>(data.scope, {
         onIdle: Effect.gen(function* () {
           data.runners.delete(sessionID)
+          unregister()
           yield* status.set(sessionID, { type: "idle" })
         }),
         onBusy: status.set(sessionID, { type: "busy" }),
         onInterrupt,
+      })
+      const unregister = SessionLegacyOwner.register(SessionSchema.ID.make(sessionID), {
+        generation: () => next.generation,
+        interruptGeneration: (generation) => next.interruptGeneration(generation),
       })
       data.runners.set(sessionID, next)
       return next

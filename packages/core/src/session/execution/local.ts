@@ -9,7 +9,7 @@ import { SessionExecution } from "../execution"
 import { SessionLocationAccess } from "../location-access"
 import { Database } from "../../database/database"
 import { SessionTaskOwner } from "../task-owner"
-import { SessionTaskTable } from "../sql"
+import { SessionExecutionPauseTable, SessionTaskTable } from "../sql"
 import { SessionTask } from "../task"
 import { SessionTaskScheduler } from "../task-scheduler"
 import { SessionTaskResult } from "../task-result"
@@ -42,9 +42,17 @@ const layer = Layer.effect(
           .all()
           .pipe(Effect.orDie)
         const v2 = tasks.filter((task) => task.backend === "v2")
-        const next = v2.find(
-          (task) => task.state === "admitted" || (task.state === "queued" && task.eligibility !== "cancelled"),
-        )
+        const paused = yield* database.db
+          .select({ session_id: SessionExecutionPauseTable.session_id })
+          .from(SessionExecutionPauseTable)
+          .where(eq(SessionExecutionPauseTable.session_id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        const next = paused
+          ? undefined
+          : v2.find(
+              (task) => task.state === "admitted" || (task.state === "queued" && task.eligibility !== "cancelled"),
+            )
         if (next && next.eligibility !== "eligible") return
         if (next && next.location_revision !== session.locationRevision) return
         const run = SessionRunner.Service.use((runner) =>
@@ -100,6 +108,8 @@ const layer = Layer.effect(
     return SessionExecution.Service.of({
       active: coordinator.active,
       interrupt: coordinator.interrupt,
+      generation: coordinator.generation,
+      interruptGeneration: coordinator.interruptGeneration,
       requestInterruptExact: (sessionID, inputID, ownerGeneration) =>
         Effect.sync(() => coordinator.requestInterruptExact(sessionID, inputID, ownerGeneration)),
       resume: coordinator.run,
