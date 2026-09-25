@@ -166,6 +166,16 @@ export function modelContextOptions(
         value: { title: "available_skills", content: skillsPart.text },
       })
     }
+    for (const part of generation.runtimeParts ?? []) {
+      if (["environment", "date", "instructions", "references", "skills"].includes(part.key)) continue
+      const title = systemPartTitles[part.key] ?? part.key
+      options.push({
+        category: "SystemPrompt",
+        title,
+        footer: `${part.text.length}chars`,
+        value: { title, content: part.text },
+      })
+    }
   }
 
   if (generation.compaction) {
