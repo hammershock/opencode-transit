@@ -909,8 +909,14 @@ withSessionActivation.instance("QuickStart creation injects Skill guidance into 
     yield* prompt.loop({ sessionID: chat.id })
 
     const hits = yield* llm.hits
-    expect(hits).toHaveLength(1)
-    const system = ((hits[0]?.body as { messages: Array<{ role: string; content: string }> }).messages ?? [])
+    const replies = hits.filter((hit) =>
+      ((hit.body as { messages?: Array<{ role: string; content: string }> }).messages ?? []).some(
+        (message) => message.role === "system" && message.content.includes("<available_skills>"),
+      ),
+    )
+    expect(replies).toHaveLength(1)
+    expect(hits.filter((hit) => JSON.stringify(hit.body).includes("You are a title generator"))).toHaveLength(1)
+    const system = ((replies[0]?.body as { messages: Array<{ role: string; content: string }> }).messages ?? [])
       .filter((message) => message.role === "system")
       .map((message) => message.content)
       .join("\n")
