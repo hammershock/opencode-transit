@@ -106,15 +106,28 @@ export const Prompted = Event.define({
   ...options,
   schema: {
     ...PromptFields,
-    origin: Schema.optional(Schema.Struct({
-      kind: Schema.Literal("delegation_result"),
-      invocationInputID: Schema.String,
-      terminalEventID: Schema.String,
-      version: Schema.Literal(1),
-    })),
+    origin: Schema.optional(
+      Schema.Struct({
+        kind: Schema.Literal("delegation_result"),
+        invocationInputID: Schema.String,
+        terminalEventID: Schema.String,
+        version: Schema.Literal(1),
+      }),
+    ),
   },
 })
 export type Prompted = typeof Prompted.Type
+
+/** A copied historical message in a forked Session. The copied payload is self-contained for replay and sync. */
+export const MessageForked = Event.define({
+  type: "session.next.message.forked",
+  ...options,
+  schema: {
+    ...Base,
+    message: SessionMessage.Message,
+  },
+})
+export type MessageForked = typeof MessageForked.Type
 
 export const PromptAdmitted = Event.define({
   type: "session.next.prompt.admitted",
@@ -576,6 +589,7 @@ export const DurableDefinitions = Event.inventory(
   Moved,
   LocationRebound,
   Prompted,
+  MessageForked,
   PromptAdmitted,
   TitleGenerated,
   DelegationResultRecorded,
@@ -614,6 +628,7 @@ export const Definitions = Event.inventory(
   Moved,
   LocationRebound,
   Prompted,
+  MessageForked,
   PromptAdmitted,
   TitleGenerated,
   DelegationResultRecorded,

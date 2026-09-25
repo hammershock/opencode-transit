@@ -26,11 +26,19 @@ import { like } from "drizzle-orm"
 import { sql } from "drizzle-orm"
 import { inArray } from "drizzle-orm"
 import { ne } from "drizzle-orm"
+import { asc } from "drizzle-orm"
 import { lt } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
-import { MessageTable, PartTable, SessionInputTable, SessionTable } from "@opencode-ai/core/session/sql"
+import {
+  MessageTable,
+  PartTable,
+  SessionInputTable,
+  SessionMessageTable,
+  SessionTable,
+} from "@opencode-ai/core/session/sql"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionEvent } from "@opencode-ai/core/session/event"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { MessageV2 } from "./message-v2"
 import type { InstanceContext } from "../project/instance-context"
@@ -478,6 +486,7 @@ export interface Interface {
   }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
+  readonly promptBackend: (sessionID: SessionID) => Effect.Effect<"v1" | "v2", NotFound>
   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
   readonly setArchived: (input: { sessionID: SessionID; time?: number }) => Effect.Effect<void>
   readonly setMetadata: (input: typeof SetMetadataInput.Type) => Effect.Effect<void>
@@ -625,6 +634,28 @@ const layer: Layer.Layer<
       return fromRow(row)
     })
 
+    const promptBackend = Effect.fn("Session.promptBackend")(function* (sessionID: SessionID) {
+      const current = yield* get(sessionID)
+      const legacy = yield* db
+        .select({ id: MessageTable.id })
+        .from(MessageTable)
+        .where(eq(MessageTable.session_id, sessionID))
+        .limit(1)
+        .get()
+        .pipe(Effect.orDie)
+      // V2 Task results can coexist with a V1 parent transcript. The visible V1 history remains authoritative.
+      if (legacy) return "v1" as const
+      if (current.metadata?.["opencode.promptBackend"] === "v2") return "v2" as const
+      const canonical = yield* db
+        .select({ id: SessionInputTable.id })
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.session_id, sessionID))
+        .limit(1)
+        .get()
+        .pipe(Effect.orDie)
+      return canonical ? ("v2" as const) : ("v1" as const)
+    })
+
     const list = Effect.fn("Session.list")(function* (input?: ListInput) {
       const ctx = yield* InstanceState.context
       return yield* listByProject(db, {
@@ -712,14 +743,15 @@ const layer: Layer.Layer<
 
     const updateMessage = <T extends SessionV1.Info>(msg: T): Effect.Effect<T> =>
       Effect.gen(function* () {
-        const existing = msg.role === "user"
-          ? yield* db
-              .select({ id: MessageTable.id })
-              .from(MessageTable)
-              .where(and(eq(MessageTable.session_id, msg.sessionID), eq(MessageTable.id, msg.id)))
-              .get()
-              .pipe(Effect.orDie)
-          : undefined
+        const existing =
+          msg.role === "user"
+            ? yield* db
+                .select({ id: MessageTable.id })
+                .from(MessageTable)
+                .where(and(eq(MessageTable.session_id, msg.sessionID), eq(MessageTable.id, msg.id)))
+                .get()
+                .pipe(Effect.orDie)
+            : undefined
         yield* events.publish(
           SessionV1.Event.MessageUpdated,
           { sessionID: msg.sessionID, info: msg },
@@ -841,6 +873,60 @@ const layer: Layer.Layer<
       const ctx = yield* InstanceState.context
       const original = yield* get(input.sessionID)
       const title = getForkedTitle(original.title)
+      if ((yield* promptBackend(input.sessionID)) === "v2") {
+        const rows = yield* db
+          .select()
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.session_id, input.sessionID))
+          .orderBy(asc(SessionMessageTable.seq))
+          .all()
+          .pipe(Effect.orDie)
+        const history = rows.map((row) =>
+          Schema.decodeUnknownSync(SessionMessage.Message)({ ...row.data, id: row.id, type: row.type }),
+        )
+        const targetID = input.messageID ? SessionMessage.ID.make(input.messageID) : undefined
+        const target = targetID
+          ? history.findIndex(
+              (message) => message.id === targetID || (message.type === "shell" && message.userMessageID === targetID),
+            )
+          : history.length
+        const session = yield* createNext({
+          directory: original.directory,
+          target: original.target,
+          lastKnownTargetName: original.lastKnownTargetName,
+          portableTargetLabel: original.portableTargetLabel,
+          path: original.path,
+          workspaceID: original.workspaceID,
+          title,
+          agent: original.agent,
+          model: original.model,
+          metadata: { ...structuredClone(original.metadata), "opencode.promptBackend": "v2" },
+          subagentAccess: structuredClone(original.subagentAccess),
+          permission: input.permission ?? original.permission,
+          permissionBoundary: original.permissionBoundary,
+          approvalMode: original.approvalMode,
+        })
+        const copied = history.slice(0, target < 0 ? history.length : target)
+        const ids = new Map(copied.map((message) => [message.id, SessionMessage.ID.create()]))
+        yield* Effect.forEach(
+          copied,
+          (message) =>
+            events.publish(SessionEvent.MessageForked, {
+              sessionID: session.id,
+              timestamp: message.time.created,
+              message: {
+                ...message,
+                id: ids.get(message.id)!,
+                ...(message.type === "synthetic" ? { sessionID: session.id } : {}),
+                ...(message.type === "shell" && message.userMessageID
+                  ? { userMessageID: ids.get(message.userMessageID) ?? message.userMessageID }
+                  : {}),
+              },
+            }),
+          { discard: true },
+        ).pipe(Effect.catchCause((cause) => remove(session.id).pipe(Effect.andThen(Effect.failCause(cause)))))
+        return session
+      }
       const session = yield* createNext({
         directory: ctx.directory,
         path: sessionPath(ctx.worktree, ctx.directory),
@@ -1087,6 +1173,7 @@ const layer: Layer.Layer<
       fork,
       touch,
       get,
+      promptBackend,
       setTitle,
       setArchived,
       setMetadata,

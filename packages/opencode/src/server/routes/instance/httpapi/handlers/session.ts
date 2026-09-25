@@ -39,12 +39,13 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { PermissionNotFoundError } from "../errors"
+import { InvalidRequestError, PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
 import { SessionLocationAccess } from "@opencode-ai/core/session/location-access"
 import { SessionActivity } from "@opencode-ai/core/session/activity"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { Provider } from "@/provider/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -73,6 +74,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const locationAccess = yield* SessionLocationAccess.Service
     const activity = yield* SessionActivity.Service
     const sessionV2 = yield* SessionV2.Service
+    const execution = yield* SessionExecution.Service
     const commandSvc = yield* Command.Service
     const scope = yield* Scope.Scope
 
@@ -90,11 +92,35 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const status = Effect.fn("SessionHttpApi.status")(function* () {
-      return Object.fromEntries(yield* statusSvc.list())
+      const current = yield* statusSvc.list()
+      const context = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      for (const sessionID of yield* execution.active) {
+        const owned = yield* session.get(SessionID.make(sessionID)).pipe(Effect.option)
+        if (
+          Option.isSome(owned) &&
+          owned.value.projectID === context.project.id &&
+          owned.value.directory === context.directory &&
+          owned.value.workspaceID === workspaceID
+        )
+          current.set(SessionID.make(sessionID), { type: "busy" })
+      }
+      return Object.fromEntries(current)
     })
 
     const requireSession = Effect.fn("SessionHttpApi.requireSession")(function* (sessionID: SessionID) {
       return yield* SessionError.mapStorageNotFound(session.get(sessionID))
+    })
+
+    const requireLegacyMessageMutation = Effect.fn("SessionHttpApi.requireLegacyMessageMutation")(function* (
+      sessionID: SessionID,
+    ) {
+      yield* requireSession(sessionID)
+      if ((yield* SessionError.mapStorageNotFound(session.promptBackend(sessionID))) === "v1") return
+      return yield* new InvalidRequestError({
+        kind: "session_backend_v2",
+        message: "Legacy message and part mutation is unavailable for a V2 transcript",
+      })
     })
 
     const requireWritableLocation = Effect.fn("SessionHttpApi.requireWritableLocation")(function* (
@@ -210,6 +236,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* requireSession(ctx.params.sessionID)
+      const stop: (sessionID: SessionID) => Effect.Effect<void> = Effect.fn("SessionHttpApi.stopBeforeRemove")(
+        function* (sessionID: SessionID) {
+          yield* Effect.forEach(yield* session.children(sessionID), (child) => stop(child.id), { discard: true })
+          yield* execution.interrupt(sessionID)
+          yield* promptSvc.cancel(sessionID)
+        },
+      )
+      yield* stop(ctx.params.sessionID)
       yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID))
       yield* promptSvc.resetShell(ctx.params.sessionID)
       return true
@@ -268,6 +303,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* execution.interrupt(ctx.params.sessionID)
       yield* promptSvc.cancel(ctx.params.sessionID)
       return true
     })
@@ -548,7 +584,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const deleteMessage = Effect.fn("SessionHttpApi.deleteMessage")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireLegacyMessageMutation(ctx.params.sessionID)
       yield* SessionError.mapBusy(runState.assertNotBusy(ctx.params.sessionID))
       yield* session.removeMessage(ctx.params)
       return true
@@ -557,7 +593,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const deletePart = Effect.fn("SessionHttpApi.deletePart")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireLegacyMessageMutation(ctx.params.sessionID)
       yield* session.removePart(ctx.params)
       return true
     })
@@ -566,7 +602,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
       payload: typeof SessionV1.Part.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireLegacyMessageMutation(ctx.params.sessionID)
       const payload = ctx.payload as SessionV1.Part
       if (
         payload.id !== ctx.params.partID ||

@@ -376,6 +376,176 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
+    "keeps a historical V1 session on V1 when a V2 inbox record also exists",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const session = yield* createSession({ title: "historical V1" })
+        yield* createTextMessage(session.id, "legacy context")
+        const { db } = yield* Database.Service
+        yield* db
+          .insert(SessionInputTable)
+          .values({
+            id: SessionMessage.ID.create(),
+            session_id: session.id,
+            prompt: { text: "background Task result" },
+            delivery: "steer",
+            admitted_seq: 1,
+            time_created: Date.now(),
+          })
+          .run()
+        const response = yield* request(pathFor(SessionPaths.slashCommand, { sessionID: session.id }), {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory, "content-type": "application/json" },
+          body: JSON.stringify({
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            command: "/target list",
+          }),
+        })
+        expect(response.status).toBe(200)
+        expect(
+          (yield* db
+            .select({ id: MessageTable.id })
+            .from(MessageTable)
+            .where(eq(MessageTable.session_id, session.id))
+            .all()).length,
+        ).toBe(3)
+        const forked = yield* requestJson<Session.Info>(pathFor(SessionPaths.fork, { sessionID: session.id }), {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory },
+        })
+        expect(
+          (yield* db
+            .select({ id: MessageTable.id })
+            .from(MessageTable)
+            .where(eq(MessageTable.session_id, forked.id))
+            .all()).length,
+        ).toBe(3)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "forks V2 history without switching the child to V1",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ location: { directory: test.directory } }),
+        })
+        const source = SessionID.make(created.data.id)
+        const command = yield* request(pathFor(SessionPaths.slashCommand, { sessionID: source }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            command: "/target list",
+          }),
+        })
+        expect(command.status).toBe(200)
+        const original = yield* requestJson<{ data: SessionMessage.Message[] }>(`/api/session/${source}/message`, {
+          headers,
+        })
+        expect(original.data.map((message) => message.type)).toEqual(["assistant", "user"])
+
+        const forked = yield* requestJson<Session.Info>(pathFor(SessionPaths.fork, { sessionID: source }), {
+          method: "POST",
+          headers,
+        })
+        const copied = yield* requestJson<{ data: SessionMessage.Message[] }>(`/api/session/${forked.id}/message`, {
+          headers,
+        })
+        expect(copied.data.map((message) => message.type)).toEqual(["assistant", "user"])
+        expect(copied.data.every((message, index) => message.id !== original.data[index]?.id)).toBe(true)
+        const { db } = yield* Database.Service
+        expect(
+          (yield* db
+            .select({ id: MessageTable.id })
+            .from(MessageTable)
+            .where(eq(MessageTable.session_id, forked.id))
+            .all()).length,
+        ).toBe(0)
+        const admitted = yield* request(`/api/session/${forked.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: { text: "continue fork" }, resume: false }),
+        })
+        expect(admitted.status).toBe(200)
+
+        const truncated = yield* requestJson<Session.Info>(pathFor(SessionPaths.fork, { sessionID: source }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ messageID: original.data[0]?.id }),
+        })
+        const prefix = yield* requestJson<{ data: SessionMessage.Message[] }>(`/api/session/${truncated.id}/message`, {
+          headers,
+        })
+        expect(prefix.data.map((message) => message.type)).toEqual(["user"])
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "rejects legacy message mutations before writing a V2 transcript",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-opencode-directory": test.directory, "content-type": "application/json" }
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ location: { directory: test.directory } }),
+        })
+        const sessionID = SessionID.make(created.data.id)
+        const messageID = MessageID.ascending()
+        const partID = PartID.ascending()
+        const paths = [
+          { path: pathFor(SessionPaths.deleteMessage, { sessionID, messageID }), method: "DELETE" },
+          { path: pathFor(SessionPaths.deletePart, { sessionID, messageID, partID }), method: "DELETE" },
+          { path: pathFor(SessionPaths.updatePart, { sessionID, messageID, partID }), method: "PATCH" },
+        ] as const
+        for (const item of paths) {
+          const response = yield* request(item.path, {
+            method: item.method,
+            headers,
+            ...(item.method === "PATCH"
+              ? {
+                  body: JSON.stringify(
+                    SessionV1.TextPart.make({
+                      id: partID,
+                      messageID,
+                      sessionID,
+                      type: "text",
+                      text: "cannot mutate V2 through V1 part API",
+                    }),
+                  ),
+                }
+              : {}),
+          })
+          expect(response.status).toBe(400)
+          expect(yield* responseJson(response)).toMatchObject({
+            _tag: "InvalidRequestError",
+            kind: "session_backend_v2",
+          })
+        }
+        const { db } = yield* Database.Service
+        expect(
+          (yield* db
+            .select({ id: MessageTable.id })
+            .from(MessageTable)
+            .where(eq(MessageTable.session_id, sessionID))
+            .all()).length,
+        ).toBe(0)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
     "runs a User shell command without switching a V2 session to the V1 transcript",
     () =>
       Effect.gen(function* () {
@@ -428,6 +598,21 @@ describe("session HttpApi", () => {
               row.type === "shell" && "userMessageID" in row.data && row.data.userMessageID === "msg_http_shell_user",
           ),
         ).toBe(true)
+        const original = yield* requestJson<{ data: SessionMessage.Message[] }>(`/api/session/${sessionID}/message`, {
+          headers: { "x-opencode-directory": test.directory },
+        })
+        const forked = yield* requestJson<Session.Info>(pathFor(SessionPaths.fork, { sessionID }), {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory },
+        })
+        const copied = yield* requestJson<{ data: SessionMessage.Message[] }>(`/api/session/${forked.id}/message`, {
+          headers: { "x-opencode-directory": test.directory },
+        })
+        const copiedShell = copied.data.find((message) => message.type === "shell")
+        expect(copiedShell?.id).not.toBe(original.data.find((message) => message.type === "shell")?.id)
+        expect(copiedShell?.type === "shell" && copiedShell.userMessageID).toBe(
+          SessionMessage.ID.make("msg_http_shell_user"),
+        )
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

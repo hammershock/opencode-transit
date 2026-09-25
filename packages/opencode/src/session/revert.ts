@@ -49,6 +49,8 @@ const layer = Layer.effect(
       const session = yield* current(input.sessionID)
       const messages = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
       const index = messages.findIndex((message) => message.info.id === input.messageID)
+      if (index < 0 && (yield* sessions.promptBackend(input.sessionID).pipe(Effect.orDie)) === "v1")
+        return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       const target = messages[index]
       const offset = input.partID ? target?.parts.findIndex((part) => part.id === input.partID) : undefined
       if (input.partID && (offset === undefined || offset < 0))
