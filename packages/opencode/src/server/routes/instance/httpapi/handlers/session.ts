@@ -45,6 +45,7 @@ import { SessionLocationAccess } from "@opencode-ai/core/session/location-access
 import { SessionActivity } from "@opencode-ai/core/session/activity"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionInput } from "@opencode-ai/core/session/input"
+import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { Provider } from "@/provider/provider"
@@ -239,14 +240,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* requireSession(ctx.params.sessionID)
-      const stop: (sessionID: SessionID) => Effect.Effect<void> = Effect.fn("SessionHttpApi.stopBeforeRemove")(
-        function* (sessionID: SessionID) {
-          yield* Effect.forEach(yield* session.children(sessionID), (child) => stop(child.id), { discard: true })
-          yield* execution.interrupt(sessionID)
-          yield* promptSvc.cancel(sessionID)
-        },
-      )
-      yield* stop(ctx.params.sessionID)
+      yield* execution.interrupt(ctx.params.sessionID)
+      yield* promptSvc.cancel(ctx.params.sessionID)
       yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID))
       yield* promptSvc.resetShell(ctx.params.sessionID)
       return true
@@ -413,10 +408,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           Effect.gen(function* () {
             yield* requireWritableLocation(ctx.params.sessionID)
             yield* requireSession(ctx.params.sessionID)
+            const messageID = ctx.payload.messageID ?? MessageID.ascending()
+            yield* SessionPeerRoute.markUserMessage({ sessionID: ctx.params.sessionID, messageID })
             const message = yield* promptSvc
               .prompt({
                 ...ctx.payload,
                 sessionID: ctx.params.sessionID,
+                messageID,
               })
               .pipe(
                 Effect.mapError(() => new HttpApiError.BadRequest({})),
@@ -437,12 +435,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
+      yield* requireSession(ctx.params.sessionID)
+      const messageID = ctx.payload.messageID ?? MessageID.ascending()
+      yield* SessionPeerRoute.markUserMessage({ sessionID: ctx.params.sessionID, messageID })
       const run = withLocationActivity(
         ctx.params.sessionID,
         Effect.gen(function* () {
           yield* requireWritableLocation(ctx.params.sessionID)
           yield* requireSession(ctx.params.sessionID)
-          yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID })
+          yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID, messageID })
         }),
       )
       yield* run.pipe(

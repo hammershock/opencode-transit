@@ -440,7 +440,7 @@ describe("SessionTask durable projection", () => {
       expect(durable.map((event) => event.type)).toContain(EventV2.versionedType(SessionTaskEvent.Settled.type, 1))
 
       yield* events.publish(SessionV1.Event.Deleted, { sessionID: root, info: rootInfo })
-      expect(yield* SessionTask.find(db, admission.inputID)).toBeUndefined()
+      expect((yield* SessionTask.find(db, admission.inputID))?.child_session_id).toBe(child)
       yield* events.publish(SessionTaskEvent.Admitted, {
         sessionID: child,
         admission: { ...admission, inputID: "msg_late", parentMessageID: "msg_late_parent", callID: "call-late" },
@@ -530,7 +530,7 @@ describe("SessionTask durable projection", () => {
         for (const record of records.slice(0, 4)) yield* events.replay(record)
         expect((yield* SessionTask.find(db, admission.inputID))?.result_message_id).toBe("msg_replay_result")
         for (const record of records.slice(4)) yield* events.replay(record)
-        expect(yield* SessionTask.find(db, admission.inputID)).toBeUndefined()
+        expect((yield* SessionTask.find(db, admission.inputID))?.child_session_id).toBe(child)
         expect(yield* SessionTask.find(db, "msg_after_delete")).toBeUndefined()
       }).pipe(Effect.provide(layer("target.sqlite")), Effect.scoped),
     )

@@ -2407,7 +2407,7 @@ describe("tool.task", () => {
     }),
   )
 
-  background.instance("cancelling the parent run cancels running background tasks", () =>
+  background.instance("cancelling the parent run leaves independent background tasks running", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
       const runState = yield* SessionRunState.Service
@@ -2444,9 +2444,8 @@ describe("tool.task", () => {
       )
 
       yield* runState.cancel(chat.id).pipe(Effect.timeout("2 seconds"))
-      const waited = yield* jobs.wait({ id: result.metadata.sessionId, timeout: 1_000 })
-      expect(waited.timedOut).toBe(false)
-      expect(waited.info?.status).toBe("cancelled")
+      expect((yield* jobs.get(result.metadata.sessionId))?.status).toBe("running")
+      yield* runState.cancel(result.metadata.sessionId)
     }),
   )
 
@@ -2471,7 +2470,7 @@ describe("tool.task", () => {
     }),
   )
 
-  it.instance("cancelling a parent run recursively cancels descendant background tasks", () =>
+  it.instance("cancelling a parent run leaves descendants independent", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
       const runState = yield* SessionRunState.Service
@@ -2495,8 +2494,10 @@ describe("tool.task", () => {
 
       yield* runState.cancel(chat.id)
 
-      expect((yield* jobs.get(child.id))?.status).toBe("cancelled")
-      expect((yield* jobs.get(grandchild.id))?.status).toBe("cancelled")
+      expect((yield* jobs.get(child.id))?.status).toBe("running")
+      expect((yield* jobs.get(grandchild.id))?.status).toBe("running")
+      yield* runState.cancel(child.id)
+      yield* runState.cancel(grandchild.id)
     }),
   )
 })

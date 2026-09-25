@@ -727,11 +727,6 @@ const layer: Layer.Layer<
         )
 
         if (hasInstance) yield* cancelBackgroundJobs(background, sessionID)
-        const kids = yield* children(sessionID)
-        for (const child of kids) {
-          yield* remove(child.id)
-        }
-
         const deleted = yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
         // Retain the minimal durable deletion marker until sync capture can
         // recover it after a process crash. Older content events are removed.
@@ -1209,9 +1204,7 @@ const cancelBackgroundJobs = Effect.fn("Session.cancelBackgroundJobs")(function*
   yield* Effect.forEach(
     jobs.filter((job) => {
       if (job.status !== "running") return false
-      if (job.id === sessionID) return true
-      if (job.metadata?.sessionId === sessionID) return true
-      return job.metadata?.parentSessionId === sessionID
+      return job.id === sessionID || job.metadata?.sessionId === sessionID
     }),
     (job) => background.cancel(job.id),
     { concurrency: "unbounded", discard: true },

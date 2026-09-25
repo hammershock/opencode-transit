@@ -50,6 +50,17 @@ const awaitDeferred = <T>(deferred: Deferred.Deferred<T>, message: string) =>
 
 const remove = (id: SessionID) => SessionNs.use.remove(id)
 
+it.instance("deleting a source session preserves its independent child session", () =>
+  Effect.gen(function* () {
+    const session = yield* SessionNs.Service
+    const source = yield* session.create({})
+    const child = yield* session.create({ parentID: source.id })
+    yield* session.remove(source.id)
+    expect((yield* session.get(child.id)).id).toBe(child.id)
+    yield* session.remove(child.id)
+  }),
+)
+
 describe("session.created event", () => {
   it.instance("should emit session.created event when session is created", () =>
     Effect.gen(function* () {
