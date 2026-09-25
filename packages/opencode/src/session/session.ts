@@ -919,7 +919,7 @@ const layer: Layer.Layer<
                 id: ids.get(message.id)!,
                 ...(message.type === "synthetic" ? { sessionID: session.id } : {}),
                 ...(message.type === "shell" && message.userMessageID
-                  ? { userMessageID: ids.get(message.userMessageID) }
+                  ? { userMessageID: ids.get(message.userMessageID) ?? message.userMessageID }
                   : {}),
               },
             }),
