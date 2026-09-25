@@ -132,6 +132,11 @@ function renderOutput(input: {
   summary?: string
   text: string
   location?: { id: string; name: string; directory: string }
+  waitTarget?: {
+    task_id: string
+    invocation: { parent_session_id: string; parent_message_id: string; call_id: string }
+    input_id: string
+  }
 }) {
   const tag = input.state === "error" ? "task_error" : "task_result"
   return [
@@ -142,6 +147,7 @@ function renderOutput(input: {
         ]
       : []),
     ...(input.summary ? [`<summary>${input.summary}</summary>`] : []),
+    ...(input.waitTarget ? [`<task_wait_target>${JSON.stringify(input.waitTarget)}</task_wait_target>`] : []),
     `<${tag}>`,
     input.text,
     `</${tag}>`,
@@ -729,6 +735,15 @@ export const TaskTool = Tool.define(
       const previous = ctx.callID
         ? yield* SessionTask.findInvocation(database.db, { parentMessageID: ctx.messageID, callID: ctx.callID })
         : undefined
+      const waitTarget = (sessionID: string, inputID: string) => ({
+        task_id: sessionID,
+        invocation: {
+          parent_session_id: ctx.sessionID,
+          parent_message_id: ctx.messageID,
+          call_id: ctx.callID!,
+        },
+        input_id: inputID,
+      })
       const promptDigest = new Bun.CryptoHasher("sha256").update(params.prompt).digest("hex")
       const matchesPrior = (row: NonNullable<typeof previous>) =>
         row.parent_session_id === ctx.sessionID &&
@@ -778,6 +793,7 @@ export const TaskTool = Tool.define(
                 : "Invocation already admitted; check its status before sending another call",
             text: "This exact Task invocation was already admitted. It was not started again.",
             location: { id: planned.targetID, name: planned.targetName, directory: planned.directory },
+            ...(row.backend === "v2" && row.background ? { waitTarget: waitTarget(sessionID, row.input_id) } : {}),
           }),
         }
       })
@@ -929,6 +945,7 @@ export const TaskTool = Tool.define(
               summary: `Invocation ${admitted.inputID} was ${admitted.state}; admission does not mean promotion`,
               text: "",
               location: { id: planned.targetID, name: planned.targetName, directory: planned.directory },
+              waitTarget: waitTarget(childID, admitted.inputID),
             }),
           }
         }

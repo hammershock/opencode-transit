@@ -111,6 +111,14 @@ const layer = Layer.effectDiscard(
             { signal },
           ),
         ).pipe(Effect.flatMap((exit) => (Exit.isFailure(exit) ? Effect.failCause(exit.cause) : Effect.succeed(exit.value))))
+        if (name === "task_wait") {
+          if (result.output === "task_wait_invalid_request")
+            return yield* Effect.fail(new ToolFailure({
+              message: "task_wait_invalid_request: provide 1–32 unique exact task_wait_target values and timeout_ms between 1 and 120000",
+            }))
+          if (result.output === "task_unknown_or_forbidden" || result.output === "task_wait_unavailable")
+            return yield* Effect.fail(new ToolFailure({ message: result.output }))
+        }
         return result.output
       }).pipe(
         Effect.mapError((error) =>
@@ -145,7 +153,8 @@ const layer = Layer.effectDiscard(
           execute: (input, context) => execute("task_reconcile", input, context),
         }),
         task_wait: Tool.make({
-          description: "Wait for exact direct child invocations or parent input without cancelling child work.",
+          description:
+            "Wait for exact direct child invocations or parent input without cancelling child work. Copy each task_wait_target from the Task result into targets. timeout_ms defaults to 30000 and must be 1–120000.",
           input: SessionTask.WaitRequest,
           output: Schema.String,
           execute: (input, context) => execute("task_wait", input, context),
