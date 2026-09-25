@@ -39,6 +39,7 @@ import type {
   Session,
   SessionMessageUser,
   SessionStatus,
+  V2SessionTaskStatusResponses,
 } from "@opencode-ai/sdk/v2"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
@@ -61,7 +62,7 @@ import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { DialogPermissionModes } from "../../component/dialog-permission-mode"
 import { Sidebar } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
-import { DialogTaskList } from "./dialog-task"
+import { DialogTaskList, taskStatusLabel } from "./dialog-task"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
@@ -125,6 +126,7 @@ import {
 } from "../../command-toolkit/model-context"
 import { showModelContext } from "../../component/dialog-model-context"
 import { useData } from "../../context/data"
+import { taskInvocationMatches, taskReceiptID } from "../../util/task-card"
 import { SkillInvocationRow } from "../../component/skill-invocation"
 import {
   mergeCanonicalSessionMessages,
@@ -1885,25 +1887,34 @@ export function Session() {
                               <></>
                             </Match>
                             <Match when={message().role === "user"}>
-                              <UserMessage
-                                index={index()}
-                                onMouseUp={() => {
-                                  if (renderer.getSelection()?.getSelectedText()) return
-                                  dialog.replace(() => (
-                                    <DialogMessage
-                                      messageID={messageID}
-                                      sessionID={route.sessionID}
-                                      setPrompt={(promptInfo) => prompt?.set(promptInfo)}
-                                    />
-                                  ))
-                                }}
-                                message={message() as UserMessage}
-                                parts={messageParts(messageID)}
-                                skills={durableUsers().get(messageID)?.skills}
-                                expandedSkills={expandedSkills()}
-                                onSkillToggle={toggleSkill}
-                                pending={pending()}
-                              />
+                              <Show
+                                when={durableUsers().get(messageID)?.origin?.kind !== "delegation_result"}
+                                fallback={
+                                  <box paddingLeft={3} marginTop={1} onMouseUp={() => dialog.push(() => <DialogTaskList sessionID={route.sessionID} />)}>
+                                    <text fg={theme.textMuted}>Subagent result delivered to Agent · click to inspect Tasks</text>
+                                  </box>
+                                }
+                              >
+                                <UserMessage
+                                  index={index()}
+                                  onMouseUp={() => {
+                                    if (renderer.getSelection()?.getSelectedText()) return
+                                    dialog.replace(() => (
+                                      <DialogMessage
+                                        messageID={messageID}
+                                        sessionID={route.sessionID}
+                                        setPrompt={(promptInfo) => prompt?.set(promptInfo)}
+                                      />
+                                    ))
+                                  }}
+                                  message={message() as UserMessage}
+                                  parts={messageParts(messageID)}
+                                  skills={durableUsers().get(messageID)?.skills}
+                                  expandedSkills={expandedSkills()}
+                                  onSkillToggle={toggleSkill}
+                                  pending={pending()}
+                                />
+                              </Show>
                             </Match>
                             <Match when={message().role === "assistant"}>
                               <AssistantMessage
@@ -1986,8 +1997,10 @@ export function Session() {
                       commandHost={coreCommandHost()}
                       shellCompletionGeneration={shellCompletionGeneration()}
                       onSubmit={() => {
+                        if (route.messageID) navigate({ ...route, messageID: undefined })
                         toBottom()
                       }}
+                      onPromptAccepted={(sessionID) => data.session.message.refresh(sessionID)}
                       onPromptSubmit={dismissLocationNotice}
                       sessionID={route.sessionID}
                       right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
@@ -2291,7 +2304,8 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
   const inMinimal = createMemo(() => ctx.thinkingMode() === "hide")
   const duration = createMemo(() => {
     const end = props.part.time.end
-    return end === undefined ? 0 : Math.max(0, end - props.part.time.start)
+    if (end === undefined || !Number.isFinite(end) || !Number.isFinite(props.part.time.start)) return
+    return Math.max(0, end - props.part.time.start)
   })
   const summary = createMemo(() => reasoningSummary(content()))
   const syntax = createSyntaxStyleMemo(() => generateSubtleSyntax(theme))
@@ -2316,7 +2330,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
             open={!inMinimal() || expanded()}
             done={isDone()}
             title={summary().title}
-            duration={isDone() ? Locale.duration(duration()) : undefined}
+            duration={duration() === undefined ? undefined : Locale.duration(duration()!)}
             encrypted={opaque()}
           />
         </box>
@@ -2402,6 +2416,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
 
   // Hide tool if showDetails is false and tool completed successfully
   const shouldHide = createMemo(() => {
+    if (props.part.tool === "task") return false
     if (ctx.showDetails()) return false
     if (props.part.state.status !== "completed") return false
     return true
@@ -2957,15 +2972,71 @@ function WebSearch(props: ToolProps) {
   )
 }
 
+type TaskView = V2SessionTaskStatusResponses[200]["data"][number]
+
 function Task(props: ToolProps) {
   const { theme } = useTheme()
   const { navigate } = useRoute()
   const sync = useSync()
   const dialog = useDialog()
+  const sdk = useSDK()
+  const [view, setView] = createSignal<TaskView>()
+  const [childID, setChildID] = createSignal<string>()
+
+  const refresh = async () => {
+    if (stringValue(props.metadata.sessionId)) return
+    const taskID = childID() ?? stringValue(props.input.task_id) ?? taskReceiptID(props.metadata.value ?? props.output)
+    const invocation = {
+      parent_session_id: props.part.sessionID,
+      parent_message_id: props.part.messageID,
+      call_id: props.part.callID,
+    }
+    try {
+      if (taskID) {
+        const response = await sdk.client.v2.session.task.status(
+          { sessionID: props.part.sessionID, target: { task_id: taskID, invocation }, include_results: true },
+          { throwOnError: true },
+        )
+        const match = response.data.data.find((item) =>
+          taskInvocationMatches(item, props.part.sessionID, props.part.messageID, props.part.callID),
+        )
+        if (match) {
+          setChildID(match.target.task_id)
+          setView(match)
+        }
+        return
+      }
+      let cursor: string | undefined
+      do {
+        const response = await sdk.client.v2.session.task.status(
+          { sessionID: props.part.sessionID, limit: 32, cursor, include_results: true },
+          { throwOnError: true },
+        )
+        const match = response.data.data.find((item) =>
+          taskInvocationMatches(item, props.part.sessionID, props.part.messageID, props.part.callID),
+        )
+        if (match) {
+          setChildID(match.target.task_id)
+          setView(match)
+          return
+        }
+        cursor = response.data.next
+      } while (cursor)
+    } catch {
+      // The durable status query can fail before Task admission; retry while the card is visible.
+    }
+  }
 
   onMount(() => {
     const sessionID = stringValue(props.metadata.sessionId)
     if (sessionID && !sync.data.message[sessionID]?.length) void sync.session.sync(sessionID)
+    if (sessionID) return
+    void refresh()
+    const timer = setInterval(() => {
+      if (view()?.lifecycle === "settled") return
+      void refresh()
+    }, 1_500)
+    onCleanup(() => clearInterval(timer))
   })
 
   const sessionID = createMemo(() => stringValue(props.metadata.sessionId))
@@ -2990,6 +3061,7 @@ function Task(props: ToolProps) {
 
   const status = createMemo(() => sync.data.session_status[sessionID() ?? ""])
   const isRunning = createMemo(() => {
+    if (view()) return view()!.lifecycle === "active" && view()!.runtime === "observed"
     const value = status()
     return (
       props.part.state.status === "running" ||
@@ -3022,11 +3094,21 @@ function Task(props: ToolProps) {
       formatSubagentTitle(
         Locale.titlecase(stringValue(props.input.subagent_type) ?? "General"),
         description,
-        props.metadata.background === true,
+        props.metadata.background === true ||
+          (props.part.state.status === "completed" && view()?.lifecycle !== "settled" && Boolean(view())),
       ),
     ]
 
-    if (!invocation()) content.push("↳ History · invocation unknown")
+    const task = view()
+    if (task) {
+      content.push(`↳ ${taskStatusLabel(task)}`)
+      if (task.active_tools.length) content.push(`↳ ${task.active_tools.map((tool) => tool.name).join(", ")} · observed`)
+      if (task.lifecycle === "settled" && task.result?.summary)
+        content.push(`↳ ${Locale.truncate(task.result.summary.replaceAll("\n", " "), 160)}`)
+      return content.join("\n")
+    }
+
+    if (!invocation()) content.push("↳ Task status loading")
 
     const targetName = stringValue(props.metadata.targetName)
     const targetID = stringValue(props.metadata.target)
@@ -3056,7 +3138,7 @@ function Task(props: ToolProps) {
 
   return (
     <InlineTool
-      icon={props.part.state.status === "completed" ? "✓" : "│"}
+      icon={view() ? (view()!.lifecycle === "settled" ? "✓" : "│") : props.part.state.status === "completed" ? "✓" : "│"}
       separate={true}
       color={retry() ? theme.error : undefined}
       spinner={isRunning()}
@@ -3064,13 +3146,14 @@ function Task(props: ToolProps) {
       pending="Delegating…"
       part={props.part}
       onClick={() => {
-        if (sessionID()) {
+        const target = childID() ?? sessionID()
+        if (target) {
           navigate({
             type: "session",
-            sessionID: sessionID()!,
+            sessionID: target,
             taskDescription: stringValue(props.input.description),
           })
-        }
+        } else dialog.push(() => <DialogTaskList sessionID={props.part.sessionID} />)
         const status = retry()
         if (status) void DialogAlert.show(dialog, "Retry Error", status.message)
       }}

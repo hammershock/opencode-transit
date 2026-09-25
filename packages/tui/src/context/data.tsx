@@ -26,6 +26,7 @@ import { batch, createSignal, onCleanup, onMount } from "solid-js"
 import {
   mergeCanonicalSessionMessages,
   projectCanonicalSessionMessages,
+  reconcileCanonicalMessageSnapshot,
   SESSION_MESSAGE_LIMIT,
 } from "../util/session-message"
 import { locationKey, locationQuery } from "../util/location-query"
@@ -74,9 +75,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const [defaultLocation, setDefaultLocation] = createSignal<LocationRef>({
       directory: sdk.directory ?? process.cwd(),
     })
+    const messageVersion = new Map<string, number>()
+    const refreshVersion = new Map<string, number>()
 
     const message = {
       update(sessionID: string, fn: (messages: SessionMessage[]) => void) {
+        messageVersion.set(sessionID, (messageVersion.get(sessionID) ?? 0) + 1)
         setStore(
           "session",
           "message",
@@ -158,11 +162,15 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               files: event.data.prompt.files,
               agents: event.data.prompt.agents,
               skills: event.data.prompt.invocations,
+              ...(event.data.origin ? { origin: event.data.origin } : {}),
               time: { created: event.data.timestamp },
             })
           })
           break
         }
+        case "session.next.turn.settled":
+          void result.session.message.refresh(event.data.sessionID).catch(() => undefined)
+          break
         case "session.next.prompt.admitted":
           break
         case "session.next.revert.staged":
@@ -504,6 +512,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     onMount(() => {
       const unsub = events.subscribe((event, metadata) => {
+        if (event.type === "server.connected") {
+          void Promise.allSettled(
+            Object.keys(store.session.message).map((sessionID) => result.session.message.refresh(sessionID)),
+          )
+          return
+        }
         if (event.type === "session.revert.updated") {
           result.session.revert(event.properties.sessionID, event.properties.revert)
           return
@@ -535,11 +549,24 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.session.message[sessionID]
           },
           async refresh(sessionID: string) {
+            const version = messageVersion.get(sessionID) ?? 0
+            const refresh = (refreshVersion.get(sessionID) ?? 0) + 1
+            refreshVersion.set(sessionID, refresh)
             const result = await sdk.client.v2.session.messages(
               { sessionID, limit: SESSION_MESSAGE_LIMIT, order: "desc" },
               { throwOnError: true },
             )
-            setStore("session", "message", sessionID, result.data.data.slice(0, SESSION_MESSAGE_LIMIT))
+            if (refreshVersion.get(sessionID) !== refresh) return
+            setStore(
+              "session",
+              "message",
+              sessionID,
+              reconcileCanonicalMessageSnapshot(
+                store.session.message[sessionID] ?? [],
+                result.data.data,
+                messageVersion.get(sessionID) !== version,
+              ),
+            )
           },
         },
         permission: {
