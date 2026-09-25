@@ -26,7 +26,8 @@ import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/se
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { Database } from "@opencode-ai/core/database/database"
-import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { MessageTable, SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
 import { SessionMessage } from "@opencode-ai/core/session/message"
@@ -240,6 +241,137 @@ afterEach(async () => {
 })
 
 describe("session HttpApi", () => {
+  it.instance(
+    "lists targets through the User slash command in a V2 session",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const session = yield* createSession({ title: "target command" })
+        const admitted = yield* request(`/api/session/${session.id}/prompt`, {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory, "content-type": "application/json" },
+          body: JSON.stringify({ prompt: { text: "hello" }, resume: false }),
+        })
+        expect(admitted.status).toBe(200)
+        const response = yield* request(pathFor(SessionPaths.slashCommand, { sessionID: session.id }), {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory, "content-type": "application/json" },
+          body: JSON.stringify({
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            command: "/target list",
+          }),
+        })
+        expect(response.status).toBe(200)
+        const message = yield* json<SessionV1.WithParts>(response)
+        expect(message.parts).toContainEqual(
+          expect.objectContaining({
+            type: "tool",
+            state: expect.objectContaining({
+              status: "completed",
+              output: expect.stringContaining("Local execution target"),
+            }),
+          }),
+        )
+        const { db } = yield* Database.Service
+        const stored = yield* db
+          .select({ type: SessionMessageTable.type, data: SessionMessageTable.data })
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.session_id, session.id))
+          .all()
+        expect(
+          stored.some((row) => row.type === "assistant" && JSON.stringify(row.data).includes("slash_command")),
+        ).toBe(true)
+        if (message.info.role !== "assistant") throw new Error("Expected an assistant command response")
+        expect(yield* SessionInput.isSettled(db, session.id, SessionMessage.ID.make(message.info.parentID))).toBe(true)
+        const reload = yield* request(pathFor(SessionPaths.slashCommand, { sessionID: session.id }), {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory, "content-type": "application/json" },
+          body: JSON.stringify({
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            command: "/env reload",
+          }),
+        })
+        expect(reload.status).toBe(200)
+        expect((yield* json<SessionV1.WithParts>(reload)).parts).toContainEqual(
+          expect.objectContaining({
+            state: expect.objectContaining({ status: "completed", output: expect.stringContaining("Environment generation") }),
+          }),
+        )
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "preserves the V2 backend when a fresh session starts with a User slash command",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory, "content-type": "application/json" },
+          body: "{}",
+        })
+        const response = yield* request(
+          pathFor(SessionPaths.slashCommand, { sessionID: SessionID.make(created.data.id) }),
+          {
+            method: "POST",
+            headers: { "x-opencode-directory": test.directory, "content-type": "application/json" },
+            body: JSON.stringify({
+              agent: "build",
+              model: { providerID: "test", modelID: "test-model" },
+              command: "/target list",
+            }),
+          },
+        )
+        expect(response.status).toBe(200)
+        expect((yield* json<SessionV1.WithParts>(response)).parts[0]?.type).toBe("tool")
+        const admitted = yield* request(`/api/session/${created.data.id}/prompt`, {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory, "content-type": "application/json" },
+          body: JSON.stringify({ prompt: { text: "continue" }, resume: false }),
+        })
+        expect(admitted.status).toBe(200)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "keeps User slash commands on the V1 transcript for a fresh legacy session",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const session = yield* createSession({ title: "legacy command" })
+        const response = yield* request(pathFor(SessionPaths.slashCommand, { sessionID: session.id }), {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory, "content-type": "application/json" },
+          body: JSON.stringify({
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            command: "/target list",
+          }),
+        })
+        expect(response.status).toBe(200)
+        const { db } = yield* Database.Service
+        expect(
+          (yield* db
+            .select({ id: MessageTable.id })
+            .from(MessageTable)
+            .where(eq(MessageTable.session_id, session.id))
+            .all()).length,
+        ).toBe(2)
+        expect(
+          (yield* db
+            .select({ id: SessionInputTable.id })
+            .from(SessionInputTable)
+            .where(eq(SessionInputTable.session_id, session.id))
+            .all()).length,
+        ).toBe(0)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   it.effect("maps busy sessions to public session busy errors", () =>
     Effect.gen(function* () {
       const sessionID = SessionID.descending()
