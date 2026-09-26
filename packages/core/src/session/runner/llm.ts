@@ -38,6 +38,7 @@ import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
 import { MAX_STEPS_PROMPT } from "./max-steps"
 import { SessionAgentGuidance } from "../agent-guidance"
+import { SessionInterruption } from "../interruption"
 import { SessionPeerRoute } from "../peer-route"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
@@ -367,11 +368,18 @@ const layer = Layer.effect(
           })
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const agentGuidance = toolMaterialization?.definitions.some((tool) => tool.name === "agent_interact")
-        ? SessionAgentGuidance.render(
-            (yield* SessionPeerRoute.list(session.id).pipe(Effect.provideService(Database.Service, database)))
-              .filter((route) => route.can_interact)
-              .map((route) => route.alias),
-          )
+        ? yield* Effect.gen(function* () {
+            const routes = yield* SessionPeerRoute.list(session.id).pipe(
+              Effect.provideService(Database.Service, database),
+            )
+            const interruption = yield* SessionInterruption.latest(session.id).pipe(
+              Effect.provideService(Database.Service, database),
+            )
+            return SessionAgentGuidance.render(
+              routes.filter((route) => route.can_interact).map((route) => route.alias),
+              interruption?.state === "interrupted" ? { actor: interruption.actor_kind } : undefined,
+            )
+          })
         : undefined
       const request = LLM.request({
         model,

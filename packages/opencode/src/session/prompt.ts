@@ -68,6 +68,7 @@ import {
 import { SessionLegacyOwner } from "@opencode-ai/core/session/legacy-owner"
 import { SessionPeerMessage } from "@opencode-ai/core/session/peer-message"
 import { SessionAgentGuidance } from "@opencode-ai/core/session/agent-guidance"
+import { SessionInterruption } from "@opencode-ai/core/session/interruption"
 import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
@@ -1664,8 +1665,14 @@ const layer = Layer.effect(
               const routes = yield* SessionPeerRoute.list(SessionV2.ID.make(sessionID)).pipe(
                 Effect.provideService(Database.Service, database),
               )
+              const interruption = yield* SessionInterruption.latest(SessionV2.ID.make(sessionID)).pipe(
+                Effect.provideService(Database.Service, database),
+              )
               system.push(
-                SessionAgentGuidance.render(routes.filter((route) => route.can_interact).map((route) => route.alias)),
+                SessionAgentGuidance.render(
+                  routes.filter((route) => route.can_interact).map((route) => route.alias),
+                  interruption?.state === "interrupted" ? { actor: interruption.actor_kind } : undefined,
+                ),
               )
             }
             const format = lastUser.format ?? { type: "text" as const }
