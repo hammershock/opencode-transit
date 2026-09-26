@@ -14,6 +14,7 @@ import { Integration } from "../../integration"
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
 import { SessionSchema } from "../schema"
+import type { ModelContext } from "@opencode-ai/schema/model-context"
 
 export class ModelNotSelectedError extends Schema.TaggedErrorClass<ModelNotSelectedError>()(
   "SessionRunnerModel.ModelNotSelectedError",
@@ -73,12 +74,24 @@ export type Error =
 
 export interface Interface {
   readonly resolve: (session: SessionSchema.Info) => Effect.Effect<Model, Error>
+  readonly system: (model: Model) => { readonly prompt: string; readonly identity: string } | undefined
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/SessionRunnerModel") {}
 
 /** Test or embedding seam for supplying a model resolver directly. */
-export const layerWith = (resolve: Interface["resolve"]) => Layer.succeed(Service, Service.of({ resolve }))
+export const layerWith = (resolve: Interface["resolve"], system: Interface["system"] = () => undefined) =>
+  Layer.succeed(Service, Service.of({ resolve, system }))
+
+export function systemParts(agentSystem: string | undefined, base: ReturnType<Interface["system"]>) {
+  const prompt = agentSystem ?? base?.prompt
+  return [
+    ...(prompt !== undefined
+      ? [{ key: "agent", label: "Agent system prompt", tag: "<agent-system-prompt>", text: prompt }]
+      : []),
+    ...(base?.identity ? [{ key: "model", label: "Model identity", tag: "<model>", text: base.identity }] : []),
+  ] satisfies ModelContext.SystemPart[]
+}
 
 const apiKey = (model: ModelV2.Info, credential?: Credential.Value) => {
   if (credential?.type === "key") return Auth.value(credential.key)
@@ -199,6 +212,7 @@ export const locationLayer = Layer.effect(
     const catalog = yield* Catalog.Service
     const integrations = yield* Integration.Service
     return Service.of({
+      system: () => undefined,
       resolve: Effect.fn("SessionRunnerModel.resolve")(function* (session) {
         // Location plugins populate and filter the catalog asynchronously during layer startup.
         const defaultModel = session.model ? undefined : yield* catalog.model.default()
