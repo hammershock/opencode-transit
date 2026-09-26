@@ -8,7 +8,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Database } from "@opencode-ai/core/database/database"
-import { MessageTable, SessionMessageTable, SessionTaskResultTable, SessionTaskTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { MessageTable, SessionMessageTable, SessionPeerRouteTable, SessionTaskResultTable, SessionTaskTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { EventTable } from "@opencode-ai/core/event/sql"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { LocationServiceMap } from "@opencode-ai/core/location-services"
@@ -45,8 +45,11 @@ const outcome = await AppRuntime.runPromise(
           approvalMode: "auto",
           agent: AgentV2.ID.make("build"),
           model,
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: process.env.TASK_V2_TEST_DENIED === "true" ? [] : [{ permission: "*", pattern: "*", action: "allow" }],
         })
+        const db = (yield* Database.Service).db
+        if (process.env.TASK_V2_TEST_DENIED === "true")
+          yield* db.update(SessionTable).set({ subagent_access: { build: { general: false } } }).where(eq(SessionTable.id, parent.id))
         const locations = yield* LocationServiceMap.Service
         const location = yield* (yield* SessionLocationAccess.Service).require(parent.id)
         yield* Catalog.Service.use((catalog) =>
@@ -90,8 +93,7 @@ const outcome = await AppRuntime.runPromise(
               return { id: SessionMessage.ID.make(body.data.id) }
             })
           : yield* session.prompt({ sessionID: parent.id, prompt: { text } })
-        const db = (yield* Database.Service).db
-        if (process.env.TASK_V2_TEST_CONTROL === "status" || process.env.TASK_V2_TEST_CONTROL === "wait-invalid") {
+        if (process.env.TASK_V2_TEST_CONTROL === "status" || process.env.TASK_V2_TEST_CONTROL === "wait-invalid" || process.env.TASK_V2_TEST_DENIED === "true") {
           for (let attempt = 0; attempt < 240; attempt++) {
             if (yield* SessionInput.isSettled(db, parent.id, admitted.id))
               return {
@@ -99,6 +101,12 @@ const outcome = await AppRuntime.runPromise(
                 rows: [],
                 legacyMessages: (yield* db.select({ id: MessageTable.id }).from(MessageTable).where(eq(MessageTable.session_id, parent.id)).all()).length,
                 messages: yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, parent.id)).all(),
+                routeCount: process.env.TASK_V2_TEST_DENIED === "true"
+                  ? (yield* db.select().from(SessionPeerRouteTable).all()).length
+                  : undefined,
+                sessionCount: process.env.TASK_V2_TEST_DENIED === "true"
+                  ? (yield* db.select().from(SessionTable).all()).length
+                  : undefined,
                 activity: process.env.TASK_V2_TEST_ACTIVITY === "true" && http
                   ? yield* Effect.promise(async () => {
                       const response = await http.handler(
