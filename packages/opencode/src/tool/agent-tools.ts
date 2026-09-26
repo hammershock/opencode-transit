@@ -337,16 +337,12 @@ export const AgentInspectTool = Tool.define(
                 }),
               ]
               const unique = [...new Map(tools.map((tool) => [tool.id, tool])).values()]
+              const owned =
+                active.has(route.target_session_id) || !!SessionLegacyOwner.generation(route.target_session_id)
+              const unresolved = unique.some((tool) => tool.status === "pending" || tool.status === "running")
               return {
                 alias: route.alias,
-                state:
-                  active.has(route.target_session_id) || SessionLegacyOwner.generation(route.target_session_id)
-                    ? "running"
-                    : paused
-                      ? "interrupted"
-                      : execution
-                        ? "idle"
-                        : "unknown",
+                state: owned ? "running" : paused ? "interrupted" : !execution || unresolved ? "unknown" : "idle",
                 recent_execution:
                   interruption?.state === "interrupted"
                     ? { status: "interrupted", actor: interruption.actor_kind, at: interruption.time_settled }
@@ -356,8 +352,13 @@ export const AgentInspectTool = Tool.define(
                 last_message_at: messages[0]?.time_created ?? null,
                 last_message_kind: messages[0]?.kind ?? null,
                 last_activity_at: Math.max(session?.updated ?? 0, messages[0]?.time_created ?? 0),
-                phase: unique.some((tool) => tool.status === "running") ? "tool" : "model_or_idle",
-                active_tools: unique
+                phase:
+                  !owned && unresolved
+                    ? "unknown"
+                    : owned && unique.some((tool) => tool.status === "running")
+                      ? "tool"
+                      : "model_or_idle",
+                active_tools: (owned ? unique : [])
                   .filter((tool) => tool.status === "running")
                   .slice(0, 3)
                   .map((tool) => ({
