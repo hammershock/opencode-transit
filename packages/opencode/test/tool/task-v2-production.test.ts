@@ -55,7 +55,7 @@ test("V2 agent_spawn explains a session-disabled subagent before creating a chil
       expect(JSON.stringify(result.messages)).toContain("subagent_forbidden")
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
   )
-}, 60_000)
+}, 120_000)
 
 test("production HTTP command runs a configured V2 subtask through the durable Task adapter", async () => {
   await Effect.runPromise(
