@@ -364,7 +364,11 @@ test("a running child follows output, accepts direct input and double Escape int
       },
     })
     const steerDeadline = Date.now() + 5_000
-    while (!setup.captureCharFrame().includes("New steer request") && Date.now() < steerDeadline) {
+    while (
+      (!setup.captureCharFrame().includes("New steer request") ||
+        !setup.captureCharFrame().includes("Older assistant output")) &&
+      Date.now() < steerDeadline
+    ) {
       await setup.renderOnce()
       await Bun.sleep(10)
     }
