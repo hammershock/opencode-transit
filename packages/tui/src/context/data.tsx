@@ -351,7 +351,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.next.text.started":
           message.update(event.data.sessionID, (draft) => {
-            message.assistant(draft, event.data.assistantMessageID)?.content.push({
+            const assistant = message.assistant(draft, event.data.assistantMessageID)
+            // Replayed start events keep the same content ID and must not create another visible row.
+            if (!assistant || assistant.content.some((item) => item.id === event.data.textID)) return
+            assistant.content.push({
               type: "text",
               id: event.data.textID,
               text: "",
@@ -372,7 +375,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.next.tool.input.started":
           message.update(event.data.sessionID, (draft) => {
-            message.assistant(draft, event.data.assistantMessageID)?.content.push({
+            const assistant = message.assistant(draft, event.data.assistantMessageID)
+            if (!assistant || assistant.content.some((item) => item.id === event.data.callID)) return
+            assistant.content.push({
               type: "tool",
               id: event.data.callID,
               name: event.data.name,
@@ -451,7 +456,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.next.reasoning.started":
           message.update(event.data.sessionID, (draft) => {
-            message.assistant(draft, event.data.assistantMessageID)?.content.push({
+            const assistant = message.assistant(draft, event.data.assistantMessageID)
+            if (!assistant || assistant.content.some((item) => item.id === event.data.reasoningID)) return
+            assistant.content.push({
               type: "reasoning",
               id: event.data.reasoningID,
               text: "",
