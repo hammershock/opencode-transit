@@ -91,6 +91,16 @@ describe("SessionRunnerModel compatibility", () => {
     expect(bridged?.variants[0]).toMatchObject({ id: "quick", body: { temperature: 0.2 } })
     expect(bridged?.limit).toEqual({ context: 128000, output: 8192 })
     expect(OpenCodeSessionRunnerModel.legacyModel(model, provider)?.request.body).toEqual({ apiKey: "provider-secret" })
+    expect(
+      OpenCodeSessionRunnerModel.legacyModel(model, {
+        ...provider,
+        key: undefined,
+        options: { apiKey: "configured-secret", baseURL: "http://127.0.0.1:1234" },
+      }),
+    ).toMatchObject({
+      api: { url: "http://127.0.0.1:1234" },
+      request: { body: { apiKey: "configured-secret" } },
+    })
     expect(OpenCodeSessionRunnerModel.legacyModel(model, { ...provider, key: undefined })).toBeUndefined()
     expect(OpenCodeSessionRunnerModel.legacyModel({ ...model, api: { ...model.api, npm: "@ai-sdk/google" } }, provider, credential)).toBeUndefined()
   })
