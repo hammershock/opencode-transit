@@ -1025,6 +1025,7 @@ export type SessionsModelContextOutput = {
     readonly label: string
     readonly tag: string
     readonly text: string
+    readonly source?: string
   }> | null
   readonly agentSystem: string | null
   readonly environment: string | null

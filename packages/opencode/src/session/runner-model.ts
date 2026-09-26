@@ -25,10 +25,14 @@ const layer = Layer.effect(
     const projects = yield* Project.Service
 
     return SessionRunnerModel.Service.of({
-      system: (model) => ({
-        prompt: SystemPrompt.provider({ api: { id: model.id }, providerID: model.provider }).join("\n"),
-        identity: `You are powered by the model named ${model.id}. The exact model ID is ${model.provider}/${model.id}`,
-      }),
+      system: (model) => {
+        const selected = SystemPrompt.providerSelection({ api: { id: model.id }, providerID: model.provider })
+        return {
+          prompt: selected.prompt,
+          source: selected.source,
+          identity: `You are powered by the model named ${model.id}. The exact model ID is ${model.provider}/${model.id}`,
+        }
+      },
       resolve: Effect.fn("OpenCode.SessionRunnerModel.resolve")(function* (session) {
         const available = yield* catalog.model.available()
         const defaultModel = session.model ? undefined : yield* catalog.model.default()

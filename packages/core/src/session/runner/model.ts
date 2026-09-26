@@ -74,7 +74,9 @@ export type Error =
 
 export interface Interface {
   readonly resolve: (session: SessionSchema.Info) => Effect.Effect<Model, Error>
-  readonly system: (model: Model) => { readonly prompt: string; readonly identity: string } | undefined
+  readonly system: (
+    model: Model,
+  ) => { readonly prompt: string; readonly identity: string; readonly source?: string } | undefined
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/SessionRunnerModel") {}
@@ -87,7 +89,15 @@ export function systemParts(agentSystem: string | undefined, base: ReturnType<In
   const prompt = agentSystem ?? base?.prompt
   return [
     ...(prompt !== undefined
-      ? [{ key: "agent", label: "Agent system prompt", tag: "<agent-system-prompt>", text: prompt }]
+      ? [
+          {
+            key: "agent",
+            label: "Agent system prompt",
+            tag: "<agent-system-prompt>",
+            text: prompt,
+            ...(agentSystem === undefined && base?.source ? { source: base.source } : {}),
+          },
+        ]
       : []),
     ...(base?.identity ? [{ key: "model", label: "Model identity", tag: "<model>", text: base.identity }] : []),
   ] satisfies ModelContext.SystemPart[]
