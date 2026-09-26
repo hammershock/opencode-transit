@@ -18,6 +18,7 @@ import { Workspace } from "../../src/control-plane/workspace"
 
 import { InstanceBootstrap as InstanceBootstrapService } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
+import { InstanceRef } from "../../src/effect/instance-ref"
 import { Project } from "../../src/project/project"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import * as HttpSessionError from "../../src/server/routes/instance/httpapi/handlers/session-errors"
@@ -32,6 +33,8 @@ import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
 import { SessionMessage } from "@opencode-ai/core/session/message"
+import { LocationServiceMap } from "@opencode-ai/core/location-service-map"
+import { sessionLocationMap } from "../../src/effect/session-location-map"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import * as DateTime from "effect/DateTime"
@@ -68,6 +71,15 @@ const httpApiLayer = servedRoutes.pipe(
 )
 const it = testEffect(Layer.mergeAll(appLayer, httpApiLayer))
 const sharedIt = testEffectShared(Layer.mergeAll(appLayer, httpApiLayer))
+const modelAppLayer = AppNodeBuilder.build(
+  LayerNode.group([InstanceStore.node, Project.node, Session.node, Workspace.node, Database.node, Ripgrep.node]),
+  [
+    [InstanceStore.bootstrapNode, noopBootstrapLayer],
+    [SessionExecution.node, SessionExecutionLocal.node],
+    [LocationServiceMap.node, sessionLocationMap],
+  ],
+)
+const modelIt = testEffectShared(Layer.mergeAll(modelAppLayer, httpApiLayer))
 
 function pathFor(path: string, params: Record<string, string>) {
   return Object.entries(params).reduce((result, [key, value]) => result.replace(`:${key}`, value), path)
@@ -943,6 +955,39 @@ describe("session HttpApi", () => {
         cwd: sessionDirectory,
         root: sessionDirectory,
       })
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+  )
+
+  modelIt.live("resolves a legacy-configured V2 model without a request instance", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      yield* llm.text("V2 resumed", { usage: { input: 1, output: 1 } })
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: { providerID: "test", id: "test-model" }, location: { directory } }),
+      })
+      expect(yield* InstanceRef).toBeUndefined()
+      const admitted = yield* request(`/api/session/${created.data.id}/prompt`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: { text: "respond briefly" } }),
+      })
+      expect(admitted.status).toBe(200)
+      yield* pollWithTimeout(
+        llm.calls.pipe(Effect.map((count) => (count > 0 ? count : undefined))),
+        "V2 legacy model did not reach provider",
+        "10 seconds",
+      )
+      const assistant = yield* pollWithTimeout(
+        requestJson<{ data: SessionMessage.Message[] }>(`/api/session/${created.data.id}/message`).pipe(
+          Effect.map(({ data }) => data.find((message) => message.type === "assistant")),
+        ),
+        "V2 model did not answer without a request instance",
+        "10 seconds",
+      )
+      expect(assistant).toBeDefined()
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
   )
 
