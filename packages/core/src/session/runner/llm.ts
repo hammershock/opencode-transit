@@ -43,7 +43,7 @@ import { SessionPeerRoute } from "../peer-route"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
-import { SessionInputTable, SessionPeerMessageTable, SessionPeerReceiptTable, SessionTaskResultTable } from "../sql"
+import { SessionInputTable, SessionPeerMessageTable, SessionPeerReceiptTable, SessionTaskResultTable, SessionTaskTable } from "../sql"
 import { and, desc, eq, inArray, isNotNull, ne } from "drizzle-orm"
 
 /**
@@ -375,9 +375,20 @@ const layer = Layer.effect(
             const interruption = yield* SessionInterruption.latest(session.id).pipe(
               Effect.provideService(Database.Service, database),
             )
+            const tasks = yield* db
+              .select({ parent_session_id: SessionTaskTable.parent_session_id })
+              .from(SessionTaskTable)
+              .where(eq(SessionTaskTable.child_session_id, session.id))
+              .all()
+              .pipe(Effect.orDie)
             return SessionAgentGuidance.render(
               routes.filter((route) => route.can_interact).map((route) => route.alias),
               interruption?.state === "interrupted" ? { actor: interruption.actor_kind } : undefined,
+              routes
+                .filter((route) =>
+                  route.can_interact && tasks.some((task) => task.parent_session_id === route.target_session_id),
+                )
+                .map((route) => route.alias),
             )
           })
         : undefined

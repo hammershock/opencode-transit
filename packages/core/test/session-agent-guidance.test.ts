@@ -20,8 +20,15 @@ test("Agent guidance turns ordinary progress questions into Interact and continu
 })
 
 test("Agent guidance includes authenticated interruption without treating a summary as continuation", () => {
-  const guidance = SessionAgentGuidance.render(["/contacts/requester_123"], { actor: "agent" })
+  const guidance = SessionAgentGuidance.render(
+    ["/contacts/requester_123"],
+    { actor: "agent" },
+    ["/contacts/requester_123"],
+  )
   expect(guidance).toContain("the previous execution was interrupted by agent")
   expect(guidance).toContain("A summary request is not permission to resume it")
+  expect(guidance).toContain("Authenticated delegation: /contacts/requester_123 assigned this task")
+  expect(guidance).toContain("Do not demand a direct user message in this Session")
   expect(SessionAgentGuidance.render([])).not.toContain("Authenticated Session state")
+  expect(SessionAgentGuidance.render([])).not.toContain("Authenticated delegation")
 })
