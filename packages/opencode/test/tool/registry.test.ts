@@ -2,7 +2,7 @@ import { afterEach, describe, expect } from "bun:test"
 import path from "path"
 import fs from "fs/promises"
 import { fileURLToPath, pathToFileURL } from "url"
-import { Effect, Fiber, Layer, Option, Result, Schema } from "effect"
+import { DateTime, Effect, Fiber, Layer, Option, Result, Schema } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
 import { ToolRegistry } from "@/tool/registry"
@@ -25,8 +25,11 @@ import { SessionPeerMessage } from "@opencode-ai/core/session/peer-message"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionTask } from "@opencode-ai/core/session/task"
 import {
+  MessageTable,
+  PartTable,
   SessionExecutionPauseTable,
   SessionInterruptionTable,
+  SessionMessageTable,
   SessionPeerMessageTable,
 } from "@opencode-ai/core/session/sql"
 import { Tool } from "@/tool/tool"
@@ -309,6 +312,163 @@ describe("tool.registry", () => {
       expect(JSON.parse(observed.output).agents[0]).toMatchObject({
         state: "interrupted",
         recent_execution: { status: "interrupted", actor: "user" },
+      })
+    }),
+  )
+
+  withTaskBackend.instance("agent_inspect treats unowned V1 and V2 tool calls as unknown", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const source = SessionSchema.ID.create()
+      const v1 = SessionSchema.ID.create()
+      const v2 = SessionSchema.ID.create()
+      const now = Date.now()
+      const info = {
+        id: source,
+        slug: "inspect-source",
+        projectID: Project.ID.global,
+        directory: process.cwd(),
+        title: "inspect source",
+        version: "test",
+        time: { created: now, updated: now },
+      }
+      yield* events.publish(SessionV1.Event.Created, { sessionID: source, info })
+      yield* events.publish(SessionV1.Event.Created, {
+        sessionID: v1,
+        info: { ...info, id: v1, slug: "inspect-v1" },
+      })
+      yield* events.publish(SessionV1.Event.Created, {
+        sessionID: v2,
+        info: { ...info, id: v2, slug: "inspect-v2" },
+      })
+      yield* SessionPeerRoute.bind({
+        sourceSessionID: source,
+        targetSessionID: v1,
+        alias: "/root/v1",
+        origin: { kind: "spawn", id: "inspect-v1" },
+      })
+      yield* SessionPeerRoute.bind({
+        sourceSessionID: source,
+        targetSessionID: v2,
+        alias: "/root/v2",
+        origin: { kind: "spawn", id: "inspect-v2" },
+      })
+      const v1Message = MessageID.make("msg_inspect_v1")
+      yield* database.db
+        .insert(MessageTable)
+        .values({
+          id: v1Message,
+          session_id: v1,
+          time_created: now,
+          data: { role: "assistant" } as typeof MessageTable.$inferInsert.data,
+        })
+        .run()
+      yield* database.db
+        .insert(PartTable)
+        .values({
+          id: "prt_inspect_v1" as typeof PartTable.$inferInsert.id,
+          message_id: v1Message,
+          session_id: v1,
+          time_created: now,
+          data: { type: "tool", tool: "bash", state: { status: "running" } } as typeof PartTable.$inferInsert.data,
+        })
+        .run()
+      const v2Message = SessionMessage.ID.create()
+      const assistant = Schema.encodeSync(SessionMessage.Message)(
+        SessionMessage.Assistant.make({
+          id: v2Message,
+          type: "assistant",
+          agent: "build",
+          model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+          content: [
+            SessionMessage.AssistantTool.make({
+              type: "tool",
+              id: "call-inspect-v2",
+              name: "bash",
+              state: SessionMessage.ToolStateRunning.make({
+                status: "running",
+                input: {},
+                structured: {},
+                content: [],
+              }),
+              time: { created: DateTime.makeUnsafe(now), ran: DateTime.makeUnsafe(now) },
+            }),
+          ],
+          time: { created: DateTime.makeUnsafe(now) },
+        }),
+      )
+      const { id: _, type, ...data } = assistant
+      yield* database.db
+        .insert(SessionMessageTable)
+        .values({
+          id: v2Message,
+          session_id: v2,
+          type,
+          seq: 1,
+          time_created: now,
+          data,
+        })
+        .run()
+      const inspect = (yield* registry.all()).find((tool) => tool.id === "agent_inspect")!
+      const context: Tool.Context = {
+        sessionID: SessionID.make(source),
+        messageID: MessageID.make("msg_inspect_source"),
+        callID: "call_inspect",
+        agent: "build",
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+      for (const alias of ["/root/v1", "/root/v2"]) {
+        const output = yield* inspect.execute({ alias }, context).pipe(Effect.provide(SessionExecution.noopLayer))
+        expect(JSON.parse(output.output).agents[0]).toMatchObject({
+          state: "unknown",
+          phase: "unknown",
+          active_tools: [],
+          tool_calls: { pending: 1 },
+        })
+      }
+      expect(JSON.parse((yield* inspect.execute({ alias: "/root/v1" }, context)).output).agents[0]).toMatchObject({
+        state: "unknown",
+        phase: "unknown",
+        active_tools: [],
+      })
+      yield* database.db
+        .update(PartTable)
+        .set({
+          data: { type: "tool", tool: "bash", state: { status: "completed" } } as typeof PartTable.$inferInsert.data,
+        })
+        .where(eq(PartTable.message_id, v1Message))
+        .run()
+      expect(
+        JSON.parse(
+          (yield* inspect.execute({ alias: "/root/v1" }, context).pipe(Effect.provide(SessionExecution.noopLayer)))
+            .output,
+        ).agents[0],
+      ).toMatchObject({
+        state: "idle",
+        active_tools: [],
+        tool_calls: { pending: 0, completed: 1 },
+      })
+      yield* database.db
+        .insert(SessionExecutionPauseTable)
+        .values({
+          session_id: v2,
+          operation_id: "inspect-paused-v2",
+          time_created: now,
+        })
+        .run()
+      expect(
+        JSON.parse(
+          (yield* inspect.execute({ alias: "/root/v2" }, context).pipe(Effect.provide(SessionExecution.noopLayer)))
+            .output,
+        ).agents[0],
+      ).toMatchObject({
+        state: "interrupted",
+        active_tools: [],
       })
     }),
   )
