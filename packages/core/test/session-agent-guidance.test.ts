@@ -16,6 +16,7 @@ test("Agent guidance turns ordinary progress questions into Interact and continu
   expect(guidance).toContain("admitted, delivered and replied")
   expect(guidance).toContain("A later request to summarize or ask what happened calls for a factual reply only")
   expect(guidance).toContain("Resume that work only when a new user or authorized contact request explicitly asks to continue")
+  expect(guidance).toContain("An authorized contact may explicitly resume or adjust the remaining work it delegated")
 })
 
 test("Agent guidance includes authenticated interruption without treating a summary as continuation", () => {
