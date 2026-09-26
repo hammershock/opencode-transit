@@ -15,6 +15,7 @@ import {
   SessionInterruptionTable,
   SessionMessageTable,
   SessionTaskResultTable,
+  SessionTaskTable,
   SessionTaskWakeRevocationTable,
 } from "@opencode-ai/core/session/sql"
 import { SessionTask } from "@opencode-ai/core/session/task"
@@ -243,6 +244,79 @@ describe("background Task parent result", () => {
       expect(results.map((row) => row.invocation_input_id).sort()).toEqual([inputID, second].sort())
       expect(new Set(results.map((row) => row.notification_input_id)).size).toBe(2)
       expect(results.map((row) => row.outcome).sort()).toEqual(["completed", "failed"])
+    }),
+  )
+
+  eventIt.effect("reports a failed child's safe provider reason without reusing an older error", () =>
+    Effect.gen(function* () {
+      const { database, events, root, child, inputID } = yield* setup()
+      const task = yield* database.db.select().from(SessionTaskTable).where(eq(SessionTaskTable.input_id, inputID)).get()
+      expect(task).toBeDefined()
+      for (const [seq, time, error] of [
+        [100, task!.time_created - 1_000, 'Provider request failed with HTTP 401: {"code":"Old.Error","secret":"do-not-share"}'],
+        [101, Date.now(), 'Provider request failed with HTTP 403: {"code":"AccessDenied.Unpurchased","secret":"do-not-share"}'],
+      ] as const) {
+        const id = SessionMessage.ID.create()
+        const encoded = Schema.encodeSync(SessionMessage.Message)(
+          SessionMessage.Assistant.make({
+            id,
+            type: "assistant",
+            agent: "build",
+            model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+            content: [],
+            finish: "error",
+            error: { type: "unknown", message: error },
+            time: { created: DateTime.makeUnsafe(time) },
+          }),
+        )
+        const { id: _, type, ...data } = encoded
+        yield* database.db
+          .insert(SessionMessageTable)
+          .values({ id, session_id: child, type, seq, time_created: time, data })
+          .run()
+      }
+      yield* SessionTask.settle(database.db, events, { inputID, childSessionID: child, outcome: "failed" })
+      yield* SessionTaskResult.reconcile(database, events, root)
+      const result = yield* database.db.select().from(SessionTaskResultTable).where(eq(SessionTaskResultTable.invocation_input_id, inputID)).get()
+      expect(result?.summary).toBe("Child agent failed: HTTP 403 (AccessDenied.Unpurchased). See child session for details.")
+      const notification = yield* database.db
+        .select()
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.id, SessionMessage.ID.make(result!.notification_input_id)))
+        .get()
+      expect(JSON.stringify(notification?.prompt)).toContain("HTTP 403 (AccessDenied.Unpurchased)")
+      expect(JSON.stringify(notification?.prompt)).not.toContain("do-not-share")
+      expect(JSON.stringify(notification?.prompt)).not.toContain("Old.Error")
+    }),
+  )
+
+  eventIt.effect("uses a generic failure when only an earlier child error exists", () =>
+    Effect.gen(function* () {
+      const { database, events, root, child, inputID } = yield* setup()
+      const task = yield* database.db.select().from(SessionTaskTable).where(eq(SessionTaskTable.input_id, inputID)).get()
+      const id = SessionMessage.ID.create()
+      const time = task!.time_created - 1_000
+      const encoded = Schema.encodeSync(SessionMessage.Message)(
+        SessionMessage.Assistant.make({
+          id,
+          type: "assistant",
+          agent: "build",
+          model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+          content: [],
+          finish: "error",
+          error: { type: "unknown", message: 'Provider request failed with HTTP 401: {"code":"Old.Error"}' },
+          time: { created: DateTime.makeUnsafe(time) },
+        }),
+      )
+      const { id: _, type, ...data } = encoded
+      yield* database.db
+        .insert(SessionMessageTable)
+        .values({ id, session_id: child, type, seq: 100, time_created: time, data })
+        .run()
+      yield* SessionTask.settle(database.db, events, { inputID, childSessionID: child, outcome: "failed" })
+      yield* SessionTaskResult.reconcile(database, events, root)
+      const result = yield* database.db.select().from(SessionTaskResultTable).where(eq(SessionTaskResultTable.invocation_input_id, inputID)).get()
+      expect(result?.summary).toBe("Child agent failed. See child session for details.")
     }),
   )
 

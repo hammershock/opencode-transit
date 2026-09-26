@@ -1,7 +1,7 @@
 export * as SessionTaskResult from "./task-result"
 
 import { createHash } from "node:crypto"
-import { and, eq, inArray, isNull } from "drizzle-orm"
+import { and, desc, eq, gt, gte, inArray, isNull, lte } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
 import type { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -282,7 +282,45 @@ export const record = Effect.fn("SessionTaskResult.record")(function* (
     ? Schema.decodeUnknownOption(SessionMessage.Message)({ ...result.data, id: result.id, type: result.type })
         .valueOrUndefined
     : undefined
-  const summary = summaryOf(message)
+  const inputMessage =
+    outcome === "failed" && !task.result_message_id
+      ? yield* db
+          .select({ seq: SessionMessageTable.seq })
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.id, SessionMessage.ID.make(task.input_id)))
+          .get()
+          .pipe(Effect.orDie)
+      : undefined
+  const failure =
+    outcome === "failed" && !task.result_message_id
+      ? yield* db
+          .select()
+          .from(SessionMessageTable)
+          .where(
+            and(
+              eq(SessionMessageTable.session_id, SessionSchema.ID.make(task.child_session_id)),
+              eq(SessionMessageTable.type, "assistant"),
+              gte(SessionMessageTable.time_created, task.time_created),
+              lte(SessionMessageTable.time_created, task.time_settled ?? task.time_created),
+              ...(inputMessage ? [gt(SessionMessageTable.seq, inputMessage.seq)] : []),
+            ),
+          )
+          .orderBy(desc(SessionMessageTable.seq))
+          .limit(1)
+          .get()
+          .pipe(Effect.orDie)
+      : undefined
+  const failedMessage = failure
+    ? Schema.decodeUnknownOption(SessionMessage.Assistant)({ ...failure.data, id: failure.id, type: failure.type })
+        .valueOrUndefined
+    : undefined
+  const error = failedMessage?.finish === "error" ? failedMessage.error?.message : undefined
+  const status = error?.match(/\bHTTP\s+([1-5]\d{2})\b/)?.[1]
+  const code = error?.match(/"code"\s*:\s*"([A-Za-z][A-Za-z0-9_.-]{0,79})"/)?.[1]
+  const summary =
+    outcome === "failed" && !summaryOf(message)
+      ? `Child agent failed${status ? `: HTTP ${status}` : ""}${code ? ` (${code})` : ""}. See child session for details.`
+      : summaryOf(message)
   const terminal = task.terminal_event_id
   const notificationInputID = SessionMessage.ID.make(identity("msg_", task.parent_session_id, task.input_id, terminal))
   yield* SessionAgentWaitOwner.withReceiver(task.parent_session_id)(
