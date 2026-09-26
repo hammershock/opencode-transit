@@ -4,6 +4,9 @@ import { SessionAgentGuidance } from "@opencode-ai/core/session/agent-guidance"
 test("Agent guidance turns ordinary progress questions into Interact and continued work", () => {
   const guidance = SessionAgentGuidance.render(["/root/review", "/root/check"])
   expect(guidance).toContain("/root/review, /root/check")
+  expect(guidance).toContain("subagent_type to an exact ID shown in the available subagent catalog")
+  expect(guidance).toContain("use general only if that ID is listed")
+  expect(guidance).toContain("Do not guess or rewrite IDs such as general-purpose")
   expect(guidance).toContain("How is that task going?")
   expect(guidance).toContain("directly call agent_interact")
   expect(guidance).toContain("then continue its original task if it is still active")
