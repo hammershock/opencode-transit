@@ -18,6 +18,7 @@ implemented-by:
   - https://github.com/hammershock/opencode-transit/pull/676
   - https://github.com/hammershock/opencode-transit/pull/678
   - https://github.com/hammershock/opencode-transit/pull/680
+  - https://github.com/hammershock/opencode-transit/pull/682
 depends-on:
   - 0010
   - 0011
