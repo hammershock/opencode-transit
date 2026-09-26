@@ -7,11 +7,12 @@ import { Global } from "@opencode-ai/core/global"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { createEventSource, createFetch, directory, json } from "../../fixture/tui-sdk"
 
-test("opening a running Task follows new child output past the initial message window", async () => {
+test("opening a running Task follows new child output and double Escape interrupts only the child", async () => {
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   const events = createEventSource()
+  const interruptions: string[] = []
   const session = (id: string) => ({
     id,
     title: id === "parent" ? "Parent task" : "Child task",
@@ -127,6 +128,10 @@ test("opening a running Task follows new child output past the initial message w
       return json(session(url.pathname.split("/")[2]!))
     if (url.pathname === "/session/parent/message") return json(parentMessages)
     if (url.pathname === "/session/child/message") return json(childMessages)
+    if (url.pathname === "/session/child/abort" || url.pathname === "/api/session/child/interrupt") {
+      interruptions.push(url.pathname)
+      return json(true)
+    }
     if (/^\/session\/(parent|child)\/(todo|diff)$/.test(url.pathname)) return json([])
     if (url.pathname === "/api/session/parent" || url.pathname === "/api/session/child") {
       const id = url.pathname.split("/")[3]!
@@ -198,6 +203,22 @@ test("opening a running Task follows new child output past the initial message w
     expect(setup.captureCharFrame()).toContain("esc interrupt")
     expect(setup.captureCharFrame()).toContain("Latest call")
     expect(setup.captureCharFrame()).toContain("no running tool observed")
+
+    setup.mockInput.pressEscape()
+    expect(interruptions).toEqual([])
+    const confirmDeadline = Date.now() + 5_000
+    while (!setup.captureCharFrame().includes("again to interrupt") && Date.now() < confirmDeadline) {
+      await setup.renderOnce()
+      await Bun.sleep(10)
+    }
+    expect(setup.captureCharFrame()).toContain("again to interrupt")
+    setup.mockInput.pressEscape()
+    const interruptDeadline = Date.now() + 5_000
+    while (interruptions.length === 0 && Date.now() < interruptDeadline) {
+      await setup.renderOnce()
+      await Bun.sleep(10)
+    }
+    expect(interruptions).toEqual(["/session/child/abort"])
 
     events.emit({
       directory,
