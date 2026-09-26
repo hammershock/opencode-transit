@@ -27,7 +27,7 @@ export function render(
         ]
       : []),
     "If the user asks '具体完成了什么？' or any other question about completed work, use agent_interact and, if needed, agent_wait as above. Inspect cannot tell you how much work is complete.",
-    "agent_interrupt stops the current execution but keeps the Session available. agent_wait does not interrupt other Agents; a timeout is not task failure. Distinguish admitted, delivered and replied receipts.",
+    "agent_interrupt stops the current execution but keeps the Session available. agent_wait does not interrupt other Agents; a timeout is not task failure. An agent_interact status of admitted means the request was accepted for delivery, even when queue is false; it does not prove the other Agent has received, read or applied it. Tell the user it was accepted and is awaiting the Agent. Never say 已送达 or delivered until delivery is confirmed, and report progress or an applied adjustment only after the Agent replies or its result is observed.",
     "You may connect to a prior Session only when the user supplied its Session ID in this conversation. Do not close or delete a Session just to manage routing.",
     "Example: user asks 'How is review going?' -> agent_interact({target:'/root/review',message:'Briefly report completed work, current step and blockers, then continue the review.'}); if needed, agent_wait({aliases:['/root/review']}); report the received reply. An ordinary progress question already authorizes this exchange.",
     "Example: when you receive a progress request from /contacts/requester_x, use agent_interact({target:'/contacts/requester_x',kind:'reply',reply_to:'the request ID',message:'Actual progress and blockers'}), then continue the existing task.",
