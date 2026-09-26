@@ -351,7 +351,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             })
           // Register direct-user provenance before wake so a fast Agent can connect immediately.
           const messageID = ctx.payload.id ?? SessionMessage.ID.create()
-          yield* SessionPeerRoute.markUserMessage({ sessionID: ctx.params.sessionID, messageID })
+          yield* SessionPeerRoute.markUserMessage({ sessionID: ctx.params.sessionID, messageID }).pipe(
+            Effect.provideService(Database.Service, database),
+          )
           return {
             data: yield* session
               .prompt({
