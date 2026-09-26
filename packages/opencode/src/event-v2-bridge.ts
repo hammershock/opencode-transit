@@ -11,6 +11,8 @@ import { SessionSync } from "@opencode-ai/core/sync/session"
 import { SessionPolicy } from "@opencode-ai/schema/session-policy"
 import { Context, Effect, Layer, Option } from "effect"
 
+const forwarders = new WeakMap<EventV2.Interface, { refs: number; unsubscribe: Effect.Effect<void> }>()
+
 export class Service extends Context.Service<Service, EventV2.Interface>()("@opencode/EventV2Bridge") {}
 
 const layer = Layer.effect(
@@ -48,42 +50,56 @@ const layer = Layer.effect(
         })
       })
 
-    const unsubscribe = yield* events.listen((event) =>
-      Effect.gen(function* () {
-        // The policy event is syncable evidence, not a public UI event contract.
-        if (event.type === SessionPolicy.Reviewed.type) return
-        const ctx = yield* InstanceRef
-        const workspaceID = (yield* WorkspaceRef) ?? event.location?.workspaceID
-        GlobalBus.emit("event", {
-          directory: event.location?.directory ?? ctx?.directory,
-          project: ctx?.project.id,
-          workspace: workspaceID,
-          payload: {
-            id: event.id,
-            type: event.type,
-            properties: event.data,
-            ...(event.durable ? { durable: event.durable } : {}),
-          },
-        })
-        if (event.durable === undefined) return
-        GlobalBus.emit("event", {
-          directory: event.location?.directory ?? ctx?.directory,
-          project: ctx?.project.id,
-          workspace: workspaceID,
-          payload: {
-            type: "sync",
-            syncEvent: {
+    const existing = forwarders.get(events)
+    if (existing) existing.refs++
+    if (!existing) {
+      const unsubscribe = yield* events.listen((event) =>
+        Effect.gen(function* () {
+          // The policy event is syncable evidence, not a public UI event contract.
+          if (event.type === SessionPolicy.Reviewed.type) return
+          const ctx = yield* InstanceRef
+          const workspaceID = (yield* WorkspaceRef) ?? event.location?.workspaceID
+          GlobalBus.emit("event", {
+            directory: event.location?.directory ?? ctx?.directory,
+            project: ctx?.project.id,
+            workspace: workspaceID,
+            payload: {
               id: event.id,
-              type: EventV2.versionedType(event.type, event.durable.version),
-              seq: event.durable.seq,
-              aggregateID: event.durable.aggregateID,
-              data: event.data,
+              type: event.type,
+              properties: event.data,
+              ...(event.durable ? { durable: event.durable } : {}),
             },
-          },
-        })
+          })
+          if (event.durable === undefined) return
+          GlobalBus.emit("event", {
+            directory: event.location?.directory ?? ctx?.directory,
+            project: ctx?.project.id,
+            workspace: workspaceID,
+            payload: {
+              type: "sync",
+              syncEvent: {
+                id: event.id,
+                type: EventV2.versionedType(event.type, event.durable.version),
+                seq: event.durable.seq,
+                aggregateID: event.durable.aggregateID,
+                data: event.data,
+              },
+            },
+          })
+        }),
+      )
+      forwarders.set(events, { refs: 1, unsubscribe })
+    }
+    yield* Effect.addFinalizer(() =>
+      Effect.gen(function* () {
+        const active = forwarders.get(events)
+        if (!active) return
+        active.refs--
+        if (active.refs > 0) return
+        forwarders.delete(events)
+        yield* active.unsubscribe
       }),
     )
-    yield* Effect.addFinalizer(() => unsubscribe)
 
     return Service.of({ ...events, publish })
   }),
