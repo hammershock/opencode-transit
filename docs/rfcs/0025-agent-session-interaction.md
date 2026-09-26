@@ -4,7 +4,17 @@ title: Peer Session Interaction and Readable Agent Routes
 status: accepted
 created: 2026-09-26
 updated: 2026-09-26
-implemented-by: []
+implemented-by:
+  - https://github.com/hammershock/opencode-transit/pull/658
+  - https://github.com/hammershock/opencode-transit/pull/659
+  - https://github.com/hammershock/opencode-transit/pull/660
+  - https://github.com/hammershock/opencode-transit/pull/661
+  - https://github.com/hammershock/opencode-transit/pull/662
+  - https://github.com/hammershock/opencode-transit/pull/663
+  - https://github.com/hammershock/opencode-transit/pull/665
+  - https://github.com/hammershock/opencode-transit/pull/668
+  - https://github.com/hammershock/opencode-transit/pull/671
+  - https://github.com/hammershock/opencode-transit/pull/674
 depends-on:
   - 0010
   - 0011
