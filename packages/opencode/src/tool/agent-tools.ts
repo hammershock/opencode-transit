@@ -353,7 +353,7 @@ export const AgentInspectTool = Tool.define(
                 last_message_kind: messages[0]?.kind ?? null,
                 last_activity_at: Math.max(session?.updated ?? 0, messages[0]?.time_created ?? 0),
                 phase:
-                  !owned && unresolved
+                  !owned && (!execution || unresolved)
                     ? "unknown"
                     : owned && unique.some((tool) => tool.status === "running")
                       ? "tool"

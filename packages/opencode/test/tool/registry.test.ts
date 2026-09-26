@@ -431,6 +431,11 @@ describe("tool.registry", () => {
           tool_calls: { pending: 1 },
         })
       }
+      expect(JSON.parse((yield* inspect.execute({ alias: "/root/v1" }, context)).output).agents[0]).toMatchObject({
+        state: "unknown",
+        phase: "unknown",
+        active_tools: [],
+      })
       yield* database.db
         .update(PartTable)
         .set({
