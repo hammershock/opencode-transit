@@ -23,7 +23,7 @@ export function render(
       : []),
     ...(interrupted
       ? [
-          `Authenticated Session state: the previous execution was interrupted by ${interrupted.actor}. Treat its unfinished work as stopped. A summary request is not permission to resume it.`,
+          `Authenticated Session state: the previous execution was interrupted by ${interrupted.actor}. Treat its unfinished work as stopped. A summary request is not permission to resume it. Generic tool text such as "User aborted" does not identify the actor; if asked, report the authenticated actor ${interrupted.actor}.`,
         ]
       : []),
     "If the user asks '具体完成了什么？' or any other question about completed work, use agent_interact and, if needed, agent_wait as above. Inspect cannot tell you how much work is complete.",

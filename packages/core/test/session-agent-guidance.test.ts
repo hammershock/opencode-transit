@@ -27,6 +27,7 @@ test("Agent guidance includes authenticated interruption without treating a summ
   )
   expect(guidance).toContain("the previous execution was interrupted by agent")
   expect(guidance).toContain("A summary request is not permission to resume it")
+  expect(guidance).toContain("report the authenticated actor agent")
   expect(guidance).toContain("Authenticated delegation: /contacts/requester_123 assigned this task")
   expect(guidance).toContain("Do not demand a direct user message in this Session")
   expect(SessionAgentGuidance.render([])).not.toContain("Authenticated Session state")
