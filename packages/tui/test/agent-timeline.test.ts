@@ -79,3 +79,29 @@ test("shows authenticated interruption actor without assigning one to legacy rec
   expect(AgentTimeline.label("interrupted", "agent")).toBe("Interrupted by Agent")
   expect(AgentTimeline.label("interrupted", null)).toBe("Interrupted")
 })
+
+test("orders reused part IDs by message-scoped anchors across replay", () => {
+  const messages = [
+    { id: "first", role: "assistant", time: { created: 1 } },
+    { id: "second", role: "assistant", time: { created: 2 } },
+  ]
+  const parts = new Map([
+    ["first", [{ id: "text-0" }]],
+    ["second", [{ id: "text-0" }]],
+  ])
+  const anchors = new Map([
+    ["first", 1],
+    ["second", 5],
+    ["text-0", 2],
+    ["part:first:text-0", 2],
+    ["part:second:text-0", 6],
+  ])
+  const activities = [{ id: "between", seq: 4, waitCallID: null }]
+  const expected = ["part:first:text-0", "footer:first", "activity:between", "part:second:text-0", "footer:second"]
+  expect(AgentTimeline.order({ messages, anchors, parts, activities, readyAt: 10 })).toEqual(expected)
+  expect(AgentTimeline.order({ messages, anchors, parts, activities: activities.toReversed(), readyAt: 10 })).toEqual(
+    expected,
+  )
+  anchors.delete("part:second:text-0")
+  expect(AgentTimeline.order({ messages, anchors, parts, activities, readyAt: 10 })).toEqual(expected)
+})
