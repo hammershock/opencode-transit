@@ -200,6 +200,7 @@ export interface Interface {
     {
       runtimeParts: ReadonlyArray<RuntimeContext.Rendered>
       agentSystem: string | null
+      systemParts: ReadonlyArray<ModelContext.SystemPart>
       environment: string | null
       environmentInfo: ModelContext.Environment | null
       instructions: ModelContext.Instructions
@@ -936,6 +937,7 @@ const layer = Layer.effect(
             const agents = yield* AgentV2.Service
             const agent = yield* agents.select(session.agent)
             const runtime = yield* RuntimeContext.Service
+            const models = yield* SessionRunnerModel.Service
             const instructions = yield* InstructionContext.Service
             const location = yield* Location.Service
             const tools = yield* ToolRegistry.Service
@@ -946,9 +948,16 @@ const layer = Layer.effect(
               ...(session.parentID ? [[{ action: "slash_command", resource: "*", effect: "deny" as const }]] : []),
             ])
             const environment = buildEnvironment(location)
+            const model = yield* models.resolve(session).pipe(Effect.exit)
+            const baseSystem = SessionRunnerModel.systemParts(
+              agent.info?.system,
+              Exit.isSuccess(model) ? models.system(model.value) : undefined,
+            )
+            const runtimeParts = yield* runtime.assemble(sessionID, agent)
             return {
-              agentSystem: agent.info?.system ?? null,
-              runtimeParts: yield* runtime.assemble(sessionID, agent),
+              agentSystem: baseSystem.find((part) => part.key === "agent")?.text ?? null,
+              systemParts: [...baseSystem, ...runtimeParts],
+              runtimeParts,
               environment: renderEnvironment(environment),
               environmentInfo: environment,
               instructions: yield* instructions.list(sessionID),
@@ -1033,6 +1042,7 @@ const layer = Layer.effect(
         return {
           runtimeParts: Exit.isSuccess(contextAttempt) ? contextAttempt.value.runtimeParts : [],
           agentSystem: Exit.isSuccess(contextAttempt) ? contextAttempt.value.agentSystem : null,
+          systemParts: Exit.isSuccess(contextAttempt) ? contextAttempt.value.systemParts : [],
           environment: Exit.isSuccess(contextAttempt) ? contextAttempt.value.environment : null,
           environmentInfo: Exit.isSuccess(contextAttempt) ? contextAttempt.value.environmentInfo : null,
           instructions: Exit.isSuccess(contextAttempt) ? contextAttempt.value.instructions : [],
