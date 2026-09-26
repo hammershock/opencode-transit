@@ -164,7 +164,7 @@ export const AgentInteractTool = Tool.define(
     const events = yield* EventV2Bridge.Service
     return {
       description:
-        "For an ordinary progress question, ask the responsible Agent for completed work, current step and blockers, and tell it to continue its original task. Also sends replies and notices. Sending is not a reply receipt.",
+        "For an ordinary progress question, ask the responsible Agent for completed work, current step and blockers, and tell it to continue its original task. Also sends replies and notices. A status of admitted means accepted for delivery, not delivered or processed; wait for a reply before reporting the Agent's progress.",
       parameters: SessionAgentTool.Interact,
       execute: (
         input: {
