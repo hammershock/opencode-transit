@@ -206,6 +206,9 @@ describe("tool.registry", () => {
       expect(ids).not.toContain("task_status")
       expect(ids).not.toContain("task_send")
       expect(ids).not.toContain("task_wait")
+      expect((yield* registry.all()).find((tool) => tool.id === "agent_spawn")?.description).toContain(
+        "general is the built-in type for ordinary work when no catalog is shown",
+      )
       expect((yield* registry.all()).find((tool) => tool.id === "agent_interact")?.description).toContain(
         "A status of admitted means accepted for delivery, not delivered or processed",
       )
