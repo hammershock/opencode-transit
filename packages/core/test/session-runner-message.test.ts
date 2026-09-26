@@ -16,6 +16,49 @@ const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
 const model = Model.make({ id: "model", provider: "provider", route: OpenAIChat.route })
 
 describe("toLLMMessages", () => {
+  test("lowers inline editor context to text on every V2 history pass while retaining image media", () => {
+    const history = [
+      SessionMessage.User.make({
+        id: id("editor-context"),
+        type: "user",
+        text: "Review the selection",
+        files: [
+          FileAttachment.make({
+            uri: `data:text/plain;base64,${Buffer.from("Selected 中文 text").toString("base64")}`,
+            mime: "text/plain",
+            name: "editor-context.txt",
+          }),
+          FileAttachment.make({ uri: "data:image/png;base64,aGVsbG8=", mime: "image/png", name: "pixel.png" }),
+        ],
+        time: { created },
+      }),
+    ]
+
+    for (const messages of [toLLMMessages(history, model), toLLMMessages(history, model)]) {
+      expect(messages[0]?.content).toEqual([
+        { type: "text", text: "Review the selection" },
+        { type: "text", text: "Attached text file: editor-context.txt\nSelected 中文 text" },
+        { type: "media", mediaType: "image/png", data: "data:image/png;base64,aGVsbG8=", filename: "pixel.png" },
+      ])
+    }
+  })
+
+  test("does not silently discard text attachments that cannot be decoded inline", () => {
+    const messages = toLLMMessages(
+      [
+        SessionMessage.User.make({
+          id: id("invalid-text"),
+          type: "user",
+          text: "Read attachment",
+          files: [FileAttachment.make({ uri: "data:text/plain;base64,%%%%", mime: "text/plain" })],
+          time: { created },
+        }),
+      ],
+      model,
+    )
+    expect(messages[0]?.content[1]).toMatchObject({ type: "media", mediaType: "text/plain" })
+  })
+
   test("lowers durable Skill snapshots before untouched user text as hidden context", () => {
     const snapshot = SkillInvocation.Snapshot.make({
       id: SkillInvocation.ID.make("ski_snapshot"),

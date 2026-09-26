@@ -11,13 +11,23 @@ import { SkillInvocation } from "@opencode-ai/schema/skill-invocation"
 import { SessionMessage } from "../message"
 import type { FileAttachment } from "../prompt"
 
-const media = (file: FileAttachment): ContentPart => ({
-  type: "media",
-  mediaType: file.mime,
-  data: file.uri,
-  filename: file.name,
-  metadata: file.description === undefined ? undefined : { description: file.description },
-})
+const media = (file: FileAttachment): ContentPart => {
+  if (file.mime.toLowerCase() === "text/plain") {
+    const match = /^data:text\/plain(?:;charset=utf-8)?;base64,([A-Za-z0-9+/]*={0,2})$/i.exec(file.uri)
+    if (match && match[1]!.length % 4 === 0 && Buffer.from(match[1]!, "base64").toString("base64") === match[1])
+      return {
+        type: "text",
+        text: `Attached text file: ${file.name ?? "file"}\n${Buffer.from(match[1]!, "base64").toString("utf8")}`,
+      }
+  }
+  return {
+    type: "media",
+    mediaType: file.mime,
+    data: file.uri,
+    filename: file.name,
+    metadata: file.description === undefined ? undefined : { description: file.description },
+  }
+}
 
 const skill = (snapshot: SkillInvocation.Snapshot): ContentPart => ({
   type: "text",
