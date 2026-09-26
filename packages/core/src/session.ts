@@ -196,7 +196,10 @@ export interface Interface {
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<ModelContext.Generation | undefined, NotFoundError | ContextSnapshotDecodeError>
   /** Inspect the per-turn prepared request parts without resolving the Session Location: runtime parts, agent prompt, model, request headers, and the latest compaction checkpoint. */
-  readonly requestContext: (sessionID: SessionSchema.ID) => Effect.Effect<
+  readonly requestContext: (
+    sessionID: SessionSchema.ID,
+    modelOverride?: ModelV2.Ref,
+  ) => Effect.Effect<
     {
       runtimeParts: ReadonlyArray<RuntimeContext.Rendered>
       agentSystem: string | null
@@ -928,7 +931,7 @@ const layer = Layer.effect(
         yield* result.get(sessionID)
         return undefined
       }),
-      requestContext: Effect.fn("V2Session.requestContext")(function* (sessionID) {
+      requestContext: Effect.fn("V2Session.requestContext")(function* (sessionID, modelOverride) {
         const session = yield* result.get(sessionID)
 
         const contextAttempt = yield* Effect.gen(function* () {
@@ -948,7 +951,9 @@ const layer = Layer.effect(
               ...(session.parentID ? [[{ action: "slash_command", resource: "*", effect: "deny" as const }]] : []),
             ])
             const environment = buildEnvironment(location)
-            const model = yield* models.resolve(session).pipe(Effect.exit)
+            const model = yield* models
+              .resolve(modelOverride ? { ...session, model: modelOverride } : session)
+              .pipe(Effect.exit)
             const baseSystem = SessionRunnerModel.systemParts(
               agent.info?.system,
               Exit.isSuccess(model) ? models.system(model.value) : undefined,
@@ -1047,7 +1052,7 @@ const layer = Layer.effect(
           environmentInfo: Exit.isSuccess(contextAttempt) ? contextAttempt.value.environmentInfo : null,
           instructions: Exit.isSuccess(contextAttempt) ? contextAttempt.value.instructions : [],
           tools: Exit.isSuccess(contextAttempt) ? contextAttempt.value.tools : [],
-          model: session.model ?? null,
+          model: modelOverride ?? session.model ?? null,
           headers: {
             "x-session-affinity": session.id,
             "X-Session-Id": session.id,

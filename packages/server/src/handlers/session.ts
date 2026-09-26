@@ -1,5 +1,6 @@
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
+import { ModelV2 } from "@opencode-ai/core/model"
 import { Cause, DateTime, Effect, Option, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -195,13 +196,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.modelContext",
         Effect.fn(function* (ctx) {
           const modelQuery = ctx.query.model
-          const modelOverride = modelQuery
-            ? (() => {
-                const separator = modelQuery.indexOf("/")
-                if (separator === -1) return undefined
-                return { providerID: modelQuery.slice(0, separator), modelID: modelQuery.slice(separator + 1) }
-              })()
-            : undefined
+          const modelOverride = modelQuery?.includes("/") ? ModelV2.parse(modelQuery) : undefined
           const subagent = yield* Option.match(contextExtension, {
             onNone: () => Effect.succeed(undefined),
             onSome: (extension) =>
@@ -224,16 +219,21 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               ),
             ),
           )
-          const requestContext = yield* session.requestContext(ctx.params.sessionID).pipe(
-            Effect.catchTag("Session.NotFoundError", (error) =>
-              Effect.fail(
-                new SessionNotFoundError({
-                  sessionID: error.sessionID,
-                  message: `Session not found: ${error.sessionID}`,
-                }),
+          const requestContext = yield* session
+            .requestContext(
+              ctx.params.sessionID,
+              modelOverride ? { providerID: modelOverride.providerID, id: modelOverride.modelID } : undefined,
+            )
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
               ),
-            ),
-          )
+            )
           return {
             data:
               (yield* session.modelContext(ctx.params.sessionID).pipe(
