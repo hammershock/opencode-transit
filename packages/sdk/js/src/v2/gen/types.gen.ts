@@ -5602,6 +5602,7 @@ export type ModelContextSystemPart = {
   label: string
   tag: string
   text: string
+  source?: string
 }
 
 export type ModelContextTool = {

@@ -21,29 +21,35 @@ import { Reference } from "@opencode-ai/core/reference"
 import { MCP } from "@/mcp"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 
-export function provider(model: { api: { id: string }; providerID: string }) {
+const source = (name: string) => `packages/opencode/src/session/prompt/${name}.txt`
+
+export function providerSelection(model: { api: { id: string }; providerID: string }) {
   if (model.api.id.includes("muse")) {
     const name = model.api.id.includes("muse-glimmer") ? "Muse Glimmer" : "Muse Spark"
-    return [PROMPT_META.replaceAll("{{MODEL_NAME}}", name)]
+    return { prompt: PROMPT_META.replaceAll("{{MODEL_NAME}}", name), source: source("meta") }
   }
   if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3"))
-    return [PROMPT_BEAST]
+    return { prompt: PROMPT_BEAST, source: source("beast") }
   if (model.api.id.includes("gpt")) {
-    if (model.api.id.includes("gpt-6")) return [PROMPT_ASTRA]
+    if (model.api.id.includes("gpt-6")) return { prompt: PROMPT_ASTRA, source: source("gpt-astra") }
     if (model.api.id.includes("codex")) {
-      return [PROMPT_CODEX]
+      return { prompt: PROMPT_CODEX, source: source("codex") }
     }
-    return [PROMPT_GPT]
+    return { prompt: PROMPT_GPT, source: source("gpt") }
   }
-  if (model.api.id.includes("gemini-")) return [PROMPT_GEMINI]
-  if (model.api.id.includes("claude")) return [PROMPT_ANTHROPIC]
-  if (model.api.id.toLowerCase().includes("trinity")) return [PROMPT_TRINITY]
+  if (model.api.id.includes("gemini-")) return { prompt: PROMPT_GEMINI, source: source("gemini") }
+  if (model.api.id.includes("claude")) return { prompt: PROMPT_ANTHROPIC, source: source("anthropic") }
+  if (model.api.id.toLowerCase().includes("trinity")) return { prompt: PROMPT_TRINITY, source: source("trinity") }
   if (
     model.api.id.toLowerCase().includes("kimi") ||
     ["kimi-for-coding", "moonshotai", "moonshotai-cn"].includes(model.providerID)
   )
-    return [PROMPT_KIMI]
-  return [PROMPT_DEFAULT]
+    return { prompt: PROMPT_KIMI, source: source("kimi") }
+  return { prompt: PROMPT_DEFAULT, source: source("default") }
+}
+
+export function provider(model: { api: { id: string }; providerID: string }) {
+  return [providerSelection(model).prompt]
 }
 
 export interface Interface {

@@ -92,6 +92,8 @@ export const SystemPart = Schema.Struct({
   label: Schema.String,
   tag: Schema.String,
   text: Schema.String,
+  /** Repository-relative template path when this part comes from a built-in prompt. */
+  source: optional(Schema.String),
 }).annotate({ identifier: "ModelContext.SystemPart" })
 export type SystemPart = typeof SystemPart.Type
 

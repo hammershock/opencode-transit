@@ -12,7 +12,7 @@ import { DialogAlert } from "../ui/dialog-alert"
 import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
 import { useToast } from "../ui/toast"
 
-type Preview = { title: string; content: string }
+type Preview = { title: string; content: string; source?: string }
 
 type ContentPreviewCommands = {
   readonly namespace: string
@@ -92,8 +92,9 @@ export function modelContextOptions(
       options.push({
         category: "SystemPrompt",
         title,
-        footer: `${part.text.length}chars`,
-        value: { title, content: part.text },
+        footer: part.source ?? `${part.text.length}chars`,
+        inspectFooter: part.source !== undefined,
+        value: { title, content: part.text, ...(part.source ? { source: part.source } : {}) },
       })
     }
   } else {
@@ -294,9 +295,7 @@ export function DialogModelContext(props: {
             ]
           : undefined
       }
-      onSelect={(option) =>
-        dialog.push(() => <DialogModelContextPreview title={option.value.title} content={option.value.content} />)
-      }
+      onSelect={(option) => dialog.push(() => <DialogModelContextPreview {...option.value} />)}
     />
   )
 }
@@ -426,6 +425,11 @@ export function DialogContentPreview(
           esc
         </text>
       </box>
+      {props.source && (
+        <text fg={theme.textMuted} wrapMode="word">
+          Source (repository): {props.source}
+        </text>
+      )}
       <scrollbox
         ref={(element: ScrollBoxRenderable) => (scroll = element)}
         maxHeight={height()}

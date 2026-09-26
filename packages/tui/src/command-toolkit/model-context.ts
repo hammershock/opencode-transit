@@ -8,7 +8,7 @@ export type ModelContextGeneration = {
   }
   skillGuidance?: string | null
   runtimeParts?: ReadonlyArray<{ key: string; label: string; tag: string; text: string }> | null
-  systemParts?: ReadonlyArray<{ key: string; label: string; tag: string; text: string }> | null
+  systemParts?: ReadonlyArray<{ key: string; label: string; tag: string; text: string; source?: string }> | null
   agentSystem?: string | null
   environmentText?: string | null
   environmentInfo?: ModelContextEnvironment | null
