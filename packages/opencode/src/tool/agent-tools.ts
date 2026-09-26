@@ -68,7 +68,7 @@ export const AgentSpawnTool = Tool.define(
     const database = yield* Database.Service
     return {
       description:
-        "Start an independent Agent session with a readable alias. subagent_type must be an exact available subagent ID; use general for ordinary work only if listed, not a guessed name such as general-purpose. Return promptly; use agent_wait for results.",
+        "Start an independent Agent session with a readable alias. subagent_type must be an exact available ID; general is the built-in type for ordinary work when no catalog is shown. Do not guess general-purpose. The tool checks access. Return promptly; use agent_wait for results.",
       parameters: SessionAgentTool.Spawn,
       execute: (
         input: { alias: string; prompt: string; subagent_type: string; target?: string; directory?: string },
