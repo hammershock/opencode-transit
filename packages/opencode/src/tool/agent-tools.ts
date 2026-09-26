@@ -36,6 +36,7 @@ import { TaskTool, type TaskPromptOps } from "./task"
 import { SessionID } from "@/session/schema"
 import { SessionAgentTool } from "@opencode-ai/schema/session-agent-tool"
 import { KeyedMutex } from "@opencode-ai/core/effect/keyed-mutex"
+import { Subagent } from "@/agent/subagent"
 
 interface LegacyPromptInterface {
   admitPeer(input: {
@@ -66,6 +67,7 @@ export const AgentSpawnTool = Tool.define(
   Effect.gen(function* () {
     const task = yield* TaskTool
     const database = yield* Database.Service
+    const subagents = Option.getOrUndefined(yield* Effect.serviceOption(Subagent.Service))
     return {
       description:
         "Start an independent Agent session with a readable alias. subagent_type must be an exact available ID; general is the built-in type for ordinary work when no catalog is shown. Do not guess general-purpose. The tool checks access. Return promptly; use agent_wait for results.",
@@ -84,6 +86,25 @@ export const AgentSpawnTool = Tool.define(
               )).find((route) => route.alias === input.alias)
               if (existing && (existing.origin_kind !== "spawn" || existing.origin_id !== ctx.callID))
                 return receipt("Agent alias unavailable", { status: "alias_conflict" })
+              if (!existing) {
+                if (!subagents)
+                  return receipt("Agent spawn unavailable", {
+                    status: "unavailable",
+                    reason: "subagent_catalog_unavailable",
+                  })
+                const catalog = yield* subagents.resolve({
+                  parentAgentID: ctx.agent,
+                  sessionID: ctx.sessionID,
+                  includeInactive: true,
+                })
+                const direct = catalog.entries.find((item) => item.id === input.subagent_type)
+                const aliases = catalog.entries.filter((item) => item.name === input.subagent_type)
+                const entry = direct ?? (aliases.length === 1 ? aliases[0] : undefined)
+                if (!entry)
+                  return receipt("Agent spawn unavailable", { status: "unavailable", reason: "agent_unavailable" })
+                if (entry.effective !== "active")
+                  return receipt("Agent spawn forbidden", { status: "unavailable", reason: "subagent_forbidden" })
+              }
               const underlying = yield* task.init()
               const result = yield* underlying.execute(
                 {

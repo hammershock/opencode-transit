@@ -7,6 +7,56 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
 
+test("V2 agent_spawn explains a session-disabled subagent before creating a child", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const temp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true, config: testProviderConfig(llm.url) })),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      yield* llm.toolMatch((hit) => JSON.stringify(hit.body).includes("PARENT_TASK_MARKER"), "agent_spawn", {
+        alias: "/root/denied",
+        prompt: "CHILD_TASK_MARKER",
+        subagent_type: "general",
+      })
+      yield* llm.text("spawn denied")
+      const child = Bun.spawn([process.execPath, "test/fixture/task-v2-parent-process.ts"], {
+        cwd: import.meta.dir + "/../..",
+        env: {
+          ...process.env,
+          OPENCODE_DB: `${temp.path}/spawn-denied.sqlite`,
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            experimental: { background_subagents: true },
+          }),
+          TASK_V2_TEST_DIRECTORY: temp.path,
+          TASK_V2_TEST_LLM_URL: llm.url,
+          TASK_V2_TEST_DENIED: "true",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const [stdout, stderr, code] = yield* Effect.promise(() =>
+        Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
+      )
+      expect(code, stderr.slice(0, 4_096)).toBe(0)
+      const line = stdout.split("\n").find((item) => item.startsWith("TASK_V2_PARENT_RESULT:"))
+      expect(line).toBeDefined()
+      const result = JSON.parse(line!.slice("TASK_V2_PARENT_RESULT:".length)) as {
+        rows: unknown[]
+        routeCount: number
+        sessionCount: number
+        messages: Array<{ data: unknown }>
+      }
+      expect(result.rows).toEqual([])
+      expect(result.routeCount, stderr.slice(0, 4_096)).toBe(0)
+      expect(result.sessionCount).toBe(1)
+      expect(JSON.stringify(result.messages)).toContain("subagent_forbidden")
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
+  )
+}, 60_000)
+
 test("production HTTP command runs a configured V2 subtask through the durable Task adapter", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -290,12 +340,19 @@ test("HTTP V2 prompt reaches the real provider with Agent controls in a fresh Se
       const hits = yield* llm.hits
       expect(hits.length, stdout + stderr.slice(0, 4_096)).toBeGreaterThanOrEqual(2)
       expect(JSON.stringify(hits[0]?.body)).toContain('"name":"agent_inspect"')
-      const result = JSON.parse(stdout.split("\n").find((line) => line.startsWith("TASK_V2_PARENT_RESULT:"))!.slice("TASK_V2_PARENT_RESULT:".length)) as {
+      const result = JSON.parse(
+        stdout
+          .split("\n")
+          .find((line) => line.startsWith("TASK_V2_PARENT_RESULT:"))!
+          .slice("TASK_V2_PARENT_RESULT:".length),
+      ) as {
         activity: { activities: unknown[]; anchors: Array<{ id: string; seq: number }> }
         messages: Array<{ id: string }>
       }
       expect(result.activity.activities).toEqual([])
-      expect(result.activity.anchors.some((item) => result.messages.some((message) => message.id === item.id))).toBe(true)
+      expect(result.activity.anchors.some((item) => result.messages.some((message) => message.id === item.id))).toBe(
+        true,
+      )
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.scoped),
   )
 }, 60_000)
