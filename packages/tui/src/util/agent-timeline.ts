@@ -21,6 +21,12 @@ export function order(input: {
       return seq === undefined ? [] : [seq]
     }),
   )
+  const partCounts = new Map<string, number>()
+  for (const message of visible) {
+    if (message.role !== "assistant") continue
+    for (const part of input.parts?.get(message.id) ?? [])
+      partCounts.set(part.id, (partCounts.get(part.id) ?? 0) + 1)
+  }
   return [
     ...visible.flatMap((message, index) => {
       const base = input.anchors.get(message.id) ?? Number.NEGATIVE_INFINITY
@@ -28,7 +34,12 @@ export function order(input: {
       if (message.role !== "assistant") return [{ key: `message:${message.id}`, seq: base, fallback: index * 1_000 }]
       const rows = parts.map((part, partIndex) => ({
         key: `part:${message.id}:${part.id}`,
-        seq: input.anchors.get(part.id) ?? (base === Number.NEGATIVE_INFINITY ? base : base + (partIndex + 1) / 1_000),
+        seq:
+          input.anchors.get(`part:${message.id}:${part.id}`) ??
+          (partCounts.get(part.id) === 1 && !/^(text|reasoning)-\d+$/.test(part.id)
+            ? input.anchors.get(part.id)
+            : undefined) ??
+          (base === Number.NEGATIVE_INFINITY ? base : base + (partIndex + 1) / 1_000),
         fallback: index * 1_000 + partIndex,
       }))
       return [

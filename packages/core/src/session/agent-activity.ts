@@ -66,7 +66,12 @@ export const page = Effect.fn("SessionAgentActivity.page")(function* (input: {
     if (event.type === "message.part.updated.1") {
       const part = event.data.part
       return part && typeof part === "object" && "id" in part && typeof part.id === "string"
-        ? [{ id: part.id, seq: event.seq }]
+        ? [
+            { id: part.id, seq: event.seq },
+            ...("messageID" in part && typeof part.messageID === "string"
+              ? [{ id: `part:${part.messageID}:${part.id}`, seq: event.seq }]
+              : []),
+          ]
         : []
     }
     if (event.type === "session.next.step.ended.2" || event.type === "session.next.step.failed.1") {
@@ -82,7 +87,12 @@ export const page = Effect.fn("SessionAgentActivity.page")(function* (input: {
           ? "callID"
           : undefined
     const id = key ? event.data[key] : undefined
-    return typeof id === "string" ? [{ id, seq: event.seq }] : []
+    if (typeof id !== "string") return []
+    const messageID = event.data.assistantMessageID
+    return [
+      { id, seq: event.seq },
+      ...(typeof messageID === "string" ? [{ id: `part:${messageID}:${id}`, seq: event.seq }] : []),
+    ]
   })
   return {
     activities: activities.map((item) => ({

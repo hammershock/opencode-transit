@@ -174,7 +174,7 @@ it.effect("returns stable legacy and V2 part anchors for interleaved activity", 
           aggregate_id: sessionID,
           seq: 1,
           type: "message.part.updated.1",
-          data: { part: { id: "legacy-tool" } },
+          data: { part: { id: "legacy-tool", messageID: "legacy" } },
         },
         {
           id: EventV2.ID.create(),
@@ -205,9 +205,50 @@ it.effect("returns stable legacy and V2 part anchors for interleaved activity", 
       { id: "legacy", seq: 0 },
       { id: "footer:legacy", seq: 0 },
       { id: "legacy-tool", seq: 1 },
+      { id: "part:legacy:legacy-tool", seq: 1 },
       { id: "v2-tool", seq: 2 },
       { id: "v2-text", seq: 3 },
       { id: "footer:v2-assistant", seq: 4 },
+    ])
+  }),
+)
+
+it.effect("scopes repeated V2 part IDs to their assistant messages", () =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const sessionID = SessionSchema.ID.make(`ses_${crypto.randomUUID().replaceAll("-", "")}`)
+    yield* db.insert(EventSequenceTable).values({ aggregate_id: sessionID, seq: 3 }).run().pipe(Effect.orDie)
+    yield* db
+      .insert(EventTable)
+      .values(
+        ["first", "second"].flatMap((assistantMessageID, index) => [
+          {
+            id: EventV2.ID.create(),
+            aggregate_id: sessionID,
+            seq: index * 2,
+            type: "session.next.text.started.1",
+            data: { assistantMessageID, textID: "text-0" },
+          },
+          {
+            id: EventV2.ID.create(),
+            aggregate_id: sessionID,
+            seq: index * 2 + 1,
+            type: "session.next.reasoning.started.1",
+            data: { assistantMessageID, reasoningID: "reasoning-0" },
+          },
+        ]),
+      )
+      .run()
+      .pipe(Effect.orDie)
+    expect((yield* SessionAgentActivity.page({ sessionID })).anchors).toEqual([
+      { id: "text-0", seq: 0 },
+      { id: "part:first:text-0", seq: 0 },
+      { id: "reasoning-0", seq: 1 },
+      { id: "part:first:reasoning-0", seq: 1 },
+      { id: "text-0", seq: 2 },
+      { id: "part:second:text-0", seq: 2 },
+      { id: "reasoning-0", seq: 3 },
+      { id: "part:second:reasoning-0", seq: 3 },
     ])
   }),
 )
