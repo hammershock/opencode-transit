@@ -64,10 +64,12 @@ import {
   SessionPeerMessageTable,
   SessionPeerReceiptTable,
   SessionTable,
+  SessionTaskTable,
 } from "@opencode-ai/core/session/sql"
 import { SessionLegacyOwner } from "@opencode-ai/core/session/legacy-owner"
 import { SessionPeerMessage } from "@opencode-ai/core/session/peer-message"
 import { SessionAgentGuidance } from "@opencode-ai/core/session/agent-guidance"
+import { SessionInterruption } from "@opencode-ai/core/session/interruption"
 import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
@@ -1664,8 +1666,25 @@ const layer = Layer.effect(
               const routes = yield* SessionPeerRoute.list(SessionV2.ID.make(sessionID)).pipe(
                 Effect.provideService(Database.Service, database),
               )
+              const interruption = yield* SessionInterruption.latest(SessionV2.ID.make(sessionID)).pipe(
+                Effect.provideService(Database.Service, database),
+              )
+              const tasks = yield* database.db
+                .select({ parent_session_id: SessionTaskTable.parent_session_id })
+                .from(SessionTaskTable)
+                .where(eq(SessionTaskTable.child_session_id, SessionV2.ID.make(sessionID)))
+                .all()
+                .pipe(Effect.orDie)
               system.push(
-                SessionAgentGuidance.render(routes.filter((route) => route.can_interact).map((route) => route.alias)),
+                SessionAgentGuidance.render(
+                  routes.filter((route) => route.can_interact).map((route) => route.alias),
+                  interruption?.state === "interrupted" ? { actor: interruption.actor_kind } : undefined,
+                  routes
+                    .filter((route) =>
+                      route.can_interact && tasks.some((task) => task.parent_session_id === route.target_session_id),
+                    )
+                    .map((route) => route.alias),
+                ),
               )
             }
             const format = lastUser.format ?? { type: "text" as const }

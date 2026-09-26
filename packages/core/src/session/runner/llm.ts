@@ -38,11 +38,12 @@ import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
 import { MAX_STEPS_PROMPT } from "./max-steps"
 import { SessionAgentGuidance } from "../agent-guidance"
+import { SessionInterruption } from "../interruption"
 import { SessionPeerRoute } from "../peer-route"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
-import { SessionInputTable, SessionPeerMessageTable, SessionPeerReceiptTable, SessionTaskResultTable } from "../sql"
+import { SessionInputTable, SessionPeerMessageTable, SessionPeerReceiptTable, SessionTaskResultTable, SessionTaskTable } from "../sql"
 import { and, desc, eq, inArray, isNotNull, ne } from "drizzle-orm"
 
 /**
@@ -367,11 +368,29 @@ const layer = Layer.effect(
           })
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const agentGuidance = toolMaterialization?.definitions.some((tool) => tool.name === "agent_interact")
-        ? SessionAgentGuidance.render(
-            (yield* SessionPeerRoute.list(session.id).pipe(Effect.provideService(Database.Service, database)))
-              .filter((route) => route.can_interact)
-              .map((route) => route.alias),
-          )
+        ? yield* Effect.gen(function* () {
+            const routes = yield* SessionPeerRoute.list(session.id).pipe(
+              Effect.provideService(Database.Service, database),
+            )
+            const interruption = yield* SessionInterruption.latest(session.id).pipe(
+              Effect.provideService(Database.Service, database),
+            )
+            const tasks = yield* db
+              .select({ parent_session_id: SessionTaskTable.parent_session_id })
+              .from(SessionTaskTable)
+              .where(eq(SessionTaskTable.child_session_id, session.id))
+              .all()
+              .pipe(Effect.orDie)
+            return SessionAgentGuidance.render(
+              routes.filter((route) => route.can_interact).map((route) => route.alias),
+              interruption?.state === "interrupted" ? { actor: interruption.actor_kind } : undefined,
+              routes
+                .filter((route) =>
+                  route.can_interact && tasks.some((task) => task.parent_session_id === route.target_session_id),
+                )
+                .map((route) => route.alias),
+            )
+          })
         : undefined
       const request = LLM.request({
         model,
