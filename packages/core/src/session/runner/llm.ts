@@ -43,7 +43,13 @@ import { SessionPeerRoute } from "../peer-route"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
-import { SessionInputTable, SessionPeerMessageTable, SessionPeerReceiptTable, SessionTaskResultTable, SessionTaskTable } from "../sql"
+import {
+  SessionInputTable,
+  SessionPeerMessageTable,
+  SessionPeerReceiptTable,
+  SessionTaskResultTable,
+  SessionTaskTable,
+} from "../sql"
 import { and, desc, eq, inArray, isNotNull, ne } from "drizzle-orm"
 
 /**
@@ -367,6 +373,7 @@ const layer = Layer.effect(
             ])
           })
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
+      const baseSystem = SessionRunnerModel.systemParts(agent.info?.system, models.system(model))
       const agentGuidance = toolMaterialization?.definitions.some((tool) => tool.name === "agent_interact")
         ? yield* Effect.gen(function* () {
             const routes = yield* SessionPeerRoute.list(session.id).pipe(
@@ -385,8 +392,9 @@ const layer = Layer.effect(
               routes.filter((route) => route.can_interact).map((route) => route.alias),
               interruption?.state === "interrupted" ? { actor: interruption.actor_kind } : undefined,
               routes
-                .filter((route) =>
-                  route.can_interact && tasks.some((task) => task.parent_session_id === route.target_session_id),
+                .filter(
+                  (route) =>
+                    route.can_interact && tasks.some((task) => task.parent_session_id === route.target_session_id),
                 )
                 .map((route) => route.alias),
             )
@@ -402,7 +410,7 @@ const layer = Layer.effect(
           },
         },
         providerOptions: { openai: { promptCacheKey } },
-        system: [agent.info?.system, ...runtimeParts.map((part) => part.text), agentGuidance]
+        system: [...baseSystem.map((part) => part.text), ...runtimeParts.map((part) => part.text), agentGuidance]
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
         messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],

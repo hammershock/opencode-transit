@@ -8,6 +8,7 @@ import { Integration } from "@opencode-ai/core/integration"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
 import { Provider } from "@/provider/provider"
+import { SystemPrompt } from "@/session/system"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { Project } from "@/project/project"
 import { Effect, Layer } from "effect"
@@ -24,6 +25,10 @@ const layer = Layer.effect(
     const projects = yield* Project.Service
 
     return SessionRunnerModel.Service.of({
+      system: (model) => ({
+        prompt: SystemPrompt.provider({ api: { id: model.id }, providerID: model.provider }).join("\n"),
+        identity: `You are powered by the model named ${model.id}. The exact model ID is ${model.provider}/${model.id}`,
+      }),
       resolve: Effect.fn("OpenCode.SessionRunnerModel.resolve")(function* (session) {
         const available = yield* catalog.model.available()
         const defaultModel = session.model ? undefined : yield* catalog.model.default()
