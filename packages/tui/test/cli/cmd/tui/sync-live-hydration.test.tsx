@@ -674,6 +674,74 @@ test("session hydration auto-approves pending V2 permissions", async () => {
   }
 })
 
+for (const remote of [false, true])
+  test.each(["hydrated", "live"] as const)(
+    `existing ${remote ? "remote" : "local"} normal child inherits ancestor Auto for %s permissions`,
+    async (delivery) => {
+      await using tmp = await tmpdir()
+      await Bun.write(`${tmp.path}/kv.json`, "{}")
+      const root = {
+        ...session,
+        id: "ses_auto_owner",
+        slug: "auto-owner",
+        projectID: "project",
+        approvalMode: "auto" as const,
+      }
+      const parent = { ...session, id: "ses_auto_parent", parentID: root.id, approvalMode: "normal" as const }
+      const child = {
+        ...session,
+        parentID: parent.id,
+        approvalMode: "normal" as const,
+        ...(remote ? { target: { type: "rexd" as const, targetID: "00000000-0000-4000-8000-000000000001" } } : {}),
+      }
+      const pending = { id: "per_inherited_auto", sessionID, action: "bash", resources: ["echo inherited"] }
+      const replies: Request[] = []
+      const { app, sync, emit } = await mount((url, request) => {
+        if (url.pathname === `/session/${sessionID}`) return json(child)
+        if (url.pathname === `/session/${parent.id}`) return json(parent)
+        if (url.pathname === `/session/${root.id}`) return json(root)
+        if (url.pathname === `/session/${sessionID}/message`) return json([])
+        if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`)
+          return json([])
+        if (url.pathname === `/api/session/${sessionID}/permission`)
+          return json({ data: delivery === "hydrated" ? [pending] : [] })
+        if (url.pathname === `/api/session/${sessionID}/permission/${pending.id}/reply`) {
+          replies.push(request)
+          return new Response(null, { status: 204 })
+        }
+      }, tmp.path)
+      try {
+        await sync.session.sync(sessionID)
+        expect(sync.session.get(sessionID)?.approvalMode).toBe("normal")
+        expect(sync.session.approvalMode(sessionID)).toBe("auto")
+        if (delivery === "live")
+          emit(global({ id: "evt_inherited_auto", type: "permission.v2.asked", properties: pending }))
+        await wait(() => replies.length === 1)
+        expect(await replies[0]!.clone().json()).toEqual({ reply: "once" })
+        expect(sync.data.permission[sessionID] ?? []).toEqual([])
+        emit(
+          global({
+            id: "evt_owner_normal",
+            type: "session.updated",
+            properties: { sessionID: root.id, info: { ...root, approvalMode: "normal" } },
+          }),
+        )
+        await wait(() => sync.session.approvalMode(sessionID) === "normal")
+        emit(
+          global({
+            id: "evt_normal_permission",
+            type: "permission.v2.asked",
+            properties: { ...pending, id: "per_normal" },
+          }),
+        )
+        await wait(() => sync.data.permission[sessionID]?.length === 1)
+        expect(replies).toHaveLength(1)
+      } finally {
+        app.renderer.destroy()
+      }
+    },
+  )
+
 test("live and hydrated auto permissions share one reply", async () => {
   await using tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, "{}")

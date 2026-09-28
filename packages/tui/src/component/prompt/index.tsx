@@ -214,7 +214,7 @@ export function Prompt(props: PromptProps) {
   )
   const approvalMode = createMemo(() =>
     local.permission.effective(
-      props.sessionID ? (sync.session.get(props.sessionID)?.approvalMode ?? "normal") : local.permission.defaultMode,
+      props.sessionID ? sync.session.approvalMode(props.sessionID) : local.permission.defaultMode,
     ),
   )
   const tuiConfig = useTuiConfig()
@@ -1906,7 +1906,13 @@ export function Prompt(props: PromptProps) {
                         {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
                       </text>
                       <Show when={store.mode === "normal" && approvalMode() === "auto"}>
-                        <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>auto</text>
+                        <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>
+                          {props.sessionID &&
+                          sync.session.get(props.sessionID)?.approvalMode !== "auto" &&
+                          sync.session.approvalMode(props.sessionID) === "auto"
+                            ? "auto (inherited)"
+                            : "auto"}
+                        </text>
                       </Show>
                       <Show when={store.mode === "normal"}>
                         <box flexDirection="row" gap={1}>
