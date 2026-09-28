@@ -19,7 +19,7 @@ test("opening a running Task follows new child output past the initial message w
     title: id === "parent" ? "Parent task" : "Child task",
     slug: id,
     projectID: "project",
-    directory,
+    directory: id === "child" ? `${directory}/child-project` : directory,
     version: "0.0.0-test",
     time: { created: 0, updated: 30 },
     ...(id === "child" ? { parentID: "parent" } : {}),
@@ -129,7 +129,10 @@ test("opening a running Task follows new child output past the initial message w
     if (url.pathname === "/api/target")
       return json({ path: "/tmp/opencode/targets.jsonc", revision: "test", targets: [], diagnostics: [], valid: true })
     if (url.pathname === "/session") return json([session("parent")])
-    if (url.pathname === "/session/status") return json({ parent: { type: "busy" }, child: { type: "busy" } })
+    if (url.pathname === "/session/status")
+      return json(url.searchParams.get("directory") === session("child").directory
+        ? { child: { type: "busy" } }
+        : { parent: { type: "busy" } })
     if (url.pathname === "/session/parent" || url.pathname === "/session/child")
       return json(session(url.pathname.split("/")[2]!))
     if (url.pathname === "/session/parent/message") return json(parentMessages)
@@ -145,7 +148,7 @@ test("opening a running Task follows new child output past the initial message w
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
           time: { created: 0, updated: 30 },
           title: session(id).title,
-          location: { directory },
+          location: { directory: session(id).directory },
           agent: "build",
           model: { providerID: "test", id: "model" },
         },
@@ -207,6 +210,15 @@ test("opening a running Task follows new child output past the initial message w
     }
     expect(setup.captureCharFrame()).toContain("child step 24")
     expect(setup.captureCharFrame()).toContain("esc interrupt")
+    const activityFrames = new Set<string>()
+    const activityDeadline = Date.now() + 2_500
+    while (Date.now() < activityDeadline) {
+      await setup.renderOnce()
+      activityFrames.add(setup.captureCharFrame().split("\n").find((line) => line.includes("esc interrupt")) ?? "")
+      await Bun.sleep(100)
+    }
+    expect(activityFrames.has("")).toBe(false)
+    expect(activityFrames.size).toBeGreaterThan(1)
     expect(setup.captureCharFrame()).toContain("Latest call")
     expect(setup.captureCharFrame()).toContain("no running tool observed")
 

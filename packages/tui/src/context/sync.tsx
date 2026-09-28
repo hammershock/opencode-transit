@@ -182,6 +182,7 @@ export const {
     const sdk = useSDK()
 
     const fullSyncedSessions = new Set<string>()
+    const statusRevisions = new Map<string, number>()
     const syncingSessions = new Map<string, Promise<void>>()
     const resolvingSessions = new Map<string, Promise<Session | undefined>>()
     const autoPermissionReplies = new Map<string, Promise<boolean>>()
@@ -460,6 +461,7 @@ export const {
           }),
         )
         mergeSessionMessages(sessionID, messages.data ?? [], tracker)
+        await refreshSessionStatus(sessionID).catch(() => undefined)
         await reconcileLegacyPermissions(sessionID)
         fullSyncedSessions.add(sessionID)
       })().finally(() => {
@@ -496,6 +498,33 @@ export const {
       return task
     }
 
+    async function refreshSessionStatus(sessionID: string) {
+      const session = store.session.find((item) => item.id === sessionID)
+      if (!session) return
+      const target = session.target?.type === "rexd" ? session.target.targetID : undefined
+      const query = { directory: session.directory, workspace: session.workspaceID, target }
+      const revision = statusRevisions.get(sessionID)
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 5_000)
+      try {
+        const response = await sdk.client.session.status(query, {
+          throwOnError: true,
+          signal: controller.signal,
+        })
+        const current = store.session.find((item) => item.id === sessionID)
+        if (
+          statusRevisions.get(sessionID) !== revision ||
+          current?.directory !== query.directory ||
+          current?.workspaceID !== query.workspace ||
+          (current?.target?.type === "rexd" ? current.target.targetID : undefined) !== target
+        )
+          return
+        setStore("session_status", sessionID, response.data?.[sessionID] ?? { type: "idle" })
+      } finally {
+        clearTimeout(timeout)
+      }
+    }
+
     let reconcilingWorkingSessions: Promise<void> | undefined
     function reconcileWorkingSessions() {
       if (reconcilingWorkingSessions) return reconcilingWorkingSessions
@@ -510,22 +539,11 @@ export const {
         )
       })
       if (sessions.length === 0) return Promise.resolve()
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 5_000)
-      reconcilingWorkingSessions = sdk.client.session
-        .status({ workspace: project.workspace.current() }, { throwOnError: true, signal: controller.signal })
-        .then(async (response) => {
-          const reconciled = await Promise.allSettled(sessions.map((sessionID) => reconcileSessionMessages(sessionID)))
-          batch(() => {
-            reconciled.forEach((outcome, index) => {
-              if (outcome.status === "rejected") return
-              setStore("session_status", sessions[index], response.data?.[sessions[index]] ?? { type: "idle" })
-            })
-          })
-        })
-        .catch(() => undefined)
+      reconcilingWorkingSessions = Promise.allSettled(
+        sessions.flatMap((sessionID) => [refreshSessionStatus(sessionID), reconcileSessionMessages(sessionID)]),
+      )
+        .then(() => undefined)
         .finally(() => {
-          clearTimeout(timeout)
           reconcilingWorkingSessions = undefined
         })
       return reconcilingWorkingSessions
@@ -809,6 +827,7 @@ export const {
         }
 
         case "session.status": {
+          statusRevisions.set(event.properties.sessionID, (statusRevisions.get(event.properties.sessionID) ?? 0) + 1)
           setStore("session_status", event.properties.sessionID, event.properties.status)
           break
         }
@@ -1046,7 +1065,17 @@ export const {
               .then((x) => setStore("mcp_resource", reconcile(x.data ?? {}))),
             sdk.client.formatter.status({ workspace }).then((x) => setStore("formatter", reconcile(x.data ?? []))),
             sdk.client.session.status({ workspace }).then((x) => {
-              setStore("session_status", reconcile(x.data ?? {}))
+              // This snapshot only covers the startup Location. Hydration and live
+              // events own statuses already observed elsewhere or more recently.
+              for (const [sessionID, status] of Object.entries(x.data ?? {})) {
+                if (
+                  syncingSessions.has(sessionID) ||
+                  fullSyncedSessions.has(sessionID) ||
+                  statusRevisions.has(sessionID)
+                )
+                  continue
+                setStore("session_status", sessionID, status)
+              }
             }),
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),

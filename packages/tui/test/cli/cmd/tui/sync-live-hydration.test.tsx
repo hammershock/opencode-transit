@@ -33,6 +33,98 @@ function global(payload: GlobalEvent["payload"]): GlobalEvent {
   return { directory: "/tmp/other", project: "proj_test", payload }
 }
 
+test.each([undefined, { type: "rexd" as const, targetID: "00000000-0000-4000-8000-000000000001" }])(
+  "hydrates and reconciles working status in the Session Location: %j",
+  async (target) => {
+    await using tmp = await tmpdir()
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    let requests = 0
+    let busy = true
+    const selected = { ...session, target, workspaceID: "wrk_selected" }
+    const { app, sync } = await mount((url) => {
+      if (url.pathname === `/session/${sessionID}`) return json(selected)
+      if (url.pathname === `/session/${sessionID}/message`) return json([{ info: assistant, parts: [] }])
+      if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`)
+        return json([])
+      if (url.pathname === "/session/status") {
+        if (
+          url.searchParams.get("directory") !== selected.directory ||
+          url.searchParams.get("workspace") !== selected.workspaceID ||
+          url.searchParams.get("target") !== (target?.targetID ?? null)
+        )
+          return json({})
+        requests++
+        return json(busy ? { [sessionID]: { type: "busy" } } : {})
+      }
+    }, tmp.path)
+    try {
+      await sync.session.sync(sessionID)
+      expect(sync.data.session_status[sessionID]).toEqual({ type: "busy" })
+      await wait(() => requests >= 2, 3_500)
+      expect(sync.data.session_status[sessionID]).toEqual({ type: "busy" })
+      busy = false
+      await wait(() => sync.data.session_status[sessionID]?.type === "idle", 3_500)
+    } finally {
+      app.renderer.destroy()
+    }
+  },
+  10_000,
+)
+
+test("a delayed status snapshot cannot overwrite a newer live idle event", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  let release!: (response: Response) => void
+  let requested = false
+  const snapshot = new Promise<Response>((resolve) => {
+    release = resolve
+  })
+  const { app, emit, sync } = await mount((url) => {
+    if (url.pathname === `/session/${sessionID}`) return json(session)
+    if (url.pathname === `/session/${sessionID}/message`) return json([{ info: assistant, parts: [] }])
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    if (url.pathname === "/session/status" && url.searchParams.get("directory") === session.directory) {
+      requested = true
+      return snapshot
+    }
+  }, tmp.path)
+  try {
+    const hydration = sync.session.sync(sessionID)
+    await wait(() => requested)
+    emit(global({ id: "evt_status_idle", type: "session.status", properties: { sessionID, status: { type: "idle" } } }))
+    await wait(() => sync.data.session_status[sessionID]?.type === "idle")
+    release(json({ [sessionID]: { type: "busy" } }))
+    await hydration
+    expect(sync.data.session_status[sessionID]).toEqual({ type: "idle" })
+  } finally {
+    release(json({}))
+    app.renderer.destroy()
+  }
+})
+
+test("a startup Location snapshot cannot clear a live status from another Location", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
+  let requests = 0
+  const { app, emit, sync } = await mount((url) => {
+    if (url.pathname === "/session/status") {
+      requests++
+      return json({})
+    }
+  }, tmp.path)
+  try {
+    emit(global({ id: "evt_busy_other", type: "session.status", properties: { sessionID, status: { type: "busy" } } }))
+    await wait(() => sync.data.session_status[sessionID]?.type === "busy")
+    const before = requests
+    emit(global({ id: "evt_dispose", type: "server.instance.disposed", properties: { directory: session.directory } }))
+    await wait(() => requests > before)
+    await Bun.sleep(30)
+    expect(sync.data.session_status[sessionID]).toEqual({ type: "busy" })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test.each(["message.removed", "message.part.removed"] as const)(
   "%s for uncached history is a no-op without disrupting live updates",
   async (type) => {

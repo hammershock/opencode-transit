@@ -29,6 +29,7 @@ import {
   ForkPayload,
   InitPayload,
   ListQuery,
+  StatusQuery,
   MessagesQuery,
   PermissionResponsePayload,
   PromptPayload,
@@ -95,16 +96,20 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       })
     })
 
-    const status = Effect.fn("SessionHttpApi.status")(function* () {
-      const current = yield* statusSvc.list()
+    const status = Effect.fn("SessionHttpApi.status")(function* (ctx: { query: typeof StatusQuery.Type }) {
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const targetID = ctx.query.target ?? request.headers["x-opencode-target"]
+      const current = targetID ? new Map<SessionID, SessionStatus.Info>() : yield* statusSvc.list()
       const context = yield* InstanceState.context
       const workspaceID = yield* InstanceState.workspaceID
+      // Rexd paths belong to the target; its controller Instance stays at the server cwd.
+      const directory = ctx.query.directory ?? request.headers["x-opencode-directory"] ?? context.directory
       for (const sessionID of yield* execution.active) {
         const owned = yield* session.get(SessionID.make(sessionID)).pipe(Effect.option)
         if (
           Option.isSome(owned) &&
-          owned.value.projectID === context.project.id &&
-          owned.value.directory === context.directory &&
+          (owned.value.target?.type === "rexd" ? owned.value.target.targetID === targetID : !targetID) &&
+          (owned.value.directory === directory || (!targetID && owned.value.directory === context.directory)) &&
           owned.value.workspaceID === workspaceID
         )
           current.set(SessionID.make(sessionID), { type: "busy" })
