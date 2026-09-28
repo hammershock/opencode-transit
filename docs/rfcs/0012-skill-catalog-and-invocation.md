@@ -5,7 +5,7 @@ status: accepted
 authors:
   - hammershock
 created: 2026-09-11
-updated: 2026-09-12
+updated: 2026-09-28
 implemented-by:
   - https://github.com/hammershock/opencode-transit/pull/280
   - https://github.com/hammershock/opencode-transit/pull/281
@@ -48,7 +48,7 @@ Codex 的可观察行为提供了合适的交互基线：composer 发送结构�
 1. normal prompt 支持可搜索、可验证的 `$skill` mention，并保持用户请求为一等输入。
 2. 显式 mention、implicit tool 与 legacy slash compatibility 最终使用同一个 canonical Skill catalog 和 invocation snapshot。
 3. 普通时间线默认隐藏 Skill 正文，同时允许用户查看模型实际接纳的准确快照。
-4. 默认只发现 OpenCode-owned roots；Codex、Claude 与自定义目录必须显式导入，并可一键 reset。
+4. 默认只发现 OpenCode-owned roots；Codex、Claude 与自定义目录必须显式导入，并可在 Paths 面板逐项编辑或移除。
 5. Skill 元信息只在 Agent context 初始化或 Session activation reload 时接纳，不在每个 turn 扫描磁盘。
 6. 新 Skill 在退出并重新进入 Session 后可被 TUI 和 Agent 发现，不要求重启 OpenCode。
 7. Skill 设置与非 OpenCode roots 保持 device-local；用户可显式同步 OpenCode global Skill package，已调用正文仍作为 Session context durable 同步。
@@ -297,33 +297,15 @@ target scope 只能由 controller-global config 声明。project config 可以�
 
 `Ctrl+P` 注册一个 `Manage skills` command，并与 `/skills` 进入同一个 Core-owned workflow。面板遵守 `docs/ui-design-guidelines.md`：固定右侧 status、长路径只在 focused detail 展开、异步 refresh 不重排 selection，不使用 emoji。
 
-主视图分为：
+主面板只列出 Skills，保留 Target access checklist 与内容预览。`Ctrl+P` 打开独立的本机 Paths 管理面板，`Ctrl+R` 重新扫描磁盘上的 Skills；二者均为配置化快捷键，不再混入列表 Actions 行。
 
-```text
-Discovery paths
-  OpenCode config                         ● default
-  ~/.codex/skills                         ● ready
-  ~/.claude/skills                        ! unavailable
+Paths 面板列出默认目录与全部配置目录，包括不存在、不可访问、非目录或解析失败的条目；状态固定在右侧，具体错误（例如 EIO）显示在条目详情中。`Ctrl+A` 添加、Enter 编辑、`Ctrl+D` 移除 imported path，添加和编辑共享 controller filesystem path completion。移除只修改搜索列表，不删除目录、Skill 文件或 cache，不需要破坏性操作确认。默认目录不可编辑或移除；兼容保留的 URL sources 可显示与移除，不增加 URL 安装入口。Codex、Claude 目录通过同一添加路径流程导入。
 
-Skills
-  imagegen                                all targets
-  deploy                                  2 targets
-```
+路径列表保存成功后自动重新发现 Skills，手动 Reload 用于目录列表不变但文件发生变化的情况。暂时不可用的目录是 availability warning，不使整个设置失效，不阻止其编辑/移除或 target scope 保存；非法 JSONC 与结构错误继续拒绝覆盖。
 
-提供以下 actions：
+Target access 的保存与 discovery reload 独立，保留 dormant overrides 与既有 checklist 行为。Registry mutation 继续使用 revision/CAS、原子写入和未知 JSONC 字段保留；revision conflict 刷新后要求用户重新应用，不静默覆盖。
 
-- `Add path...`：使用 controller filesystem path completion；
-- `Import Codex skills`：解析 `${CODEX_HOME:-~/.codex}/skills`；
-- `Import Claude skills`：解析 `~/.claude/skills`；
-- `Remove path`：只移除引用，不删除目录或 cache；
-- `Reset discovery paths`：清除 imported paths 与 configured URLs，使有效范围只剩 OpenCode defaults；不删除任何文件；
-- `Target access...`：为 focused Skill 选择 `All targets` 或 `local` 与已配置 Rexd targets 的 checklist。
-
-Reset 改变明确的用户配置，需要一次说明影响范围的确认。它只重置 source list；暂时无法发现的 Skill target overrides 保留为 dormant entries，使重新导入同一 `SkillID` 后恢复原 scope。面板可以单独清理 dormant override，但 reset 不隐式执行该操作。
-
-Registry mutation 使用与 target registry 相同的 revision/CAS、原子写入和未知 JSONC 字段保留要求。正常 save 不弹额外确认；revision conflict 保留面板与 selection，刷新后要求用户重新应用。
-
-设置保存后只 invalidate device-local registry cache。当前活跃 Session 的 admitted catalog 不热更新，TUI 显示简短提示，说明重新进入 Session 后生效。
+设置变更与管理面板扫描不热更新已有 Session 的 admitted catalog。用户通过 `/context` 的 `Ctrl+R` 显式 reload（或重新进入 Session）采用更新后的 Skills；复用既有 Context reload workflow，不从 Paths 面板隐式修改运行中会话。
 
 ## `$skill` 结构化 mention
 

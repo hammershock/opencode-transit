@@ -13,7 +13,6 @@ import { createMemo, createSignal } from "solid-js"
 import { useSDK } from "../context/sdk"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
-import { DialogConfirm } from "../ui/dialog-confirm"
 import { DialogPrompt } from "../ui/dialog-prompt"
 import { DialogSelect, displayTruncate, type DialogSelectOption } from "../ui/dialog-select"
 import { useToast } from "../ui/toast"
@@ -102,7 +101,7 @@ export function skillTargetsLabel(scope: SkillTargetScope | undefined, targets: 
     .join(", ")
 }
 
-export function buildSkillManagerRows(model: SkillManagerModel, home?: string): ManagerRow[] {
+export function buildSkillManagerRows(model: SkillManagerModel): ManagerRow[] {
   const duplicateNames = new Set(
     model.catalog.skills
       .filter((skill, index, skills) =>
@@ -110,65 +109,7 @@ export function buildSkillManagerRows(model: SkillManagerModel, home?: string): 
       )
       .map((skill) => skill.name),
   )
-  const diagnostics = [
-    ...model.settings.diagnostics.map((diagnostic) => ({ type: "settings" as const, diagnostic })),
-    ...model.catalog.diagnostics.map((diagnostic) => ({ type: "catalog" as const, diagnostic })),
-  ]
-  const failures = [
-    ...(model.catalogError
-      ? [
-          {
-            key: "diagnostic:catalog-error",
-            title: "Skill catalog",
-            description: model.catalogError,
-            footer: "! unavailable",
-            category: "Diagnostics",
-          },
-        ]
-      : []),
-    ...(model.targetError
-      ? [
-          {
-            key: "diagnostic:target-error",
-            title: "Target registry",
-            description: model.targetError,
-            footer: "! unavailable",
-            category: "Diagnostics",
-          },
-        ]
-      : []),
-  ]
   return [
-    { key: "action:add", title: "Add path…", description: "Controller filesystem path", category: "Actions" },
-    {
-      key: "action:codex",
-      title: "Import Codex skills",
-      description: "Add the Codex user Skill directory",
-      category: "Actions",
-    },
-    {
-      key: "action:claude",
-      title: "Import Claude skills",
-      description: "Add the Claude user Skill directory",
-      category: "Actions",
-    },
-    { key: "action:reload", title: "Reload catalog", description: "Rescan configured roots", category: "Actions" },
-    {
-      key: "action:reset",
-      title: "Reset discovery paths",
-      description: "Keep only OpenCode defaults without deleting files",
-      category: "Actions",
-    },
-    ...model.settings.roots.map((root) => ({
-      key: rootKey(root),
-      title: rootTitle(root, home),
-      description:
-        root.kind === "opencode-global" ? "opencode" : root.kind === "url" ? "others" : rootSourceLabel(root, home),
-      footer: skillRootStatus(root),
-      category: "Discovery paths",
-      inspectTitle: true,
-      inspectionTitle: root.resolved ?? root.value,
-    })),
     ...model.catalog.skills
       .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
       .map((skill) => {
@@ -185,24 +126,6 @@ export function buildSkillManagerRows(model: SkillManagerModel, home?: string): 
           },
         }
       }),
-    ...failures,
-    ...diagnostics.slice(0, 20).map((item, index) => ({
-      key: `diagnostic:${index}`,
-      title: item.type === "settings" ? item.diagnostic.field : item.diagnostic.sourceLabel,
-      description: item.diagnostic.message,
-      footer: `! ${item.diagnostic.kind}`,
-      category: "Diagnostics",
-    })),
-    ...(diagnostics.length > 20
-      ? [
-          {
-            key: "diagnostic:more",
-            title: `${diagnostics.length - 20} more diagnostics`,
-            description: "Resolve visible issues or reload to refresh this bounded list",
-            category: "Diagnostics",
-          },
-        ]
-      : []),
   ]
 }
 
@@ -265,15 +188,19 @@ export function useSkillManager() {
     }
   }
 
-  const save = async (operation: (current: SkillManagerModel) => Promise<unknown>, title: string) => {
+  const save = async (operation: (current: SkillManagerModel) => Promise<unknown>, title: string, rescan = false) => {
     const current = model()
-    if (!current) return
+    if (!current || loading()) return
     setLoading(true)
     try {
       await operation(current)
-      const next = await read(true)
+      const next = await read(rescan)
       setModel(next)
-      toast.show({ title, message: "Saved locally · re-enter Sessions to apply", variant: "success" })
+      toast.show({
+        title,
+        message: next.catalogError ?? "Saved locally · /context reload updates an open Session",
+        variant: next.catalogError ? "warning" : "success",
+      })
     } catch (error) {
       toast.show({ title: "Skill settings not saved", message: errorMessage(error), variant: "error" })
       const latest = await read(false).catch(() => undefined)
@@ -283,123 +210,113 @@ export function useSkillManager() {
     }
   }
 
-  const addPath = async (preset?: "codex" | "claude") => {
+  const editPath = async (root?: SkillDiscoveryRoot) => {
     const current = model()
-    if (!current) return
+    if (!current || loading() || root?.default || root?.kind === "url") return
     const configDirectory = path.dirname(current.settings.path)
-    const fallbackHome = home ?? "~"
-    const initial =
-      preset === "codex"
-        ? path.join(process.env.CODEX_HOME?.trim() || path.join(fallbackHome, ".codex"), "skills")
-        : preset === "claude"
-          ? path.join(fallbackHome, ".claude", "skills")
-          : undefined
-    const value = await DialogPrompt.show(
-      dialog,
-      preset ? `Import ${preset === "codex" ? "Codex" : "Claude"} skills` : "Add Skill path",
-      {
-        value: initial,
-        placeholder: initial ?? configDirectory,
-        description: () => <text>Controller directory. Press Tab to complete local paths.</text>,
-        complete: (input, cursor) =>
-          completeLocalDirectory({ sdk, home: fallbackHome, value: input, cursor, cwd: configDirectory }).catch(() => ({
-            value: input,
-            cursor,
-            candidates: [],
-          })),
-      },
-    )
-    if (value === null) return open()
-    if (!value.trim()) return open()
+    const value = await new Promise<string | null>((resolve) => {
+      dialog.push(
+        () => (
+          <DialogPrompt
+            title={root ? "Edit Skill path" : "Add Skill path"}
+            value={root?.value}
+            placeholder={configDirectory}
+            description={() => (
+              <text>Local discovery directory. Tab completes paths; files are never moved or deleted.</text>
+            )}
+            complete={(value, cursor) =>
+              completeLocalDirectory({ sdk, home: home ?? "~", value, cursor, cwd: configDirectory })
+            }
+            onConfirm={(value) => {
+              resolve(value)
+              dialog.pop()
+            }}
+            onCancel={() => dialog.pop()}
+          />
+        ),
+        () => {
+          resolve(null)
+          dialog.setSize("xlarge")
+        },
+      )
+      dialog.setSize("large")
+    })
+    if (!value?.trim() || value.trim() === root?.value) return
     await save(
-      (snapshot) =>
+      () =>
         sdk.client.v2.skill.discovery.update(
           {
             skillDiscoveryUpdate: {
-              paths: [...importedPaths(snapshot.settings), value.trim()],
-              urls: configuredUrls(snapshot.settings),
-              expectedRevision: snapshot.settings.revision,
+              paths: root
+                ? importedPaths(current.settings).map((item) => (item === root.value ? value.trim() : item))
+                : [...importedPaths(current.settings), value.trim()],
+              urls: configuredUrls(current.settings),
+              expectedRevision: current.settings.revision,
             },
           },
           { throwOnError: true },
         ),
-      "Discovery path added",
+      root ? "Discovery path updated" : "Discovery path added",
+      true,
     )
-    open(false)
   }
 
   const removeRoot = async (root: SkillDiscoveryRoot) => {
-    const confirmed = await DialogConfirm.show(
-      dialog,
-      "Remove discovery path?",
-      `Remove ${rootTitle(root, home)} from discovery? The Skill files remain untouched.`,
-      undefined,
-      { confirmLabel: "Remove path" },
-    )
-    if (!confirmed) return open()
+    if (root.default) return
     await save(
-      (snapshot) =>
+      (current) =>
         sdk.client.v2.skill.discovery.update(
           {
             skillDiscoveryUpdate: {
-              paths: importedPaths(snapshot.settings).filter((value) => root.kind === "url" || value !== root.value),
-              urls: configuredUrls(snapshot.settings).filter((value) => root.kind !== "url" || value !== root.value),
-              expectedRevision: snapshot.settings.revision,
+              paths: importedPaths(current.settings).filter((value) => root.kind === "url" || value !== root.value),
+              urls: configuredUrls(current.settings).filter((value) => root.kind !== "url" || value !== root.value),
+              expectedRevision: current.settings.revision,
             },
           },
           { throwOnError: true },
         ),
       "Discovery path removed",
+      true,
     )
-    open(false)
   }
 
-  const reset = async () => {
-    const current = model()
-    if (!current) return
-    const paths = importedPaths(current.settings).length
-    const urls = configuredUrls(current.settings).length
-    const confirmed = await DialogConfirm.show(
-      dialog,
-      "Reset discovery paths?",
-      `Remove ${paths} imported ${paths === 1 ? "path" : "paths"} and ${urls} configured ${urls === 1 ? "URL" : "URLs"}? Skill files and target access settings remain untouched.`,
-      undefined,
-      { confirmLabel: "Reset paths" },
-    )
-    if (!confirmed) return open()
-    await save(
-      (snapshot) =>
-        sdk.client.v2.skill.discovery.reset(
-          { skillRevisionInput: { expectedRevision: snapshot.settings.revision } },
-          { throwOnError: true },
-        ),
-      "Discovery paths reset",
-    )
-    open(false)
-  }
-
-  const showRoot = (root: SkillDiscoveryRoot) => {
-    if (root.default) {
-      toast.show({
-        title: "OpenCode default",
-        message: "Default discovery roots cannot be removed",
-        variant: "warning",
-      })
-      return
-    }
-    dialog.replace(() => (
-      <DialogSelect
-        title={rootTitle(root, home)}
-        options={[
+  const openPaths = () => {
+    dialog.push(() => (
+      <DialogSelect<string>
+        title="Skill paths · local"
+        locked={loading()}
+        preserveSelection
+        options={model() ? buildSkillPathRows(model()!.settings, home, dimensions().width) : []}
+        emptyView={<text>No matching discovery paths</text>}
+        footer={<text>enter edit · paths only</text>}
+        actions={[
           {
-            title: "Remove path from discovery",
-            description: "The Skill files remain untouched",
-            value: "remove",
+            command: "dialog.skill.path_add",
+            title: "add",
+            requiresSelection: false,
+            onTrigger: () => void editPath(),
+          },
+          {
+            command: "dialog.skill.path_remove",
+            title: "remove",
+            disabled: (option) =>
+              !option || Boolean(model()?.settings.roots.find((root) => rootKey(root) === option.value)?.default),
+            onTrigger: (option) => {
+              const root = model()?.settings.roots.find((root) => rootKey(root) === option.value)
+              if (root) void removeRoot(root)
+            },
+          },
+          {
+            command: "dialog.skill.reload",
+            title: "reload",
+            requiresSelection: false,
+            onTrigger: () => void refresh(true),
           },
         ]}
-        onSelect={() => void removeRoot(root)}
+        onSelect={(option) => void editPath(model()?.settings.roots.find((root) => rootKey(root) === option.value))}
       />
     ))
+    dialog.setSize("xlarge")
   }
 
   const showTargetAccess = (skill: SkillMetadata) => {
@@ -494,7 +411,7 @@ export function useSkillManager() {
     }
   }
 
-  const rows = createMemo(() => (model() ? buildSkillManagerRows(model()!, home) : []))
+  const rows = createMemo(() => (model() ? buildSkillManagerRows(model()!) : []))
   const skillTitle = (name: string, skill: NonNullable<ManagerRow["skill"]>) => {
     const widths = skillColumnWidths(dimensions().width)
     return `${column(name, widths.name)} ${column(skill.source, widths.source)} ${column(skill.targets, widths.targets)}`
@@ -540,16 +457,6 @@ export function useSkillManager() {
   const select = (key: string) => {
     const current = model()
     if (!current) return
-    if (key === "action:add") return void addPath()
-    if (key === "action:codex") return void addPath("codex")
-    if (key === "action:claude") return void addPath("claude")
-    if (key === "action:reload") return void refresh(true)
-    if (key === "action:reset") return void reset()
-    if (key.startsWith("root:")) {
-      const root = current.settings.roots.find((item) => rootKey(item) === key)
-      if (root) return showRoot(root)
-      return
-    }
     if (!key.startsWith("skill:")) return
     const skillID = key.slice(6)
     const skill = current.catalog.skills.find((item) => item.id === skillID)
@@ -567,7 +474,11 @@ export function useSkillManager() {
         preserveSelection
         current={anchor()}
         options={options()}
-        emptyView={<text>{loading() ? "Loading local Skill settings…" : "No Skill settings available"}</text>}
+        emptyView={
+          <text>
+            {loading() ? "Loading local Skill settings…" : "No matching Skills · open paths to manage discovery"}
+          </text>
+        }
         footer={
           model() ? (
             <text>
@@ -581,6 +492,13 @@ export function useSkillManager() {
           ) : undefined
         }
         actions={[
+          { command: "dialog.skill.paths", title: "paths", requiresSelection: false, onTrigger: openPaths },
+          {
+            command: "dialog.skill.reload",
+            title: "reload",
+            requiresSelection: false,
+            onTrigger: () => void refresh(true),
+          },
           {
             command: "dialog.skill.preview",
             title: "View",
@@ -598,6 +516,28 @@ export function useSkillManager() {
   }
 
   return { open, refresh, model }
+}
+
+export function buildSkillPathRows(
+  settings: SkillSettingsSnapshot,
+  home?: string,
+  width = 100,
+): DialogSelectOption<string>[] {
+  let imported = 0
+  return settings.roots.map((root) => {
+    const field = root.kind === "imported" ? `skills.paths.${imported++}` : root.value
+    return {
+      title: rootTitle(root, home),
+      value: rootKey(root),
+      category: root.default ? "Defaults" : root.kind === "url" ? "URL sources" : "Imported paths",
+      titleWidth: Math.max(12, Math.min(104, width - 14) - 16),
+      footer: skillRootStatus(root),
+      footerWidth: 14,
+      inspectTitle: true,
+      inspectionTitle: root.value,
+      details: settings.diagnostics.filter((item) => item.field === field).map((item) => item.message),
+    }
+  })
 }
 
 export function skillPreviewContent(detail: SkillDetail, home?: string) {
@@ -619,25 +559,14 @@ export function skillPreviewContent(detail: SkillDetail, home?: string) {
   ].join("\n")
 }
 
+function rootKey(root: SkillDiscoveryRoot) {
+  return `${root.kind}:${root.value}`
+}
+
 function rootTitle(root: SkillDiscoveryRoot, home?: string) {
   if (root.default) return `OpenCode config · ${path.basename(root.value)}`
   if (!home || (root.value !== home && !root.value.startsWith(home + path.sep))) return root.value
   return root.value === home ? "~" : `~${root.value.slice(home.length)}`
-}
-
-function rootKey(root: SkillDiscoveryRoot) {
-  return `root:${root.kind}:${root.value}`
-}
-
-function rootSourceLabel(root: SkillDiscoveryRoot, home?: string) {
-  const value = path.resolve(root.resolved ?? root.value)
-  const codex = path.resolve(process.env.CODEX_HOME?.trim() || path.join(home ?? "~", ".codex"), "skills")
-  const claude = path.resolve(path.join(home ?? "~", ".claude", "skills"))
-  if (value === codex || (path.basename(value) === "skills" && path.basename(path.dirname(value)) === ".codex"))
-    return "codex"
-  if (value === claude || (path.basename(value) === "skills" && path.basename(path.dirname(value)) === ".claude"))
-    return "claude"
-  return "others"
 }
 
 function targetScope(settings: SkillSettingsSnapshot, skillID: string): SkillTargetScope {
