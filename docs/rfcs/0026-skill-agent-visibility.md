@@ -1,7 +1,7 @@
 ---
 id: 0026
 title: Agent-scoped Skill Visibility
-status: draft
+status: accepted
 authors:
   - hammershock
 created: 2026-09-28
@@ -17,7 +17,7 @@ superseded-by: []
 
 ## 状态与动机
 
-本文是 issue [#706](https://github.com/hammershock/opencode-transit/issues/706) 的设计草案，尚未接受或实现。接受后扩展 RFC-0012 的配置、过滤与管理契约；其他 Skill discovery、invocation、历史与同步规则保持其原有权威。
+本文是 issue [#706](https://github.com/hammershock/opencode-transit/issues/706) 的已接受设计，尚未实现。维护者接受时明确要求 `/skills` 仅展示 Agent 名称，TUI 添加 Agent 必须拒绝重名。本文扩展 RFC-0012 的配置、过滤与管理契约；其他 Skill discovery、invocation、历史与同步规则保持其原有权威。
 
 目前 Skill manager 可以按 target 配置适用范围，运行时也会排除 Agent 的 `skill` permission 明确拒绝的条目，但用户不能在一项 Skill 上直接选择哪些 Agent 应看到它。为特定评审 subagent 准备的审稿流程因此容易进入主 Agent 或实验 Agent 的目录，增加无关上下文，也容易被误用。
 
@@ -128,7 +128,11 @@ Skill · paper-review
   View content
 ```
 
-Agent access 子视图提供 `All agents` 与可搜索 checklist，标明 primary、subagent 或 both；名字仅作显示，值为 ID。所有可由用户选择或委派的定义均可管理，不能只取“当前父 Agent 可调用”的 subagent 子集。未知／已失效 ID 保留为 `! missing`，用户可明确移除。
+Agent access 子视图提供 `All agents` 与可搜索 checklist，标明 primary、subagent 或 both。用户按 **Agent 名称**选择；ID 只作内部值，不出现在 `/skills` 的列表、选项、详情、提示或错误信息中。所有可由用户选择或委派的定义均可管理，不能只取“当前父 Agent 可调用”的 subagent 子集。未知／已失效 ID 保留为不可用选项，有已知名称则显示名称，否则显示 `Unavailable Agent`，用户可明确移除；不得用 ID 或其缩写补位。
+
+TUI 添加 Agent 时必须检查显示名称唯一性，覆盖 primary 与 subagent，包括 built-in 与 hidden 定义。名称以 NFKC 规范化、去掉首尾空白并忽略大小写后比较；重名则保留输入并拒绝创建，说明名称已存在。后端定义写入在既有 catalog lock 内重复校验，避免并发添加和直接 API 绕过。编辑改名也遵循同一规则，排除正在编辑的自身 ID。删除后的名字可以重新使用，但新定义不得复用旧 identity。
+
+已有文件或配置中的重名不自动改名或删除。`/skills` 可用来源标签提示歧义；不能明确区分时禁用歧义选项并提示先改名，不能退回显示 ID 或按顺序选择。已保存策略保持不变。
 
 内部 title／summary／compaction 等 maintenance 定义不作为普通用户选项；自定义的 hidden subagent 不仅因 hidden 就被遗漏。已保存但不在当前 Location 目录中的 ID 仍保留并解释，不能自动清理或勾选替代项。
 
@@ -172,9 +176,10 @@ scope 只使用 controller 配置，不增加 Rexd 协议、目标端配置或 S
 6. Agent 删除／禁用／同名重建、未知 ID、同 ID 恢复、project 定义及兼容 identity 变化有回归覆盖。
 7. 保存不 reload；re-enter 和用户 Reload 应用变更；Agent switch 不重复扫描；收紧阻止新加载，扩大不越过 admission；历史正文不被删除。
 8. 非法配置、不可读设置、候选加载失败、并发 CAS、JSONC 保留及 discovery reset 有失败路径测试。
-9. manager 在窄／默认／宽终端可用，primary/subagent/both 可辨识；未知项、取消、保存冲突与 selection 保留有 TUI 证据。
-10. local 与 Rexd target 的策略交集通过合同测试；没有新增控制端执行或远程传输旁路。
-11. 公共生成产物一致，相关 package 的 `bun typecheck` 及行为测试通过。
-12. 从干净的准确 PR head 构建 Mac candidate，交付二进制及 `opencode-transit.build.json`，用隔离配置验证 primary／reviewer 子 Session 的真实目录与拒绝行为，并提供 TUI 截图或录屏。默认不安装、不覆盖系统二进制。
+9. manager 在窄／默认／宽终端可用，primary/subagent/both 可辨识；按名称选择，所有 Agent 展示与错误均不泄漏 ID。未知项、旧重名、取消、保存冲突与 selection 保留有 TUI 证据。
+10. TUI 创建及后端写入拒绝同名 Agent，包括 primary 名称、大小写／空白／Unicode 等价名称与并发添加；编辑自身同名允许，改为其他定义的名称拒绝；拒绝不写入文件或配置。
+11. local 与 Rexd target 的策略交集通过合同测试；没有新增控制端执行或远程传输旁路。
+12. 公共生成产物一致，相关 package 的 `bun typecheck` 及行为测试通过。
+13. 从干净的准确 PR head 构建 Mac candidate，交付二进制及 `opencode-transit.build.json`，用隔离配置验证 primary／reviewer 子 Session 的真实目录与拒绝行为，并提供 TUI 截图或录屏。默认不安装、不覆盖系统二进制。
 
 按 testing workflow，本变更不涉及 sync、Windows 路径或 transport 实现，Windows 非默认必测项。若实现扩大到 Rexd transport/materialization 或平台相关代码，则增加相应真实 target／平台验收，不能以 Mac 通过推断其他平台通过。文档草案本身只需格式、链接与契约检查。
