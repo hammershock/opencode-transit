@@ -7,7 +7,7 @@ import type {
   SkillSettingsSnapshot,
   SkillTargetScope,
   SkillAgentScope,
-  AgentV2Info,
+  AgentCatalogEntry,
 } from "@opencode-ai/sdk/v2"
 import { normalizeName } from "@opencode-ai/core/util/normalize-name"
 import { TextAttributes } from "@opentui/core"
@@ -38,7 +38,7 @@ type SkillProperty = "Source" | "Targets" | "Agents"
 const skillProperties: readonly SkillProperty[] = ["Source", "Targets", "Agents"]
 
 type SkillManagerTarget = { readonly id: string; readonly name: string }
-type SkillManagerAgent = Pick<AgentV2Info, "id" | "name" | "mode" | "hidden">
+type SkillManagerAgent = AgentCatalogEntry
 
 type SkillManagerModel = {
   readonly settings: SkillSettingsSnapshot
@@ -190,7 +190,7 @@ export function useSkillManager(input?: {
         { throwOnError: true },
       ),
       sdk.client.v2.target.list({ throwOnError: true }),
-      sdk.client.v2.agent.list(
+      sdk.client.v2.agent.catalog(
         { location: input?.location() ?? { directory: sdk.directory ?? location.directory } },
         { throwOnError: true },
       ),

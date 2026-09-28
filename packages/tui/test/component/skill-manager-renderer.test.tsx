@@ -197,6 +197,41 @@ test("Agent name checklist saves explicitly and cancellation preserves settings 
   }
 })
 
+test("reopening Skills shows renamed management labels and preserves the checked identity", async () => {
+  await using tmp = await tmpdir()
+  const mounted = await mount(tmp.path)
+  const app = mounted.app
+  try {
+    await waitFor(app, () => app.captureCharFrame().includes("review"))
+    const initial = await mounted.settings.load()
+    await mounted.settings.updateAgentScope(Skill.ID.make(skillID), ["private-reviewer"], initial.revision)
+    app.mockInput.pressEscape()
+    mounted.control.open()
+    await waitFor(
+      app,
+      () => mounted.requests.filter((r) => new URL(r.url).pathname.endsWith("/agent/catalog")).length === 2,
+    )
+    app.mockInput.pressTab()
+    app.mockInput.pressTab()
+    app.mockInput.pressTab()
+    await waitFor(app, () => app.captureCharFrame().includes("Paper Reviewer"))
+    app.mockInput.pressEscape()
+    mounted.control.reviewerName = "paper-reviewer"
+    mounted.control.open()
+    await waitFor(app, () => app.captureCharFrame().includes("paper-reviewer"))
+    expect(app.captureCharFrame()).not.toContain("Paper Reviewer")
+    app.mockInput.pressEnter()
+    await settle(app)
+    expect(app.captureCharFrame()).toContain("[x] paper-reviewer")
+    expect(app.captureCharFrame()).not.toContain("private-reviewer")
+    expect((await mounted.settings.load()).agents?.[Skill.ID.make(skillID)]).toEqual(["private-reviewer"])
+    expect(mounted.requests.every((r) => r.method === "GET")).toBe(true)
+    expect(mounted.requests.some((r) => new URL(r.url).pathname === "/api/agent")).toBe(false)
+  } finally {
+    await mounted.destroy()
+  }
+})
+
 test("single-line properties keep the requested focus cycle and Source stays read-only", async () => {
   for (const width of [64, 100, 160]) {
     await using tmp = await tmpdir()
@@ -295,7 +330,7 @@ async function mount(root: string, width = 100, count = 1) {
   await Bun.write(path.join(configDirectory, "opencode.jsonc"), JSON.stringify({ skills: { paths: [broken] } }))
   const settings = SkillSettings.make({ directory: configDirectory, home: root })
   const requests: Request[] = []
-  const control = { open: () => {} }
+  const control = { open: () => {}, reviewerName: "Paper Reviewer" }
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request && !init ? input : new Request(input, init)
     requests.push(request)
@@ -304,11 +339,11 @@ async function mount(root: string, width = 100, count = 1) {
       return json({ data: [{ name: "completed", path: "/completed", type: "directory" }] })
     if (url.pathname.endsWith("/skill/settings/discovery"))
       return json(await settings.updateDiscovery(Skill.DiscoveryUpdate.make(await request.json())))
-    if (url.pathname.endsWith("/agent"))
+    if (url.pathname.endsWith("/agent/catalog"))
       return json({
         data: [
           { id: "private-primary", name: "Coordinator", mode: "primary", hidden: false },
-          { id: "private-reviewer", name: "Paper Reviewer", mode: "subagent", hidden: false },
+          { id: "private-reviewer", name: control.reviewerName, mode: "subagent", hidden: false },
         ],
       })
     if (url.pathname.endsWith("/agent-scope")) {

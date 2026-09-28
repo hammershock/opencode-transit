@@ -345,6 +345,8 @@ import type {
   TuiShowToastResponses,
   TuiSubmitPromptErrors,
   TuiSubmitPromptResponses,
+  V2AgentCatalogErrors,
+  V2AgentCatalogResponses,
   V2AgentListErrors,
   V2AgentListResponses,
   V2CommandListErrors,
@@ -5400,6 +5402,29 @@ export class Agent extends HeyApiClient {
     const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "location" }] }])
     return (options?.client ?? this.client).get<V2AgentListResponses, V2AgentListErrors, ThrowOnError>({
       url: "/api/agent",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List current Agent management metadata
+   *
+   * Read current configured names and identities without reloading execution state or Session context.
+   */
+  public catalog<ThrowOnError extends boolean = false>(
+    parameters?: {
+      location?: {
+        directory?: string
+        workspace?: string
+        target?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "location" }] }])
+    return (options?.client ?? this.client).get<V2AgentCatalogResponses, V2AgentCatalogErrors, ThrowOnError>({
+      url: "/api/agent/catalog",
       ...options,
       ...params,
     })

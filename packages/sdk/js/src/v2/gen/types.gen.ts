@@ -5516,6 +5516,13 @@ export type AgentV2Info = {
   permissions: PermissionV2Ruleset
 }
 
+export type AgentCatalogEntry = {
+  id: string
+  name: string
+  mode: "subagent" | "primary" | "all"
+  hidden: boolean
+}
+
 export type SessionV2Info = {
   id: string
   parentID?: string
@@ -15555,6 +15562,44 @@ export type V2AgentListResponses = {
 }
 
 export type V2AgentListResponse = V2AgentListResponses[keyof V2AgentListResponses]
+
+export type V2AgentCatalogData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+      target?: string
+    }
+  }
+  url: "/api/agent/catalog"
+}
+
+export type V2AgentCatalogErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2AgentCatalogError = V2AgentCatalogErrors[keyof V2AgentCatalogErrors]
+
+export type V2AgentCatalogResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: Array<AgentCatalogEntry>
+  }
+}
+
+export type V2AgentCatalogResponse = V2AgentCatalogResponses[keyof V2AgentCatalogResponses]
 
 export type V2SessionListData = {
   body?: never

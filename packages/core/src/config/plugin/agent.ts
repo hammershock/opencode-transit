@@ -4,6 +4,7 @@ import { define } from "../../plugin/internal"
 import path from "path"
 import { Effect, Option, Schema } from "effect"
 import { AgentV2 } from "../../agent"
+import { Agent } from "@opencode-ai/schema/agent"
 import { Config } from "../../config"
 import { ConfigAgent } from "../agent"
 import { ConfigMarkdown } from "../markdown"
@@ -52,22 +53,7 @@ export const Plugin = define({
     const global = yield* Global.Service
     yield* ctx.agent.transform(
       Effect.fn(function* (draft) {
-        const documents = yield* Effect.forEach(yield* config.entries(), (entry) => {
-          if (entry.type === "document") return Effect.succeed([entry])
-          return Effect.gen(function* () {
-            const files = yield* discover(fs, entry.path)
-            return yield* Effect.forEach(files, (file) =>
-              fs.readFileStringSafe(file.filepath).pipe(
-                Effect.map((content) => content && decode(file, content)),
-                Effect.catch(() => Effect.succeed(undefined)),
-              ),
-            ).pipe(
-              Effect.map((documents) =>
-                documents.filter((document): document is Config.Document => document !== undefined),
-              ),
-            )
-          })
-        }).pipe(Effect.map((documents) => documents.flat()))
+        const documents = yield* readDocuments(config, fs)
         const permissions = expandPermissions(
           documents.flatMap((document) => document.info.permissions ?? []),
           global.home,
@@ -117,6 +103,57 @@ export const Plugin = define({
     )
   }),
 })
+
+/** Fresh management labels; never reloads execution state or admits Session context. */
+export const catalog = Effect.fn("ConfigAgent.catalog")(function* () {
+  const config = yield* Config.Service
+  const fs = yield* FSUtil.Service
+  const agents = yield* AgentV2.Service
+  const entries = new Map<Agent.ID, Agent.CatalogEntry>(
+    (yield* agents.all()).map((agent) => [
+      agent.id,
+      { id: agent.id, name: agent.name ?? agent.id, mode: agent.mode, hidden: agent.hidden },
+    ]),
+  )
+  for (const document of yield* readDocuments(config, fs, true)) {
+    for (const [id, definition] of Object.entries(document.info.agents ?? {})) {
+      const key = AgentV2.ID.make(id)
+      if (definition.disabled) {
+        entries.delete(key)
+        continue
+      }
+      const current = entries.get(key)
+      entries.set(key, {
+        id: key,
+        name: definition.name ?? current?.name ?? id,
+        mode: definition.mode ?? current?.mode ?? "all",
+        hidden: definition.hidden ?? current?.hidden ?? false,
+      })
+    }
+  }
+  return [...entries.values()]
+})
+
+function readDocuments(config: Config.Interface, fs: FSUtil.Interface, fresh = false) {
+  return Effect.gen(function* () {
+    return yield* Effect.forEach(yield* config.entries({ fresh }), (entry) => {
+      if (entry.type === "document") return Effect.succeed([entry])
+      return Effect.gen(function* () {
+        const files = yield* discover(fs, entry.path)
+        return yield* Effect.forEach(files, (file) =>
+          fs.readFileStringSafe(file.filepath).pipe(
+            Effect.map((content) => content && decode(file, content)),
+            Effect.catch(() => Effect.succeed(undefined)),
+          ),
+        ).pipe(
+          Effect.map((documents) =>
+            documents.filter((document): document is Config.Document => document !== undefined),
+          ),
+        )
+      })
+    }).pipe(Effect.map((documents) => documents.flat()))
+  })
+}
 
 function expandPermissions(rules: PermissionV2.Ruleset, home: string): PermissionV2.Ruleset {
   // Expand only resources tools resolve as filesystem paths. Bash resources are raw shell text:

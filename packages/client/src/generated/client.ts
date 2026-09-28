@@ -4,6 +4,8 @@ import type {
   LocationGetOutput,
   AgentsListInput,
   AgentsListOutput,
+  AgentsCatalogInput,
+  AgentsCatalogOutput,
   SessionsListInput,
   SessionsListOutput,
   SessionsCreateInput,
@@ -380,6 +382,18 @@ export function make(options: ClientOptions) {
           {
             method: "GET",
             path: `/api/agent`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      catalog: (input?: AgentsCatalogInput, requestOptions?: RequestOptions) =>
+        request<AgentsCatalogOutput>(
+          {
+            method: "GET",
+            path: `/api/agent/catalog`,
             query: { location: input?.["location"] },
             successStatus: 200,
             declaredStatuses: [401, 400],

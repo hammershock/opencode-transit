@@ -37,3 +37,12 @@ export const Info = Schema.Struct({
         schema.make({ id, request: { headers: {}, body: {} }, mode: "all", hidden: false, permissions: [] }),
     })),
   )
+
+/** Management metadata, read independently of the activated execution catalog. */
+export interface CatalogEntry extends Schema.Schema.Type<typeof CatalogEntry> {}
+export const CatalogEntry = Schema.Struct({
+  id: ID,
+  name: Schema.String,
+  mode: Info.fields.mode,
+  hidden: Schema.Boolean,
+}).annotate({ identifier: "Agent.CatalogEntry" })
