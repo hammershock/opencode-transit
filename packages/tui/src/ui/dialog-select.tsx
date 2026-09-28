@@ -49,14 +49,16 @@ export interface DialogSelectProps<T> {
   renderFilter?: boolean
   locked?: boolean
   preserveSelection?: boolean
-  actions?: {
+  actions?: ({
     command: string
     title: string
     side?: "left" | "right"
     hidden?: boolean
     disabled?: boolean | ((option: DialogSelectOption<T> | undefined) => boolean)
-    onTrigger: (option: DialogSelectOption<T>) => void
-  }[]
+  } & (
+    | { requiresSelection: false; onTrigger: () => void }
+    | { requiresSelection?: true; onTrigger: (option: DialogSelectOption<T>) => void }
+  ))[]
   footerHints?: {
     title: string
     label: string
@@ -431,11 +433,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           title: item.title,
           category: "Dialog",
           run() {
-            if (props.locked) return
-            if (isActionDisabled(item)) return
-            const option = selected()
-            if (!option) return
-            item.onTrigger(option)
+            triggerAction(item)
           },
         })),
       ],
@@ -506,15 +504,16 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   const left = createMemo(() => visibleActions().filter((item) => item.side !== "right"))
   const right = createMemo(() => visibleActions().filter((item) => item.side === "right"))
 
-  function triggerAction(item: VisibleAction | undefined) {
+  function triggerAction(item: Action | VisibleAction | undefined) {
     if (props.locked) return
     if (!item || !isActionItem(item) || isActionDisabled(item)) return
+    if (item.requiresSelection === false) return item.onTrigger()
     const option = selected()
     if (!option) return
     item.onTrigger(option)
   }
 
-  function isActionItem(item: VisibleAction): item is Action & { label: string } {
+  function isActionItem<I extends Action | VisibleAction>(item: I): item is I & Action {
     return "onTrigger" in item
   }
 

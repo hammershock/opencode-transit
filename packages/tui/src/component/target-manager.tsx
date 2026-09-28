@@ -435,7 +435,7 @@ export function useTargetManager() {
           category: "Configured targets",
         }))}
         actions={[
-          { command: "dialog.target.add", title: "add", onTrigger: () => save() },
+          { command: "dialog.target.add", title: "add", requiresSelection: false, onTrigger: () => save() },
           { command: "dialog.target.refresh", title: "refresh", onTrigger: () => void refreshHealth(true) },
           { command: "dialog.target.delete", title: "delete", onTrigger: (option) => remove(option.value) },
         ]}
