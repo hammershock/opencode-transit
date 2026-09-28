@@ -88,7 +88,13 @@ const layer = Layer.effect(
                 skillID: mention.id,
                 name: mention.name,
               })
-            if (!agent.info || SkillV2.available([match.entry.metadata], agent.info).length === 0)
+            if (!agent.info || !SkillV2.agentApplicable(match.entry.metadata.agentScope, agent.id))
+              return yield* new SkillCatalogContextService.AdmissionError({
+                kind: "agent-inapplicable",
+                skillID: mention.id,
+                name: mention.name,
+              })
+            if (SkillV2.available([match.entry.metadata], agent.info).length === 0)
               return yield* new SkillCatalogContextService.AdmissionError({
                 kind: "permission-denied",
                 skillID: mention.id,

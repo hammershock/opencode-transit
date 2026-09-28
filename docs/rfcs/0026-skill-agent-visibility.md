@@ -17,7 +17,7 @@ superseded-by: []
 
 ## 状态与动机
 
-本文是 issue [#706](https://github.com/hammershock/opencode-transit/issues/706) 的已接受设计，尚未实现。维护者接受时明确要求 `/skills` 仅展示 Agent 名称，TUI 添加 Agent 必须拒绝重名。本文扩展 RFC-0012 的配置、过滤与管理契约；其他 Skill discovery、invocation、历史与同步规则保持其原有权威。
+本文是 issue [#706](https://github.com/hammershock/opencode-transit/issues/706) 的已接受设计，实现由 issue [#708](https://github.com/hammershock/opencode-transit/issues/708) 跟踪。维护者接受时明确要求 `/skills` 仅展示 Agent 名称，TUI 添加 Agent 必须拒绝重名。本文扩展 RFC-0012 的配置、过滤与管理契约；其他 Skill discovery、invocation、历史与同步规则保持其原有权威。
 
 目前 Skill manager 可以按 target 配置适用范围，运行时也会排除 Agent 的 `skill` permission 明确拒绝的条目，但用户不能在一项 Skill 上直接选择哪些 Agent 应看到它。为特定评审 subagent 准备的审稿流程因此容易进入主 Agent 或实验 Agent 的目录，增加无关上下文，也容易被误用。
 

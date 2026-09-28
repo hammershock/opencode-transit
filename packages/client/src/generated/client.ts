@@ -124,6 +124,8 @@ import type {
   SkillsDiscoveryUpdateOutput,
   SkillsDiscoveryResetInput,
   SkillsDiscoveryResetOutput,
+  SkillsAgentScopeUpdateInput,
+  SkillsAgentScopeUpdateOutput,
   SkillsTargetScopeUpdateInput,
   SkillsTargetScopeUpdateOutput,
   EventsSubscribeOutput,
@@ -1162,6 +1164,18 @@ export function make(options: ClientOptions) {
             method: "POST",
             path: `/api/skill/settings/discovery/reset`,
             body: { expectedRevision: input["expectedRevision"] },
+            successStatus: 200,
+            declaredStatuses: [409, 400, 500, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      agentScopeUpdate: (input: SkillsAgentScopeUpdateInput, requestOptions?: RequestOptions) =>
+        request<SkillsAgentScopeUpdateOutput>(
+          {
+            method: "PUT",
+            path: `/api/skill/settings/${encodeURIComponent(input.skillID)}/agent-scope`,
+            body: { scope: input["scope"], expectedRevision: input["expectedRevision"] },
             successStatus: 200,
             declaredStatuses: [409, 400, 500, 401],
             empty: false,

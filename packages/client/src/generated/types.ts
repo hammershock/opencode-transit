@@ -56,6 +56,7 @@ export type SkillMentionError = {
     | "invalid-mention"
     | "unavailable"
     | "target-inapplicable"
+    | "agent-inapplicable"
     | "permission-denied"
     | "stale-catalog"
     | "malformed"
@@ -139,7 +140,7 @@ export const isTargetNotFoundError = (value: unknown): value is TargetNotFoundEr
 
 export type SubagentMutationError = {
   readonly _tag: "SubagentMutationError"
-  readonly kind: "conflict" | "not-found" | "readonly"
+  readonly kind: "conflict" | "not-found" | "readonly" | "duplicate-name"
   readonly message: string
   readonly revision?: string | undefined
 }
@@ -190,6 +191,7 @@ export type AgentsListOutput = {
   }
   readonly data: ReadonlyArray<{
     readonly id: string
+    readonly name?: string
     readonly model?: { readonly id: string; readonly providerID: string; readonly variant?: string }
     readonly request: {
       readonly headers: { readonly [x: string]: string }
@@ -509,6 +511,7 @@ export type SessionsActivateOutput = {
         | "invalid-settings"
         | "missing-target"
         | "project-target-scope-ignored"
+        | "project-agent-scope-ignored"
         | "reload-failed"
       readonly severity: "error" | "warning"
       readonly sourceLabel: string
@@ -5513,6 +5516,7 @@ export type SkillsCatalogOutput = {
       readonly description?: string
       readonly sourceLabel: string
       readonly digest: string
+      readonly agentScope?: "*" | ReadonlyArray<string>
     }>
     readonly diagnostics: ReadonlyArray<{
       readonly kind:
@@ -5529,6 +5533,7 @@ export type SkillsCatalogOutput = {
         | "invalid-settings"
         | "missing-target"
         | "project-target-scope-ignored"
+        | "project-agent-scope-ignored"
       readonly severity: "error" | "warning"
       readonly sourceLabel: string
       readonly message: string
@@ -5567,6 +5572,7 @@ export type SkillsGetOutput = {
       readonly description?: string
       readonly sourceLabel: string
       readonly digest: string
+      readonly agentScope?: "*" | ReadonlyArray<string>
     }
     readonly location: string
     readonly content: string
@@ -5601,6 +5607,7 @@ export type SkillsReloadOutput = {
       readonly description?: string
       readonly sourceLabel: string
       readonly digest: string
+      readonly agentScope?: "*" | ReadonlyArray<string>
     }>
     readonly diagnostics: ReadonlyArray<{
       readonly kind:
@@ -5617,6 +5624,7 @@ export type SkillsReloadOutput = {
         | "invalid-settings"
         | "missing-target"
         | "project-target-scope-ignored"
+        | "project-agent-scope-ignored"
       readonly severity: "error" | "warning"
       readonly sourceLabel: string
       readonly message: string
@@ -5638,6 +5646,7 @@ export type SkillsSettingsOutput = {
     readonly status: "ready" | "undetected" | "unavailable" | "configured"
   }>
   readonly targets: { readonly [x: string]: "*" | ReadonlyArray<"local" | string> }
+  readonly agents?: { readonly [x: string]: "*" | ReadonlyArray<string> }
   readonly diagnostics: ReadonlyArray<{
     readonly kind: "invalid-config" | "invalid-path" | "invalid-url" | "duplicate-root" | "missing-target"
     readonly severity: "error" | "warning"
@@ -5678,6 +5687,7 @@ export type SkillsDiscoveryUpdateOutput = {
     readonly status: "ready" | "undetected" | "unavailable" | "configured"
   }>
   readonly targets: { readonly [x: string]: "*" | ReadonlyArray<"local" | string> }
+  readonly agents?: { readonly [x: string]: "*" | ReadonlyArray<string> }
   readonly diagnostics: ReadonlyArray<{
     readonly kind: "invalid-config" | "invalid-path" | "invalid-url" | "duplicate-root" | "missing-target"
     readonly severity: "error" | "warning"
@@ -5704,6 +5714,39 @@ export type SkillsDiscoveryResetOutput = {
     readonly status: "ready" | "undetected" | "unavailable" | "configured"
   }>
   readonly targets: { readonly [x: string]: "*" | ReadonlyArray<"local" | string> }
+  readonly agents?: { readonly [x: string]: "*" | ReadonlyArray<string> }
+  readonly diagnostics: ReadonlyArray<{
+    readonly kind: "invalid-config" | "invalid-path" | "invalid-url" | "duplicate-root" | "missing-target"
+    readonly severity: "error" | "warning"
+    readonly field: string
+    readonly message: string
+    readonly skillID?: string
+    readonly targetID?: string
+  }>
+  readonly valid: boolean
+}
+
+export type SkillsAgentScopeUpdateInput = {
+  readonly skillID: { readonly skillID: string }["skillID"]
+  readonly scope: { readonly scope: "*" | ReadonlyArray<string>; readonly expectedRevision: string }["scope"]
+  readonly expectedRevision: {
+    readonly scope: "*" | ReadonlyArray<string>
+    readonly expectedRevision: string
+  }["expectedRevision"]
+}
+
+export type SkillsAgentScopeUpdateOutput = {
+  readonly path: string
+  readonly revision: string
+  readonly roots: ReadonlyArray<{
+    readonly kind: "opencode-global" | "imported" | "url"
+    readonly value: string
+    readonly resolved?: string
+    readonly default: boolean
+    readonly status: "ready" | "undetected" | "unavailable" | "configured"
+  }>
+  readonly targets: { readonly [x: string]: "*" | ReadonlyArray<"local" | string> }
+  readonly agents?: { readonly [x: string]: "*" | ReadonlyArray<string> }
   readonly diagnostics: ReadonlyArray<{
     readonly kind: "invalid-config" | "invalid-path" | "invalid-url" | "duplicate-root" | "missing-target"
     readonly severity: "error" | "warning"
@@ -5735,6 +5778,7 @@ export type SkillsTargetScopeUpdateOutput = {
     readonly status: "ready" | "undetected" | "unavailable" | "configured"
   }>
   readonly targets: { readonly [x: string]: "*" | ReadonlyArray<"local" | string> }
+  readonly agents?: { readonly [x: string]: "*" | ReadonlyArray<string> }
   readonly diagnostics: ReadonlyArray<{
     readonly kind: "invalid-config" | "invalid-path" | "invalid-url" | "duplicate-root" | "missing-target"
     readonly severity: "error" | "warning"

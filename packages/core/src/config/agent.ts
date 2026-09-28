@@ -11,6 +11,7 @@ export const Color = Schema.Union([
 ])
 
 export class Info extends Schema.Class<Info>("ConfigV2.Agent")({
+  name: Schema.String.pipe(Schema.optional),
   model: Schema.String.pipe(Schema.optional),
   variant: Schema.String.pipe(Schema.optional),
   request: ConfigProvider.Request.pipe(Schema.optional),

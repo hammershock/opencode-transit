@@ -757,13 +757,25 @@ const Endpoint12_6 = (raw: RawClient["server.skill"]) => (input: Endpoint12_6Inp
     Effect.mapError(mapClientError),
   )
 
-type Endpoint12_7Request = Parameters<RawClient["server.skill"]["skill.targetScopeUpdate"]>[0]
+type Endpoint12_7Request = Parameters<RawClient["server.skill"]["skill.agentScopeUpdate"]>[0]
 type Endpoint12_7Input = {
   readonly skillID: Endpoint12_7Request["params"]["skillID"]
   readonly scope: Endpoint12_7Request["payload"]["scope"]
   readonly expectedRevision: Endpoint12_7Request["payload"]["expectedRevision"]
 }
 const Endpoint12_7 = (raw: RawClient["server.skill"]) => (input: Endpoint12_7Input) =>
+  raw["skill.agentScopeUpdate"]({
+    params: { skillID: input["skillID"] },
+    payload: { scope: input["scope"], expectedRevision: input["expectedRevision"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint12_8Request = Parameters<RawClient["server.skill"]["skill.targetScopeUpdate"]>[0]
+type Endpoint12_8Input = {
+  readonly skillID: Endpoint12_8Request["params"]["skillID"]
+  readonly scope: Endpoint12_8Request["payload"]["scope"]
+  readonly expectedRevision: Endpoint12_8Request["payload"]["expectedRevision"]
+}
+const Endpoint12_8 = (raw: RawClient["server.skill"]) => (input: Endpoint12_8Input) =>
   raw["skill.targetScopeUpdate"]({
     params: { skillID: input["skillID"] },
     payload: { scope: input["scope"], expectedRevision: input["expectedRevision"] },
@@ -777,7 +789,8 @@ const adaptGroup12 = (raw: RawClient["server.skill"]) => ({
   settings: Endpoint12_4(raw),
   discoveryUpdate: Endpoint12_5(raw),
   discoveryReset: Endpoint12_6(raw),
-  targetScopeUpdate: Endpoint12_7(raw),
+  agentScopeUpdate: Endpoint12_7(raw),
+  targetScopeUpdate: Endpoint12_8(raw),
 })
 
 const Endpoint13_0 = (raw: RawClient["server.event"]) => () =>

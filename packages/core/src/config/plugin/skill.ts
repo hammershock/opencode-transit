@@ -43,6 +43,13 @@ export const Plugin = define({
               sourceLabel: "Project config",
               message: "Project Skill target scopes are ignored because target IDs are device-local",
             })
+          if (skills.agents)
+            draft.diagnostic({
+              kind: "project-agent-scope-ignored",
+              severity: "warning",
+              sourceLabel: "Project config",
+              message: "Project Skill Agent scopes are ignored; configure them in the controller Skill manager",
+            })
           return [...(skills.paths ?? []), ...(skills.urls ?? [])].map((value) => ({
             value,
             path: entry.path,

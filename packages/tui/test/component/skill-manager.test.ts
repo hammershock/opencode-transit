@@ -3,6 +3,8 @@ import {
   buildSkillManagerRows,
   buildSkillPathRows,
   skillRootStatus,
+  skillAgentChoices,
+  skillAgentsLabel,
   skillPreviewContent,
   skillScopeLabel,
   skillSourceLabel,
@@ -84,6 +86,29 @@ describe("Skill Manager presentation", () => {
     expect(skillSourceLabel("Imported · abcdef12")).toBe("others")
   })
 
+  test("selects by names without exposing IDs and blocks ambiguous existing names", () => {
+    const agents = [
+      { id: "agent-private-1", name: "Paper Reviewer", mode: "subagent" as const, hidden: false },
+      { id: "agent-private-2", name: "Coordinator", mode: "primary" as const, hidden: false },
+      { id: "agent-private-3", name: "  ＰＡＰＥＲ Reviewer  ", mode: "subagent" as const, hidden: true },
+    ]
+    const scope = ["agent-private-1", "agent-deleted"]
+    expect(skillAgentsLabel(scope, agents)).toBe("Paper Reviewer, Unavailable Agent")
+    const choices = skillAgentChoices(scope, agents)
+    expect(choices.find((choice) => choice.value === "agent-private-1")).toMatchObject({ blocked: true })
+    expect(choices.find((choice) => choice.value === "agent-private-2")).toMatchObject({
+      blocked: false,
+      category: "Primary agents",
+    })
+    expect(choices.find((choice) => choice.value === "agent-deleted")).toMatchObject({ title: "[x] Unavailable Agent" })
+    for (const choice of choices) expect(`${choice.title} ${choice.description}`).not.toContain(choice.value)
+    const current = model()
+    expect(
+      buildSkillManagerRows({ ...current, settings: { ...current.settings, agents: { [firstID]: [] } } })[0]?.skill
+        ?.state,
+    ).toBe("inactive")
+  })
+
   test("switches from future-inclusive access to an explicit checklist", () => {
     expect(toggleSkillTargetScope("*", "local", ["local", "configured-target"])).toEqual(["configured-target"])
     expect(toggleSkillTargetScope(["local"], "configured-target")).toEqual(["local", "configured-target"])
@@ -102,7 +127,7 @@ describe("Skill Manager presentation", () => {
     expect(rows.filter((row) => row.title === "review")).toEqual([
       expect.objectContaining({
         skill: { source: "opencode", targets: "all", state: "active" },
-        details: [expect.stringContaining("Duplicate")],
+        details: [expect.stringContaining("Duplicate"), "Agents: all"],
       }),
       expect.objectContaining({ skill: { source: "others", targets: "local", state: "active" } }),
     ])

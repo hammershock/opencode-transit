@@ -6,7 +6,10 @@ import type {
   SkillRegistrySnapshot,
   SkillSettingsSnapshot,
   SkillTargetScope,
+  SkillAgentScope,
+  AgentV2Info,
 } from "@opencode-ai/sdk/v2"
+import { normalizeName } from "@opencode-ai/core/util/normalize-name"
 import { TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo, createSignal } from "solid-js"
@@ -32,6 +35,7 @@ const skillPreviewCommands = {
 }
 
 type SkillManagerTarget = { readonly id: string; readonly name: string }
+type SkillManagerAgent = Pick<AgentV2Info, "id" | "name" | "mode" | "hidden">
 
 type SkillManagerModel = {
   readonly settings: SkillSettingsSnapshot
@@ -39,6 +43,8 @@ type SkillManagerModel = {
   readonly targets: readonly SkillManagerTarget[]
   readonly catalogError?: string
   readonly targetError?: string
+  readonly agents?: readonly SkillManagerAgent[]
+  readonly agentError?: string
 }
 
 type ManagerRow = {
@@ -117,19 +123,67 @@ export function buildSkillManagerRows(model: SkillManagerModel): ManagerRow[] {
         return {
           key: `skill:${skill.id}`,
           title: skill.name,
-          details: duplicateNames.has(skill.name) ? ["Duplicate name · source identity is preserved"] : undefined,
+          details: [
+            ...(duplicateNames.has(skill.name) ? ["Duplicate name · source identity is preserved"] : []),
+            `Agents: ${skillAgentsLabel(agentScope(model.settings, skill.id), model.agents ?? [])}`,
+          ],
           category: "Skills",
           skill: {
             source: skillSourceLabel(skill.sourceLabel),
             targets: skillTargetsLabel(scope, model.targets),
-            state: scope === "*" || scope.length > 0 ? ("active" as const) : ("inactive" as const),
+            state:
+              (scope === "*" || scope.length > 0) && agentScope(model.settings, skill.id).length !== 0
+                ? ("active" as const)
+                : ("inactive" as const),
           },
         }
       }),
   ]
 }
 
-export function useSkillManager() {
+export function skillAgentsLabel(scope: SkillAgentScope | undefined, agents: readonly SkillManagerAgent[]) {
+  if (scope === undefined || scope === "*") return "all"
+  if (scope.length === 0) return "none"
+  return scope.map((id) => agents.find((agent) => agent.id === id)?.name || "Unavailable Agent").join(", ")
+}
+
+export function skillAgentChoices(scope: SkillAgentScope, agents: readonly SkillManagerAgent[]) {
+  const visible = agents.filter((agent) => !["compaction", "title", "summary"].includes(agent.id))
+  const choices = visible
+    .toSorted((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
+    .map((agent) => ({
+      value: agent.id,
+      title: `${scope === "*" || scope.includes(agent.id) ? "[x]" : "[ ]"} ${agent.name || "Unnamed Agent"}`,
+      category:
+        agent.mode === "primary" ? "Primary agents" : agent.mode === "subagent" ? "Subagents" : "Primary and subagent",
+      blocked:
+        !agent.name ||
+        visible.some(
+          (other) => other.id !== agent.id && normalizeName(other.name ?? "") === normalizeName(agent.name ?? ""),
+        ),
+    }))
+  return [
+    ...choices.map((choice) => ({
+      ...choice,
+      description: choice.blocked ? "Name is ambiguous · rename the Agent first" : undefined,
+    })),
+    ...(scope === "*"
+      ? []
+      : scope
+          .filter((id) => !visible.some((agent) => agent.id === id))
+          .map((id) => ({
+            value: id,
+            title: "[x] Unavailable Agent",
+            description: "Name unavailable · saved selection retained",
+            category: "Unavailable",
+            blocked: false,
+          }))),
+  ]
+}
+
+export function useSkillManager(input?: {
+  location: () => { directory: string; target?: string; workspace?: string } | undefined
+}) {
   const dialog = useDialog()
   const sdk = useSDK()
   const toast = useToast()
@@ -143,12 +197,16 @@ export function useSkillManager() {
   const read = async (force: boolean) => {
     const settings = await sdk.client.v2.skill.settings({ throwOnError: true })
     const location = { directory: path.dirname(settings.data.path) }
-    const [catalog, targets] = await Promise.allSettled([
+    const [catalog, targets, agents] = await Promise.allSettled([
       sdk.client.v2.skill.catalog(
         { location, forceReload: force ? "true" : "false", includeInactive: "true" },
         { throwOnError: true },
       ),
       sdk.client.v2.target.list({ throwOnError: true }),
+      sdk.client.v2.agent.list(
+        { location: input?.location() ?? { directory: sdk.directory ?? location.directory } },
+        { throwOnError: true },
+      ),
     ])
     return {
       settings: settings.data,
@@ -162,6 +220,8 @@ export function useSkillManager() {
           : [],
       ...(catalog.status === "rejected" ? { catalogError: errorMessage(catalog.reason) } : {}),
       ...(targets.status === "rejected" ? { targetError: errorMessage(targets.reason) } : {}),
+      agents: agents.status === "fulfilled" ? agents.value.data.data : [],
+      ...(agents.status === "rejected" ? { agentError: "Agent names could not be loaded" } : {}),
     } satisfies SkillManagerModel
   }
 
@@ -174,6 +234,7 @@ export function useSkillManager() {
       if (next.catalogError)
         toast.show({ title: "Skill catalog unavailable", message: next.catalogError, variant: "warning" })
       if (next.targetError) toast.show({ title: "Targets unavailable", message: next.targetError, variant: "warning" })
+      if (next.agentError) toast.show({ title: "Agents unavailable", message: next.agentError, variant: "warning" })
       if (force)
         toast.show({
           title: previous && previous !== next.catalog.digest ? "Skill catalog changed" : "Skill catalog unchanged",
@@ -190,7 +251,7 @@ export function useSkillManager() {
 
   const save = async (operation: (current: SkillManagerModel) => Promise<unknown>, title: string, rescan = false) => {
     const current = model()
-    if (!current || loading()) return
+    if (!current || loading()) return false
     setLoading(true)
     try {
       await operation(current)
@@ -201,10 +262,12 @@ export function useSkillManager() {
         message: next.catalogError ?? "Saved locally · /context reload updates an open Session",
         variant: next.catalogError ? "warning" : "success",
       })
+      return true
     } catch (error) {
       toast.show({ title: "Skill settings not saved", message: errorMessage(error), variant: "error" })
       const latest = await read(false).catch(() => undefined)
       if (latest) setModel(latest)
+      return false
     } finally {
       setLoading(false)
     }
@@ -338,16 +401,18 @@ export function useSkillManager() {
     const apply = () => {
       if (loading()) return
       void save(
-        (snapshot) =>
+        () =>
           sdk.client.v2.skill.targetScope.update(
             {
               skillID: skill.id,
-              skillTargetScopeUpdate: { scope: scope(), expectedRevision: snapshot.settings.revision },
+              skillTargetScopeUpdate: { scope: scope(), expectedRevision: current.settings.revision },
             },
             { throwOnError: true },
           ),
         "Target access saved",
-      ).then(() => open(false))
+      ).then((saved) => {
+        if (saved) open(false)
+      })
     }
     const options = createMemo(() => [
       {
@@ -380,6 +445,68 @@ export function useSkillManager() {
       />
     )
     dialog.replace(Content)
+    dialog.setSize("large")
+  }
+
+  const showAgentAccess = (skill: SkillMetadata) => {
+    const current = model()
+    if (!current) return
+    if (current.agentError) {
+      toast.show({ title: "Agents unavailable", message: current.agentError, variant: "warning" })
+      return
+    }
+    const [scope, setScope] = createSignal<SkillAgentScope>(agentScope(current.settings, skill.id))
+    const choices = createMemo(() => skillAgentChoices(scope(), current.agents ?? []))
+    const toggle = (value: string) => {
+      if (value === "*") return setScope((value) => (value === "*" ? [] : "*"))
+      if (choices().find((choice) => choice.value === value)?.blocked) {
+        toast.show({ message: "Rename the Agent to a unique name before selecting it", variant: "warning" })
+        return
+      }
+      setScope((scope) =>
+        toggleSkillTargetScope(
+          scope,
+          value,
+          choices().map((choice) => choice.value),
+        ),
+      )
+    }
+    const apply = () => {
+      if (loading()) return
+      void save(
+        () =>
+          sdk.client.v2.skill.agentScope.update(
+            {
+              skillID: skill.id,
+              skillAgentScopeUpdate: { scope: scope(), expectedRevision: current.settings.revision },
+            },
+            { throwOnError: true },
+          ),
+        "Agent access saved",
+      ).then((saved) => {
+        if (saved) open(false)
+      })
+    }
+    dialog.replace(() => (
+      <DialogSelect<string>
+        title={`Agent access · ${skill.name}`}
+        preserveSelection
+        locked={loading()}
+        options={[
+          {
+            title: `${scope() === "*" ? "[x]" : "[ ]"} All agents`,
+            description: "Includes future Agents",
+            value: "*",
+            category: "Scope",
+          },
+          ...choices(),
+        ]}
+        footer={<TargetAccessFooter onConfirm={apply} />}
+        onSelect={(option) => toggle(option.value)}
+        onToggle={(option) => toggle(option.value)}
+        onConfirm={apply}
+      />
+    ))
     dialog.setSize("large")
   }
 
@@ -461,7 +588,31 @@ export function useSkillManager() {
     const skillID = key.slice(6)
     const skill = current.catalog.skills.find((item) => item.id === skillID)
     if (!skill) return
-    showTargetAccess(skill)
+    dialog.replace(() => (
+      <DialogSelect<string>
+        title={`Skill · ${skill.name}`}
+        renderFilter={false}
+        options={[
+          {
+            title: "Target access",
+            description: skillTargetsLabel(targetScope(current.settings, skill.id), current.targets),
+            value: "targets",
+          },
+          {
+            title: "Agent access",
+            description: skillAgentsLabel(agentScope(current.settings, skill.id), current.agents ?? []),
+            value: "agents",
+          },
+          { title: "View content", value: "content" },
+        ]}
+        onSelect={(option) => {
+          if (option.value === "targets") return showTargetAccess(skill)
+          if (option.value === "agents") return showAgentAccess(skill)
+          void showSkillPreview(key)
+        }}
+      />
+    ))
+    dialog.setSize("large")
   }
 
   function open(load = true) {
@@ -574,6 +725,13 @@ function targetScope(settings: SkillSettingsSnapshot, skillID: string): SkillTar
   if (value === "*") return value
   if (Array.isArray(value) && value.every((target) => typeof target === "string")) return value
   return "*"
+}
+
+function agentScope(settings: SkillSettingsSnapshot, skillID: string): SkillAgentScope {
+  const value = settings.agents?.[skillID]
+  if (value === undefined || value === "*") return "*"
+  if (Array.isArray(value) && value.every((agent) => typeof agent === "string")) return value
+  return []
 }
 
 function importedPaths(settings: SkillSettingsSnapshot) {

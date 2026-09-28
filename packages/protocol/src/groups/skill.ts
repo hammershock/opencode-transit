@@ -101,6 +101,16 @@ export const SkillGroup = HttpApiGroup.make("server.skill")
     ),
   )
   .add(
+    HttpApiEndpoint.put("skill.agentScopeUpdate", "/api/skill/settings/:skillID/agent-scope", {
+      params: { skillID: Skill.ID },
+      payload: Skill.AgentScopeUpdate,
+      success: Skill.SettingsSnapshot,
+      error: mutationErrors,
+    }).annotateMerge(
+      OpenApi.annotations({ identifier: "v2.skill.agentScope.update", summary: "Set Skill Agent availability" }),
+    ),
+  )
+  .add(
     HttpApiEndpoint.put("skill.targetScopeUpdate", "/api/skill/settings/:skillID/target-scope", {
       params: { skillID: Skill.ID },
       payload: Skill.TargetScopeUpdate,

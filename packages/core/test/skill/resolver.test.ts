@@ -62,6 +62,7 @@ describe("SkillResolver", () => {
     const first = entry("1")
     let current: SkillV2.Lookup = { status: "available", entry: first }
     let denied = false
+    let excludeSecond = false
     let reads = 0
     const layer = AppNodeBuilder.build(LayerNode.group([Database.node, SkillResolver.node]), [
       [
@@ -80,7 +81,18 @@ describe("SkillResolver", () => {
       [
         SkillV2.node,
         Layer.mock(SkillV2.Service, {
-          lookup: () => Effect.succeed(current),
+          lookup: (id) =>
+            Effect.succeed(
+              id === first.metadata.id
+                ? current
+                : {
+                    status: "available",
+                    entry: {
+                      ...entry("2"),
+                      metadata: { ...entry("2").metadata, agentScope: excludeSecond ? ["reviewer"] : "*" },
+                    },
+                  },
+            ),
         }),
       ],
       [
@@ -132,6 +144,10 @@ describe("SkillResolver", () => {
         "ambiguous_skill",
       )
 
+      excludeSecond = true
+      expect((yield* resolver.resolveName({ sessionID, agent: agentID, name: "review" })).entry.metadata.id).toBe(
+        first.metadata.id,
+      )
       yield* replace([first.metadata])
       denied = true
       expect((yield* Effect.flip(resolver.resolveName({ sessionID, agent: agentID, name: "review" }))).kind).toBe(
@@ -139,6 +155,11 @@ describe("SkillResolver", () => {
       )
 
       denied = false
+      current = { status: "available", entry: { ...first, metadata: { ...first.metadata, agentScope: ["reviewer"] } } }
+      expect((yield* Effect.flip(resolver.resolveName({ sessionID, agent: agentID, name: "review" }))).kind).toBe(
+        "skill_inapplicable",
+      )
+      expect(reads).toBe(1)
       expect((yield* Effect.flip(resolver.resolveName({ sessionID, agent: agentID, name: "missing" }))).kind).toBe(
         "not_admitted",
       )

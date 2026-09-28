@@ -91,6 +91,9 @@ test("separates path editing and reload from target scope saves", async () => {
       await Bun.write(`${process.env.SKILL_UI_EVIDENCE}/skills.txt`, app.captureCharFrame())
     app.mockInput.pressEnter()
     await settle(app)
+    expect(app.captureCharFrame()).toContain("Skill · review")
+    app.mockInput.pressEnter()
+    await settle(app)
     expect(app.captureCharFrame()).toContain("Target access · review")
     const reloads = mounted.requests.filter(
       (request) => new URL(request.url).searchParams.get("forceReload") === "true",
@@ -144,6 +147,56 @@ test("paths stay usable at narrow, default and wide widths, including an empty s
   }
 })
 
+test("Agent name checklist saves explicitly and cancellation preserves settings at all widths", async () => {
+  for (const width of [64, 100, 160]) {
+    await using tmp = await tmpdir()
+    const mounted = await mount(tmp.path, width)
+    const app = mounted.app
+    try {
+      await waitFor(app, () => app.captureCharFrame().includes("review"))
+      app.mockInput.pressEnter()
+      await settle(app)
+      app.mockInput.pressArrow("down")
+      app.mockInput.pressEnter()
+      await settle(app)
+      expect(app.captureCharFrame()).toContain("Agent access · review")
+      expect(app.captureCharFrame()).toContain("Coordinator")
+      expect(app.captureCharFrame()).toContain("Paper Reviewer")
+      expect(app.captureCharFrame()).not.toContain("private-")
+      if (process.env.SKILL_UI_EVIDENCE)
+        await Bun.write(`${process.env.SKILL_UI_EVIDENCE}/agents-${width}.txt`, app.captureCharFrame())
+      app.mockInput.pressKey(" ")
+      app.mockInput.pressEscape()
+      await settle(app)
+      expect(mounted.requests.filter((request) => request.method === "PUT")).toHaveLength(0)
+      // Reopen from the manager; the cancelled selection was not saved.
+      mounted.control.open()
+      await waitFor(app, () => app.captureCharFrame().includes("Manage skills"))
+      app.mockInput.pressEnter()
+      await settle(app)
+      app.mockInput.pressArrow("down")
+      app.mockInput.pressEnter()
+      await settle(app)
+      app.mockInput.pressKey(" ")
+      await app.mockInput.typeText("Paper")
+      await settle(app)
+      app.mockInput.pressKey(" ")
+      await settle(app)
+      app.mockInput.pressEnter()
+      await waitFor(app, () =>
+        mounted.requests.some((request) => new URL(request.url).pathname.endsWith("/agent-scope")),
+      )
+      await settle(app)
+      expect((await mounted.settings.load()).agents?.[Skill.ID.make(skillID)]).toEqual(["private-reviewer"])
+      expect(mounted.requests.some((request) => new URL(request.url).searchParams.get("forceReload") === "true")).toBe(
+        false,
+      )
+    } finally {
+      await mounted.destroy()
+    }
+  }
+})
+
 async function mount(root: string, width = 100) {
   const state = path.join(root, "state")
   const configDirectory = path.join(root, "config")
@@ -155,6 +208,7 @@ async function mount(root: string, width = 100) {
   await Bun.write(path.join(configDirectory, "opencode.jsonc"), JSON.stringify({ skills: { paths: [broken] } }))
   const settings = SkillSettings.make({ directory: configDirectory, home: root })
   const requests: Request[] = []
+  const control = { open: () => {} }
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request && !init ? input : new Request(input, init)
     requests.push(request)
@@ -163,6 +217,17 @@ async function mount(root: string, width = 100) {
       return json({ data: [{ name: "completed", path: "/completed", type: "directory" }] })
     if (url.pathname.endsWith("/skill/settings/discovery"))
       return json(await settings.updateDiscovery(Skill.DiscoveryUpdate.make(await request.json())))
+    if (url.pathname.endsWith("/agent"))
+      return json({
+        data: [
+          { id: "private-primary", name: "Coordinator", mode: "primary", hidden: false },
+          { id: "private-reviewer", name: "Paper Reviewer", mode: "subagent", hidden: false },
+        ],
+      })
+    if (url.pathname.endsWith("/agent-scope")) {
+      const input = await request.json()
+      return json(await settings.updateAgentScope(Skill.ID.make(skillID), input.scope, input.expectedRevision))
+    }
     if (url.pathname.endsWith("/target-scope")) {
       const input = await request.json()
       return json(await settings.updateTargetScope(Skill.ID.make(skillID), input.scope, input.expectedRevision))
@@ -188,7 +253,10 @@ async function mount(root: string, width = 100) {
     onCleanup(unregister)
     function OpenDialog() {
       const manager = useSkillManager()
-      onMount(() => manager.open())
+      onMount(() => {
+        control.open = () => manager.open()
+        manager.open()
+      })
       return null
     }
     return (
@@ -223,7 +291,7 @@ async function mount(root: string, width = 100) {
     kittyKeyboard: true,
     useThread: false,
   })
-  return { ...rendered, requests, settings, broken }
+  return { ...rendered, requests, settings, broken, control }
 }
 
 async function settle(app: Awaited<ReturnType<typeof testRenderExclusive>>["app"]) {

@@ -599,7 +599,12 @@ const layer = Layer.effect(
               const resolved = yield* Effect.gen(function* () {
                 const skills = yield* SkillV2.Service
                 const current = yield* skills.catalog()
-                const resolved = SkillSlashCompatibility.resolve(input, current.snapshot.skills)
+                const agents = yield* AgentV2.Service
+                const selection = yield* agents.select(session.agent)
+                const resolved = SkillSlashCompatibility.resolve(
+                  input,
+                  selection.info ? SkillV2.available(current.snapshot.skills, selection.info) : [],
+                )
                 if (resolved instanceof SkillSlashCompatibility.Error) return yield* resolved
                 return resolved
               }).pipe(Effect.provide(locations.get(location)))

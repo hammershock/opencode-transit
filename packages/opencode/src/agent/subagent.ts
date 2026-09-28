@@ -22,6 +22,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import matter from "gray-matter"
 import fs from "fs/promises"
 import path from "path"
+import { normalizeName } from "@opencode-ai/core/util/normalize-name"
 
 const Source = Schema.Literals(["builtin", "global", "compatibility"])
 const Effective = Schema.Literals(["active", "inactive"])
@@ -97,6 +98,10 @@ export class ReadonlyError extends Schema.TaggedErrorClass<ReadonlyError>()("Sub
   id: Schema.String,
 }) {}
 
+export class DuplicateNameError extends Schema.TaggedErrorClass<DuplicateNameError>()("SubagentDuplicateNameError", {
+  name: Schema.String,
+}) {}
+
 export interface Interface {
   readonly resolve: (input: ResolveInput) => Effect.Effect<Snapshot>
   readonly render: (snapshot: Snapshot) => string
@@ -119,14 +124,14 @@ export interface Interface {
     parentAgentID: string
     expectedRevision: string
     definition: DefinitionDraft
-  }) => Effect.Effect<Snapshot, ConflictError>
+  }) => Effect.Effect<Snapshot, ConflictError | DuplicateNameError>
   readonly update: (input: {
     sessionID: SessionID
     parentAgentID: string
     subagentID: string
     expectedRevision: string
     definition: DefinitionDraft
-  }) => Effect.Effect<Snapshot, ConflictError | NotFoundError | ReadonlyError>
+  }) => Effect.Effect<Snapshot, ConflictError | NotFoundError | ReadonlyError | DuplicateNameError>
   readonly remove: (input: {
     sessionID: SessionID
     parentAgentID: string
@@ -373,6 +378,8 @@ const layer = Layer.effect(
         Effect.gen(function* () {
           yield* recoverAccessJournalUnlocked()
           const current = yield* requireRevisionUnlocked(input)
+          const duplicate = duplicateName(yield* agents.list(), input.definition.name)
+          if (duplicate) return yield* new DuplicateNameError({ name: duplicate.name })
           const ids = new Set([
             ...current.entries.map((item) => item.id),
             ...Object.keys((yield* config.getGlobal()).agent ?? {}),
@@ -398,6 +405,8 @@ const layer = Layer.effect(
           const current = yield* requireRevisionUnlocked(input)
           const entry = yield* requireEntry(current, input.subagentID)
           if (!entry.editable) return yield* new ReadonlyError({ id: input.subagentID })
+          const duplicate = duplicateName(yield* agents.list(), input.definition.name, entry.id)
+          if (duplicate) return yield* new DuplicateNameError({ name: duplicate.name })
           yield* writeDefinition(entry.id, input.definition)
           yield* config.invalidate()
           yield* agents.invalidate()
@@ -421,6 +430,7 @@ const layer = Layer.effect(
           // restore removes it; meanwhile a same-name Add cannot inherit policies
           // that still refer to the deleted stable ID.
           yield* config.updateGlobal({ agent: { [entry.id]: { id: entry.id, disable: true } } })
+          yield* config.invalidate()
           yield* agents.invalidate()
           return yield* resolveCurrent({ ...input, includeInactive: true })
         }),
@@ -438,6 +448,12 @@ const layer = Layer.effect(
     })
   }),
 )
+
+export function duplicateName(agents: readonly Pick<Agent.Info, "id" | "name">[], name: string, exceptID?: string) {
+  return agents.find(
+    (agent) => (agent.id ?? agent.name) !== exceptID && normalizeName(agent.name) === normalizeName(name),
+  )
+}
 
 function taskPermission(id: string, name: string, ruleset: Parameters<typeof Permission.evaluate>[2]) {
   const rule = ruleset.findLast(

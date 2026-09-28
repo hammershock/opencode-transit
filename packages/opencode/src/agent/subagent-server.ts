@@ -17,7 +17,10 @@ export const subagentManagerLayer = Layer.effect(
       instances.provide({ directory: input.directory, target: input.target, workspaceID: input.workspaceID }, effect)
     const mutation = <A>(
       input: Located,
-      effect: Effect.Effect<A, Subagent.ConflictError | Subagent.NotFoundError | Subagent.ReadonlyError>,
+      effect: Effect.Effect<
+        A,
+        Subagent.ConflictError | Subagent.NotFoundError | Subagent.ReadonlyError | Subagent.DuplicateNameError
+      >,
     ) => provide(input, effect).pipe(Effect.mapError(mutationFailure))
 
     return SubagentManager.Service.of({
@@ -78,7 +81,14 @@ export const subagentManagerLayer = Layer.effect(
   }),
 )
 
-function mutationFailure(error: Subagent.ConflictError | Subagent.NotFoundError | Subagent.ReadonlyError) {
+function mutationFailure(
+  error: Subagent.ConflictError | Subagent.NotFoundError | Subagent.ReadonlyError | Subagent.DuplicateNameError,
+) {
+  if (error instanceof Subagent.DuplicateNameError)
+    return new SubagentManager.MutationFailure({
+      kind: "duplicate-name",
+      message: `An Agent named "${error.name}" already exists. Choose a different name.`,
+    })
   if (error instanceof Subagent.ConflictError)
     return new SubagentManager.MutationFailure({
       kind: "conflict",

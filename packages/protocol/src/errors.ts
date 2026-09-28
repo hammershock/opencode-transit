@@ -29,7 +29,7 @@ export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()(
 export class SubagentMutationError extends Schema.TaggedErrorClass<SubagentMutationError>()(
   "SubagentMutationError",
   {
-    kind: Schema.Literals(["conflict", "not-found", "readonly"]),
+    kind: Schema.Literals(["conflict", "not-found", "readonly", "duplicate-name"]),
     message: Schema.String,
     revision: Schema.String.pipe(Schema.optional),
   },

@@ -11,6 +11,8 @@ import { AbsolutePath, RelativePath } from "@opencode-ai/core/schema"
 import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { SessionID } from "@opencode-ai/schema/session-id"
 import { SkillPackageAccess } from "@opencode-ai/core/skill/package-access"
+import { ExecutionPolicy } from "@opencode-ai/core/permission/policy"
+import { Location } from "@opencode-ai/core/location"
 import { it } from "../lib/effect"
 
 const digest = (value: string) => Skill.Digest.make(value.repeat(64))
@@ -42,11 +44,32 @@ describe("SkillCatalogContext", () => {
     }
     let available = false
     let denied = false
+    let scoped = false
     let reads = 0
     let prepares = 0
     let unavailable = false
     const agentID = AgentV2.ID.make("build")
     const layer = AppNodeBuilder.build(SkillCatalogContext.node, [
+      [
+        ExecutionPolicy.node,
+        Layer.mock(ExecutionPolicy.Service, {
+          resolve: () =>
+            Effect.succeed({
+              rules: [],
+              agentRules: [],
+              ceilings: [],
+              session: {
+                status: "current",
+                revision: 0,
+                legacyDigest: "",
+                locationRevision: 0,
+                baseline: [],
+                rules: [],
+                location: Location.Ref.make({ directory: AbsolutePath.make("/skill-test"), target: { type: "local" } }),
+              },
+            }),
+        }),
+      ],
       [PluginV2.node, Layer.mock(PluginV2.Service, { wait: () => Effect.void })],
       [
         AgentV2.node,
@@ -66,7 +89,12 @@ describe("SkillCatalogContext", () => {
         Layer.mock(SkillV2.Service, {
           lookup: () =>
             Effect.succeed(
-              available ? { status: "available" as const, entry } : { status: "target-inapplicable" as const, entry },
+              available
+                ? {
+                    status: "available" as const,
+                    entry: { ...entry, metadata: { ...review, agentScope: scoped ? ["reviewer"] : "*" } },
+                  }
+                : { status: "target-inapplicable" as const, entry },
             ),
         }),
       ],
@@ -121,6 +149,11 @@ describe("SkillCatalogContext", () => {
       expect(prepares).toBe(0)
 
       available = true
+      scoped = true
+      expect((yield* Effect.flip(catalogs.resolve(input))).kind).toBe("agent-inapplicable")
+      expect(reads).toBe(0)
+      expect(prepares).toBe(0)
+      scoped = false
       denied = true
       expect((yield* Effect.flip(catalogs.resolve(input))).kind).toBe("permission-denied")
       expect(reads).toBe(0)
@@ -164,6 +197,29 @@ describe("SkillCatalogContext", () => {
     let reads = 0
     let current = snapshot([metadata("review", "1")])
     const layer = AppNodeBuilder.build(SkillCatalogContext.node, [
+      [AgentV2.node, Layer.mock(AgentV2.Service, {})],
+      [SkillRegistry.node, Layer.mock(SkillRegistry.Service, {})],
+      [SkillPackageAccess.node, Layer.mock(SkillPackageAccess.Service, {})],
+      [
+        ExecutionPolicy.node,
+        Layer.mock(ExecutionPolicy.Service, {
+          resolve: () =>
+            Effect.succeed({
+              rules: [],
+              agentRules: [],
+              ceilings: [],
+              session: {
+                status: "current",
+                revision: 0,
+                legacyDigest: "",
+                locationRevision: 0,
+                baseline: [],
+                rules: [],
+                location: Location.Ref.make({ directory: AbsolutePath.make("/skill-test"), target: { type: "local" } }),
+              },
+            }),
+        }),
+      ],
       [
         PluginV2.node,
         Layer.mock(PluginV2.Service, {

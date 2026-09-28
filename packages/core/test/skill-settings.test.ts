@@ -34,6 +34,60 @@ describe("SkillSettings", () => {
     expect(snapshot.targets).toEqual({})
   })
 
+  test("persists Agent scopes with CAS and preserves them across discovery and target edits", async () => {
+    await using root = await tmpdir()
+    let invalidations = 0
+    const settings = SkillSettings.make({
+      directory: path.join(root.path, "config"),
+      home: root.path,
+      invalidate: async () => {
+        invalidations++
+      },
+    })
+    const initial = await settings.load()
+    expect(SkillSettings.agentScope(initial, skillID)).toBeUndefined()
+    const scoped = await settings.updateAgentScope(skillID, ["reviewer", "build", "reviewer"], initial.revision)
+    expect(scoped.agents?.[skillID]).toEqual(["build", "reviewer"])
+    expect(invalidations).toBe(0)
+    await expect(settings.updateAgentScope(skillID, "*", initial.revision)).rejects.toHaveProperty(
+      "_tag",
+      "SkillSettings.RevisionConflictError",
+    )
+    const targets = await settings.updateTargetScope(skillID, ["local"], scoped.revision)
+    const discovered = await settings.updateDiscovery(
+      Skill.DiscoveryUpdate.make({
+        paths: ["missing"],
+        urls: [],
+        expectedRevision: targets.revision,
+      }),
+    )
+    const reset = await settings.resetDiscovery(discovered.revision)
+    expect(reset.agents?.[skillID]).toEqual(["build", "reviewer"])
+    expect(reset.targets[skillID]).toEqual(["local"])
+    const none = await settings.updateAgentScope(skillID, [], reset.revision)
+    expect(SkillSettings.agentScope(none, skillID)).toEqual([])
+    const all = await settings.updateAgentScope(skillID, "*", none.revision)
+    expect(SkillSettings.agentScope(all, skillID)).toBe("*")
+    const dormant = await settings.updateAgentScope(skillID, ["removed-agent"], all.revision)
+    expect(dormant.agents?.[skillID]).toEqual(["removed-agent"])
+  })
+
+  test("malformed Agent scopes fail closed instead of becoming all Agents", async () => {
+    await using root = await tmpdir()
+    const config = path.join(root.path, "config")
+    await fs.mkdir(config)
+    const file = path.join(config, "opencode.jsonc")
+    const settings = SkillSettings.make({ directory: config, home: root.path })
+    for (const agents of [false, { [skillID]: "reviewer" }, { [skillID]: ["*"] }, { [skillID]: [""] }]) {
+      await fs.writeFile(file, JSON.stringify({ skills: { agents } }))
+      const snapshot = await settings.load()
+      expect(snapshot.valid).toBe(false)
+      expect(SkillSettings.agentScope(snapshot, skillID)).toEqual([])
+    }
+    await fs.writeFile(file, "{ broken")
+    expect(SkillSettings.agentScope(await settings.load(), skillID)).toEqual([])
+  })
+
   test("updates imported roots atomically and preserves JSONC fields, comments, and target scopes", async () => {
     if (process.platform === "win32") return
     await using root = await tmpdir()

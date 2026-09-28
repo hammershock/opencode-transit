@@ -18,7 +18,7 @@ export const skillCommand = defineCommand<void, SkillCommandContext>({
   id: "fork.skill.manage",
   path: ["skills"],
   title: "Manage skills",
-  description: "Manage local discovery paths, diagnostics, and target access",
+  description: "Manage local discovery paths, diagnostics, target and Agent access",
   category: "Skills",
   provenance: { type: "core", feature: "skill-registry" },
   capabilities: ["skill.registry.read", "skill.registry.write"],

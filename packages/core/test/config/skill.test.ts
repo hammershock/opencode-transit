@@ -63,6 +63,7 @@ describe("ConfigSkillPlugin.Plugin", () => {
             updateDiscovery: async () => Effect.die("unused") as never,
             resetDiscovery: async () => Effect.die("unused") as never,
             updateTargetScope: async () => Effect.die("unused") as never,
+            updateAgentScope: async () => Effect.die("unused") as never,
           }),
         ),
         Effect.provideService(
@@ -92,6 +93,7 @@ describe("ConfigSkillPlugin.Plugin", () => {
                       paths: ["./skills", "~/shared-skills", "/opt/skills"],
                       urls: ["https://example.test/skills/"],
                       targets: { [`skl_${"1".repeat(64)}`]: ["local"] },
+                      agents: { [`skl_${"1".repeat(64)}`]: ["reviewer"] },
                     },
                   }),
                 }),
@@ -130,6 +132,7 @@ describe("ConfigSkillPlugin.Plugin", () => {
       ])
       expect(diagnostics).toEqual([
         expect.objectContaining({ kind: "project-target-scope-ignored", severity: "warning" }),
+        expect.objectContaining({ kind: "project-agent-scope-ignored", severity: "warning" }),
       ])
     }),
   )
@@ -207,6 +210,7 @@ describe("ConfigSkillPlugin.Plugin", () => {
             updateDiscovery: async () => Effect.die("unused") as never,
             resetDiscovery: async () => Effect.die("unused") as never,
             updateTargetScope: async () => Effect.die("unused") as never,
+            updateAgentScope: async () => Effect.die("unused") as never,
           }),
         ),
         Effect.provideService(

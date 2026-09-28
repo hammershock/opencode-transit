@@ -22,6 +22,7 @@ import {
 } from "../ui/dialog-select"
 import { useToast } from "../ui/toast"
 import { errorMessage } from "../util/error"
+import { normalizeName } from "@opencode-ai/core/util/normalize-name"
 
 type LocationQuery = { directory: string; workspace?: string; target?: string }
 type CapabilityProfile = "read-only" | "write" | "full-access" | "custom"
@@ -376,6 +377,22 @@ export function useSubagentManager(input: {
   const saveDefinition = async (entry: SubagentEntry | undefined, definition: SubagentDefinitionDraft) => {
     if (!definition.name.trim()) {
       toast.show({ message: "Name is required", variant: "warning" })
+      return
+    }
+    const duplicate =
+      sync.data.agent.find(
+        (agent) =>
+          (agent.id ?? agent.name) !== entry?.id && normalizeName(agent.name) === normalizeName(definition.name),
+      ) ??
+      snapshot()?.entries.find(
+        (agent) => agent.id !== entry?.id && normalizeName(agent.name) === normalizeName(definition.name),
+      )
+    if (duplicate) {
+      toast.show({
+        title: "Name already exists",
+        message: `An Agent named "${duplicate.name}" already exists. Choose a different name.`,
+        variant: "warning",
+      })
       return
     }
     const saved = await mutate(async (current) => {
