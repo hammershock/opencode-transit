@@ -382,33 +382,35 @@ describe("PermissionV2", () => {
     }),
   )
 
-  it.effect("keeps captured parent boundaries as hard ceilings for child Sessions", () =>
-    Effect.gen(function* () {
-      yield* setup([{ action: "bash", resource: "*", effect: "allow" }])
-      const { db } = yield* Database.Service
-      yield* db
-        .update(SessionTable)
-        .set({
-          parent_id: SessionV2.ID.make("ses_parent"),
-          permission_boundary: [[{ action: "bash", resource: "rm *", effect: "deny" }]],
-        })
-        .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
-        .run()
-        .pipe(Effect.orDie)
+  for (const mode of ["normal", "auto"] as const)
+    it.effect(`keeps captured parent boundaries as hard ceilings for ${mode} child Sessions`, () =>
+      Effect.gen(function* () {
+        yield* setup([{ action: "bash", resource: "*", effect: "allow" }])
+        const { db } = yield* Database.Service
+        yield* db
+          .update(SessionTable)
+          .set({
+            parent_id: SessionV2.ID.make("ses_parent"),
+            approval_mode: mode,
+            permission_boundary: [[{ action: "bash", resource: "rm *", effect: "deny" }]],
+          })
+          .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
+          .run()
+          .pipe(Effect.orDie)
 
-      const service = yield* PermissionV2.Service
-      expect(yield* service.ask(assertion({ action: "bash", resources: ["echo ok"] }))).toMatchObject({
-        effect: "allow",
-      })
-      expect(
-        yield* service.ask(
-          assertion({ id: PermissionV2.ID.create("per_parent_deny"), action: "bash", resources: ["rm file"] }),
-        ),
-      ).toMatchObject({
-        effect: "deny",
-      })
-    }),
-  )
+        const service = yield* PermissionV2.Service
+        expect(yield* service.ask(assertion({ action: "bash", resources: ["echo ok"] }))).toMatchObject({
+          effect: "allow",
+        })
+        expect(
+          yield* service.ask(
+            assertion({ id: PermissionV2.ID.create("per_parent_deny"), action: "bash", resources: ["rm file"] }),
+          ),
+        ).toMatchObject({
+          effect: "deny",
+        })
+      }),
+    )
 
   it.effect("resolves an asked permission once", () =>
     Effect.gen(function* () {

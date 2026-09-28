@@ -406,6 +406,53 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("inherits parent approval mode across Locations unless explicitly overridden", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const root = yield* session.create({ location })
+      const auto = yield* session.create({ location, approvalMode: "auto" })
+      const remote = Location.Ref.make({
+        directory: AbsolutePath.make("/remote/project"),
+        target: Location.RexdTarget.make({
+          type: "rexd",
+          targetID: Location.TargetID.make("013ea0a8-4523-4d39-a609-552222340b19"),
+        }),
+      })
+      const child = yield* session.create({ location: remote, parentID: auto.id })
+
+      expect(root.approvalMode).toBe("normal")
+      expect(child.approvalMode).toBe("auto")
+      expect(child.location).toEqual(remote)
+      expect((yield* session.create({ location, parentID: child.id })).approvalMode).toBe("auto")
+      expect((yield* session.create({ location, parentID: root.id })).approvalMode).toBe("normal")
+      expect((yield* session.create({ location, parentID: auto.id, approvalMode: "normal" })).approvalMode).toBe(
+        "normal",
+      )
+      expect((yield* session.create({ location, parentID: root.id, approvalMode: "auto" })).approvalMode).toBe("auto")
+    }),
+  )
+
+  it.effect("captures approval mode only at creation and preserves it on retry", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const parent = yield* session.create({ location, approvalMode: "auto" })
+      const input = { id, location, parentID: parent.id }
+      const child = yield* session.create(input)
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ approval_mode: "normal" })
+        .where(eq(SessionTable.id, parent.id))
+        .run()
+        .pipe(Effect.orDie)
+
+      expect(child.approvalMode).toBe("auto")
+      expect(yield* session.get(child.id)).toEqual(child)
+      expect(yield* session.create(input)).toEqual(child)
+      expect((yield* session.create({ location, parentID: parent.id })).approvalMode).toBe("normal")
+    }),
+  )
+
   it.effect("stores supplied immutable create attributes", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service

@@ -168,7 +168,7 @@ const outcome = await AppRuntime.runPromise(
                 : undefined,
               rows: yield* Effect.forEach(rows, (row) =>
                 Effect.gen(function* () {
-                  const session = yield* db.select({ target: SessionTable.target, directory: SessionTable.directory })
+                  const session = yield* db.select({ target: SessionTable.target, directory: SessionTable.directory, approvalMode: SessionTable.approval_mode })
                     .from(SessionTable)
                     .where(eq(SessionTable.id, SessionSchema.ID.make(row.child_session_id)))
                     .get()
@@ -189,6 +189,7 @@ const outcome = await AppRuntime.runPromise(
                     events: events.map((event) => ({ type: event.type, data: event.type.includes("failed") ? event.data : undefined })),
                     target: session?.target,
                     directory: session?.directory,
+                    approvalMode: session?.approvalMode,
                   }
                 }),
               ),
