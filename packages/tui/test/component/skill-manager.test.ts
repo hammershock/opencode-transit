@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   buildSkillManagerRows,
+  buildSkillPathRows,
   skillRootStatus,
   skillPreviewContent,
   skillScopeLabel,
@@ -91,17 +92,10 @@ describe("Skill Manager presentation", () => {
   })
 
   test("keeps duplicate source identity and hides dormant target overrides", () => {
-    const rows = buildSkillManagerRows(model(), "/Users/test")
-    expect(rows.filter((row) => row.category === "Actions").map((row) => row.title)).toEqual([
-      "Add path…",
-      "Import Codex skills",
-      "Import Claude skills",
-      "Reload catalog",
-      "Reset discovery paths",
-    ])
-    expect(rows.find((row) => row.key === "root:imported:/Users/test/.codex/skills")).toMatchObject({
+    const rows = buildSkillManagerRows(model())
+    expect(rows.every((row) => row.category === "Skills")).toBe(true)
+    expect(buildSkillPathRows(model().settings, "/Users/test")[1]).toMatchObject({
       title: "~/.codex/skills",
-      description: "codex",
       footer: "! undetected",
       inspectionTitle: "/Users/test/.codex/skills",
     })
@@ -116,34 +110,26 @@ describe("Skill Manager presentation", () => {
     expect(rows.filter((row) => row.category === "Skills")).toHaveLength(2)
   })
 
-  test("bounds diagnostics without hiding their total", () => {
+  test("keeps unavailable paths and their diagnostics in the dedicated path list", () => {
     const current = model()
-    const expanded: SkillManagerModel = {
-      ...current,
-      settings: {
-        ...current.settings,
-        diagnostics: Array.from({ length: 22 }, (_, index) => ({
-          kind: "invalid-path" as const,
-          severity: "error" as const,
-          field: `skills.paths.${index}`,
-          message: `Invalid path ${index}`,
-        })),
-      },
-      catalog: { ...current.catalog, diagnostics: [] },
-    }
-    const diagnostics = buildSkillManagerRows(expanded).filter((row) => row.category === "Diagnostics")
-    expect(diagnostics).toHaveLength(21)
-    expect(diagnostics.at(-1)?.title).toBe("2 more diagnostics")
-  })
-
-  test("keeps partial catalog and target failures visible", () => {
-    const rows = buildSkillManagerRows({ ...model(), catalogError: "scan failed", targetError: "registry invalid" })
-    expect(rows).toContainEqual(
-      expect.objectContaining({ key: "diagnostic:catalog-error", description: "scan failed" }),
-    )
-    expect(rows).toContainEqual(
-      expect.objectContaining({ key: "diagnostic:target-error", description: "registry invalid" }),
-    )
+    const rows = buildSkillPathRows({
+      ...current.settings,
+      roots: [...current.settings.roots, { kind: "imported", value: "/broken", default: false, status: "unavailable" }],
+      diagnostics: [
+        {
+          kind: "invalid-path",
+          severity: "warning",
+          field: "skills.paths.1",
+          message: "Skill directory is unavailable (EIO)",
+        },
+      ],
+    })
+    expect(rows[2]).toMatchObject({
+      title: "/broken",
+      footer: "! unavailable",
+      details: ["Skill directory is unavailable (EIO)"],
+    })
+    expect(rows).toHaveLength(3)
   })
 
   test("formats safe metadata and the complete Skill entry body for preview", () => {

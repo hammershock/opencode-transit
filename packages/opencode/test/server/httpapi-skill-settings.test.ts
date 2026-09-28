@@ -20,6 +20,44 @@ afterEach(async () => {
 })
 
 describe("Skill settings HttpApi", () => {
+  test("unavailable roots remain manageable without blocking a healthy catalog or target access", async () => {
+    if (process.platform === "win32") return
+    await using tmp = await tmpdir({ git: true })
+    const broken = path.join(tmp.path, "broken")
+    const healthy = path.join(tmp.path, "healthy")
+    await fs.symlink(broken, broken)
+    await fs.mkdir(path.join(healthy, "review"), { recursive: true })
+    await fs.writeFile(path.join(healthy, "review", "SKILL.md"), "---\nname: review\ndescription: Review\n---\nReview.")
+    await fs.mkdir(Global.Path.config, { recursive: true })
+    await fs.writeFile(configFile, JSON.stringify({ skills: { paths: [broken, healthy] } }))
+    const initial = await (await request("/api/skill/settings")).json()
+    expect(initial.valid).toBe(true)
+    expect(initial.roots).toContainEqual(expect.objectContaining({ value: broken, status: "unavailable" }))
+    const location = new URLSearchParams({
+      "location[directory]": tmp.path,
+      forceReload: "true",
+      includeInactive: "true",
+    })
+    const catalogResponse = await request(`/api/skill/catalog?${location}`)
+    expect(catalogResponse.status).toBe(200)
+    const catalog = await catalogResponse.json()
+    const skill = catalog.data.skills.find((skill: { name: string }) => skill.name === "review")
+    expect(skill).toBeDefined()
+    const scopedResponse = await request(`/api/skill/settings/${skill.id}/target-scope`, {
+      method: "PUT",
+      body: JSON.stringify({ scope: ["local"], expectedRevision: initial.revision }),
+    })
+    expect(scopedResponse.status).toBe(200)
+    const scoped = await scopedResponse.json()
+    const repaired = await request("/api/skill/settings/discovery", {
+      method: "PUT",
+      body: JSON.stringify({ paths: [healthy], urls: [], expectedRevision: scoped.revision }),
+    })
+    expect(repaired.status).toBe(200)
+    expect((await repaired.json()).targets[skill.id]).toEqual(["local"])
+    expect((await fs.lstat(broken)).isSymbolicLink()).toBe(true)
+  })
+
   test("updates, scopes, reloads, and resets device-local Skill settings with CAS", async () => {
     await using tmp = await tmpdir({ git: true })
     const workspace = tmp.path

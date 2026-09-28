@@ -107,6 +107,7 @@ export function make(options: {
   const mutate = async (
     expectedRevision: Skill.Digest,
     update: (text: string, snapshot: Skill.SettingsSnapshot) => string,
+    invalidate = true,
   ) =>
     Flock.withLock(`skill-settings:${options.directory}`, async () => {
       const before = await read()
@@ -115,7 +116,7 @@ export function make(options: {
       if (!before.valid) throw new InvalidConfigError({ diagnostics: before.diagnostics })
       const text = await readText(before.path)
       await atomicWrite(before.path, update(text, before))
-      await options.invalidate?.()
+      if (invalidate) await options.invalidate?.()
       return read()
     })
 
@@ -135,7 +136,7 @@ export function make(options: {
     },
     async updateTargetScope(skillID, scope, expectedRevision) {
       const normalized = normalizeScope(scope)
-      return mutate(expectedRevision, (text, snapshot) => editTargetScope(text, snapshot, skillID, normalized))
+      return mutate(expectedRevision, (text, snapshot) => editTargetScope(text, snapshot, skillID, normalized), false)
     },
   }
 }
@@ -260,36 +261,35 @@ async function discoveryRoots(
   diagnostics: Skill.SettingsDiagnostic[],
 ) {
   const defaults = [path.join(directory, "skill"), path.join(directory, "skills")]
-  const configured = await normalizePathsForRead(
-    decoded.paths,
-    source ? path.dirname(source) : directory,
-    home,
-    diagnostics,
+  const roots = await Promise.all(
+    defaults.map((root) => filesystemRoot("opencode-global", root, true, diagnostics, root)),
   )
-  const unique = new Map<string, Skill.DiscoveryRoot>()
-  for (const root of defaults) unique.set(root, await filesystemRoot("opencode-global", root, true))
-  for (const root of configured) {
-    if (unique.has(root.resolved)) {
+  for (const [index, value] of decoded.paths.entries()) {
+    const field = `skills.paths.${index}`
+    const resolved = await normalizePath(value, source ? path.dirname(source) : directory, home).catch(() => undefined)
+    if (!resolved) {
+      diagnostics.push(
+        Skill.SettingsDiagnostic.make({
+          kind: "invalid-path",
+          severity: "warning",
+          field,
+          message: "Configured Skill path has invalid syntax",
+        }),
+      )
+      roots.push(Skill.DiscoveryRoot.make({ kind: "imported", value, default: false, status: "unavailable" }))
+      continue
+    }
+    if (roots.some((root) => root.resolved === resolved)) {
       diagnostics.push(
         Skill.SettingsDiagnostic.make({
           kind: "duplicate-root",
           severity: "warning",
-          field: "skills.paths",
+          field,
           message: "Configured path duplicates an existing discovery root",
         }),
       )
-      continue
     }
-    unique.set(
-      root.resolved,
-      Skill.DiscoveryRoot.make({
-        kind: "imported",
-        value: root.value,
-        resolved: AbsolutePath.make(root.resolved),
-        default: false,
-        status: await filesystemStatus(root.resolved),
-      }),
-    )
+    roots.push({ ...(await filesystemRoot("imported", resolved, false, diagnostics, field)), value })
   }
   const urls: string[] = []
   for (const value of decoded.urls) {
@@ -319,13 +319,51 @@ async function discoveryRoots(
     urls.push(normalized)
   }
   return [
-    ...unique.values(),
+    ...roots,
     ...urls.map((url) => Skill.DiscoveryRoot.make({ kind: "url", value: url, default: false, status: "configured" })),
   ]
 }
 
-async function filesystemRoot(kind: "opencode-global" | "imported", root: string, defaultRoot: boolean) {
-  const status = await filesystemStatus(root)
+async function filesystemRoot(
+  kind: "opencode-global" | "imported",
+  root: string,
+  defaultRoot: boolean,
+  diagnostics: Skill.SettingsDiagnostic[],
+  field: string,
+) {
+  const status = await fs
+    .stat(root)
+    .then(async (value) => {
+      if (!value.isDirectory()) {
+        diagnostics.push(
+          Skill.SettingsDiagnostic.make({
+            kind: "invalid-path",
+            severity: "warning",
+            field,
+            message: "Skill path is not a directory",
+          }),
+        )
+        return "unavailable" as const
+      }
+      const directory = await fs.opendir(root)
+      await directory.close()
+      return "ready" as const
+    })
+    .catch((error: NodeJS.ErrnoException) => {
+      if (defaultRoot && error.code === "ENOENT") return "undetected" as const
+      diagnostics.push(
+        Skill.SettingsDiagnostic.make({
+          kind: "invalid-path",
+          severity: "warning",
+          field,
+          message:
+            error.code === "ENOENT"
+              ? "Skill directory does not exist"
+              : `Skill directory is unavailable (${error.code ?? "unknown"})`,
+        }),
+      )
+      return error.code === "ENOENT" ? ("undetected" as const) : ("unavailable" as const)
+    })
   return Skill.DiscoveryRoot.make({
     kind,
     value: root,
@@ -333,49 +371,6 @@ async function filesystemRoot(kind: "opencode-global" | "imported", root: string
     default: defaultRoot,
     status,
   })
-}
-
-async function filesystemStatus(root: string) {
-  return fs
-    .stat(root)
-    .then((value) => (value.isDirectory() ? ("ready" as const) : ("unavailable" as const)))
-    .catch((error: NodeJS.ErrnoException) =>
-      error.code === "ENOENT" ? ("undetected" as const) : ("unavailable" as const),
-    )
-}
-
-async function normalizePathsForRead(
-  values: readonly string[],
-  directory: string,
-  home: string,
-  diagnostics: Skill.SettingsDiagnostic[],
-) {
-  const roots: Array<{ value: string; resolved: string }> = []
-  for (const value of values) {
-    try {
-      const root = await normalizePath(value, directory, home)
-      if (!roots.some((item) => item.resolved === root)) roots.push({ value, resolved: root })
-      else
-        diagnostics.push(
-          Skill.SettingsDiagnostic.make({
-            kind: "duplicate-root",
-            severity: "warning",
-            field: "skills.paths",
-            message: "Configured path is duplicated",
-          }),
-        )
-    } catch {
-      diagnostics.push(
-        Skill.SettingsDiagnostic.make({
-          kind: "invalid-path",
-          severity: "error",
-          field: "skills.paths",
-          message: "Configured Skill path is invalid",
-        }),
-      )
-    }
-  }
-  return roots
 }
 
 async function normalizePaths(values: readonly string[], directory: string, home: string) {
@@ -393,10 +388,8 @@ async function normalizePath(value: string, directory: string, home: string) {
   if (!value.trim() || value !== value.trim() || /\u0000/.test(value)) throw new Error("invalid path")
   const expanded = value === "~" ? home : value.startsWith("~/") ? path.join(home, value.slice(2)) : value
   const resolved = path.resolve(directory, expanded)
-  return fs.realpath(resolved).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return resolved
-    throw error
-  })
+  // Availability is reported on the root; a broken mount must not make settings uneditable.
+  return fs.realpath(resolved).catch(() => resolved)
 }
 
 function normalizeUrls(values: readonly string[]) {

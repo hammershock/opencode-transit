@@ -84,7 +84,7 @@ describe("SkillSettings", () => {
     expect(updated.targets[skillID]).toEqual(["local", targetID])
     const scoped = await settings.updateTargetScope(skillID, "*", updated.revision)
     expect(scoped.targets[skillID]).toBe("*")
-    expect(invalidations).toBe(2)
+    expect(invalidations).toBe(1)
     expect((await fs.stat(file)).mode & 0o777).toBe(0o640)
     const text = await fs.readFile(file, "utf8")
     expect(text).toContain("// keep this comment")
@@ -174,5 +174,86 @@ describe("SkillSettings", () => {
       ),
     ).rejects.toHaveProperty("_tag", "SkillSettings.InvalidConfigError")
     expect(await fs.readFile(file, "utf8")).toBe("")
+  })
+  test("retains inaccessible roots while allowing scope saves and path repair without losing other settings", async () => {
+    if (process.platform === "win32") return
+    await using root = await tmpdir()
+    const config = path.join(root.path, "config")
+    const broken = path.join(root.path, "broken")
+    const healthy = path.join(root.path, "healthy")
+    await fs.symlink(broken, broken)
+    await fs.mkdir(healthy)
+    await fs.mkdir(config)
+    await fs.writeFile(
+      path.join(config, "opencode.jsonc"),
+      JSON.stringify({
+        future: true,
+        skills: { paths: [broken, healthy], targets: { [skillID]: [targetID] } },
+      }),
+    )
+    let scans = 0
+    const settings = SkillSettings.make({
+      directory: config,
+      home: root.path,
+      invalidate: async () => {
+        scans++
+      },
+    })
+    const initial = await settings.load()
+    expect(initial.valid).toBe(true)
+    expect(initial.roots).toContainEqual(expect.objectContaining({ value: broken, status: "unavailable" }))
+    expect(initial.diagnostics).toContainEqual(
+      expect.objectContaining({
+        field: "skills.paths.0",
+        severity: "warning",
+        message: "Skill directory is unavailable (ELOOP)",
+      }),
+    )
+    const scoped = await settings.updateTargetScope(skillID, ["local"], initial.revision)
+    expect(scans).toBe(0)
+    expect(scoped.targets[skillID]).toEqual(["local"])
+    const extended = await settings.updateDiscovery(
+      Skill.DiscoveryUpdate.make({
+        paths: [broken, healthy, "missing"],
+        urls: [],
+        expectedRevision: scoped.revision,
+      }),
+    )
+    expect(extended.valid).toBe(true)
+    expect(extended.roots.find((item) => item.value === broken)?.status).toBe("unavailable")
+    expect(extended.roots.at(-1)?.status).toBe("undetected")
+    const repaired = await settings.updateDiscovery(
+      Skill.DiscoveryUpdate.make({
+        paths: [healthy],
+        urls: [],
+        expectedRevision: extended.revision,
+      }),
+    )
+    expect(scans).toBe(2)
+    expect(repaired.roots.filter((item) => !item.default).map((item) => item.value)).toEqual([healthy])
+    expect(repaired.targets[skillID]).toEqual(["local"])
+    expect((await fs.lstat(broken)).isSymbolicLink()).toBe(true)
+    expect(JSON.parse(await fs.readFile(path.join(config, "opencode.jsonc"), "utf8")).future).toBe(true)
+  })
+
+  test("shows a non-directory and a malformed path so they can be removed", async () => {
+    await using root = await tmpdir()
+    const config = path.join(root.path, "config")
+    await fs.mkdir(config)
+    const file = path.join(root.path, "file")
+    await fs.writeFile(file, "keep")
+    await fs.writeFile(path.join(config, "opencode.jsonc"), JSON.stringify({ skills: { paths: [file, " bad "] } }))
+    const settings = SkillSettings.make({ directory: config, home: root.path })
+    const initial = await settings.load()
+    expect(initial.valid).toBe(true)
+    expect(initial.roots.filter((item) => !item.default)).toEqual([
+      expect.objectContaining({ value: file, status: "unavailable" }),
+      expect.objectContaining({ value: " bad ", status: "unavailable" }),
+    ])
+    const updated = await settings.updateDiscovery(
+      Skill.DiscoveryUpdate.make({ paths: [], urls: [], expectedRevision: initial.revision }),
+    )
+    expect(updated.valid).toBe(true)
+    expect(await fs.readFile(file, "utf8")).toBe("keep")
   })
 })

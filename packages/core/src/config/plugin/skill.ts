@@ -53,10 +53,12 @@ export const Plugin = define({
             draft.source(SkillV2.UrlSource.make({ type: "url", url: root.value }))
             continue
           }
+          // Malformed configured paths stay editable in settings but cannot be discovery sources.
+          if (!root.resolved) continue
           draft.source(
             SkillV2.DirectorySource.make({
               type: "directory",
-              path: AbsolutePath.make(root.resolved ?? root.value),
+              path: root.resolved,
             }),
             { kind: root.kind },
           )
