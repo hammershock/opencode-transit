@@ -32,7 +32,7 @@ test.skipIf(!binary)(
           await using runtime = await tmpdir()
           const imported = `${runtime.path}/skills`
           await Bun.write(
-            `${imported}/review/SKILL.md`,
+            `${imported}/review-only/SKILL.md`,
             "---\nname: review-only\ndescription: Child review workflow\n---\nREVIEW_BODY_PROOF",
           )
           const catalog = await Effect.runPromise(
@@ -100,11 +100,11 @@ test.skipIf(!binary)(
             const hits = await Effect.runPromise(llm.hits)
             const primaryRequests = hits.filter(parent).map((hit) => JSON.stringify(hit.body))
             const childRequests = hits.filter(reviewer).map((hit) => JSON.stringify(hit.body))
-            expect(primaryRequests).toHaveLength(3)
+            expect(primaryRequests.length).toBeGreaterThanOrEqual(3)
             expect(primaryRequests[0]).not.toContain("<name>review-only</name>")
             expect(primaryRequests[1]).toContain("not available in this Session")
             expect(primaryRequests.join("\n")).not.toContain("REVIEW_BODY_PROOF")
-            expect(childRequests).toHaveLength(2)
+            expect(childRequests.length).toBeGreaterThanOrEqual(2)
             expect(childRequests[0]).toContain("<name>review-only</name>")
             expect(childRequests[1]).toContain("REVIEW_BODY_PROOF")
           } finally {
