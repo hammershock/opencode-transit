@@ -89,9 +89,10 @@ test("separates path editing and reload from target scope saves", async () => {
     expect(app.captureCharFrame()).toContain("Manage skills")
     if (process.env.SKILL_UI_EVIDENCE)
       await Bun.write(`${process.env.SKILL_UI_EVIDENCE}/skills.txt`, app.captureCharFrame())
-    app.mockInput.pressEnter()
+    app.mockInput.pressTab()
+    app.mockInput.pressTab()
     await settle(app)
-    expect(app.captureCharFrame()).toContain("Skill · review")
+    app.mockInput.pressEnter()
     app.mockInput.pressEnter()
     await settle(app)
     expect(app.captureCharFrame()).toContain("Target access · review")
@@ -154,9 +155,11 @@ test("Agent name checklist saves explicitly and cancellation preserves settings 
     const app = mounted.app
     try {
       await waitFor(app, () => app.captureCharFrame().includes("review"))
-      app.mockInput.pressEnter()
+      app.mockInput.pressTab()
+      app.mockInput.pressTab()
+      app.mockInput.pressTab()
       await settle(app)
-      app.mockInput.pressArrow("down")
+      app.mockInput.pressEnter()
       app.mockInput.pressEnter()
       await settle(app)
       expect(app.captureCharFrame()).toContain("Agent access · review")
@@ -169,12 +172,8 @@ test("Agent name checklist saves explicitly and cancellation preserves settings 
       app.mockInput.pressEscape()
       await settle(app)
       expect(mounted.requests.filter((request) => request.method === "PUT")).toHaveLength(0)
-      // Reopen from the manager; the cancelled selection was not saved.
-      mounted.control.open()
-      await waitFor(app, () => app.captureCharFrame().includes("Manage skills"))
-      app.mockInput.pressEnter()
-      await settle(app)
-      app.mockInput.pressArrow("down")
+      // Cancelling returns to the same property and selected Skill.
+      expect(app.captureCharFrame()).toContain("[Agents]")
       app.mockInput.pressEnter()
       await settle(app)
       app.mockInput.pressKey(" ")
@@ -187,6 +186,7 @@ test("Agent name checklist saves explicitly and cancellation preserves settings 
         mounted.requests.some((request) => new URL(request.url).pathname.endsWith("/agent-scope")),
       )
       await settle(app)
+      await waitFor(app, () => app.captureCharFrame().includes("Manage skills"))
       expect((await mounted.settings.load()).agents?.[Skill.ID.make(skillID)]).toEqual(["private-reviewer"])
       expect(mounted.requests.some((request) => new URL(request.url).searchParams.get("forceReload") === "true")).toBe(
         false,
@@ -197,7 +197,94 @@ test("Agent name checklist saves explicitly and cancellation preserves settings 
   }
 })
 
-async function mount(root: string, width = 100) {
+test("single-line properties keep the requested focus cycle and Source stays read-only", async () => {
+  for (const width of [64, 100, 160]) {
+    await using tmp = await tmpdir()
+    const mounted = await mount(tmp.path, width)
+    const app = mounted.app
+    try {
+      await waitFor(app, () => app.captureCharFrame().includes("review"))
+      expect(app.captureCharFrame()).toContain("[Source]")
+      expect(app.captureCharFrame()).not.toContain("Agents: all")
+      app.mockInput.pressTab()
+      await settle(app)
+      expect(app.captureCharFrame()).toContain("[Source]")
+      expect(app.captureCharFrame()).toContain("enter items")
+      app.mockInput.pressTab()
+      await settle(app)
+      expect(app.captureCharFrame()).toContain("[Targets]")
+      app.mockInput.pressArrow("left")
+      await settle(app)
+      expect(app.captureCharFrame()).toContain("[Source]")
+      app.mockInput.pressArrow("left")
+      await settle(app)
+      expect(app.captureCharFrame()).toContain("[Agents]")
+      app.mockInput.pressArrow("right")
+      await settle(app)
+      expect(app.captureCharFrame()).toContain("[Source]")
+      app.mockInput.pressEnter()
+      await settle(app)
+      expect(app.captureCharFrame()).toContain("enter read only")
+      app.mockInput.pressArrow("right")
+      await settle(app)
+      expect(app.captureCharFrame()).toContain("[Source]")
+      app.mockInput.pressEnter()
+      await settle(app)
+      expect(app.captureCharFrame()).toContain("Source · review")
+      expect(app.captureCharFrame()).toContain("Imported, /opt/skills/review/SKILL.md")
+      expect(mounted.requests.filter((request) => request.method !== "GET")).toHaveLength(0)
+      expect(mounted.requests.some((request) => new URL(request.url).pathname.endsWith(`/skill/${skillID}`))).toBe(
+        false,
+      )
+    } finally {
+      await mounted.destroy()
+    }
+  }
+})
+
+test("view changes preserve search and selection in a scrollable catalog", async () => {
+  await using tmp = await tmpdir()
+  const mounted = await mount(tmp.path, 100, 40)
+  const app = mounted.app
+  try {
+    await waitFor(app, () => app.captureCharFrame().includes("review-00"))
+    await app.mockInput.typeText("review-2")
+    await settle(app)
+    app.mockInput.pressArrow("down")
+    app.mockInput.pressArrow("down")
+    await settle(app)
+    app.mockInput.pressEnter()
+    await settle(app)
+    const selected = app.captureCharFrame().match(/Source · (review-\d+)/)?.[1]
+    expect(selected).toBeDefined()
+    app.mockInput.pressEscape()
+    await settle(app)
+    app.mockInput.pressTab()
+    app.mockInput.pressTab()
+    app.mockInput.pressTab()
+    await settle(app)
+    expect(app.captureCharFrame()).toContain("review-2")
+    expect(app.captureCharFrame()).not.toContain("review-00")
+    app.mockInput.pressEnter()
+    app.mockInput.pressEnter()
+    await settle(app)
+    expect(app.captureCharFrame()).toContain(`Agent access · ${selected}`)
+    app.mockInput.pressEscape()
+    await settle(app)
+    expect(app.captureCharFrame()).toContain("[Agents]")
+    expect(app.captureCharFrame()).not.toContain("review-00")
+    app.mockInput.pressTab()
+    await app.mockInput.typeText("2")
+    await settle(app)
+    expect(app.captureCharFrame()).toContain("enter edit")
+    expect(app.captureCharFrame()).toContain("review-22")
+    expect(mounted.requests.filter((request) => request.method !== "GET")).toHaveLength(0)
+  } finally {
+    await mounted.destroy()
+  }
+})
+
+async function mount(root: string, width = 100, count = 1) {
   const state = path.join(root, "state")
   const configDirectory = path.join(root, "config")
   await mkdir(state, { recursive: true })
@@ -239,7 +326,13 @@ async function mount(root: string, width = 100) {
           revision: "catalog",
           digest: "catalog",
           diagnostics: [],
-          skills: [{ id: skillID, name: "review", sourceLabel: "Built-in", digest: "digest" }],
+          skills: Array.from({ length: count }, (_, index) => ({
+            id: count === 1 ? skillID : `skl_${index.toString(16).padStart(64, "0")}`,
+            name: count === 1 ? "review" : `review-${String(index).padStart(2, "0")}`,
+            sourceLabel: "Imported",
+            digest: "digest",
+          })),
+          locations: { [skillID]: "/opt/skills/review/SKILL.md" },
         },
       })
     if (url.pathname.endsWith("/target")) return json({ revision: "targets", targets: [] })

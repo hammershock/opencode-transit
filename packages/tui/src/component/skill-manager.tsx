@@ -12,12 +12,12 @@ import type {
 import { normalizeName } from "@opencode-ai/core/util/normalize-name"
 import { TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { createMemo, createSignal } from "solid-js"
+import { createMemo, createSignal, For } from "solid-js"
 import { useSDK } from "../context/sdk"
-import { useTheme } from "../context/theme"
+import { selectedForeground, useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { DialogPrompt } from "../ui/dialog-prompt"
-import { DialogSelect, displayTruncate, type DialogSelectOption } from "../ui/dialog-select"
+import { DialogSelect, inspectionFrame, displayTruncate, type DialogSelectOption } from "../ui/dialog-select"
 import { useToast } from "../ui/toast"
 import { errorMessage } from "../util/error"
 import { DialogContentPreview } from "./dialog-model-context"
@@ -33,6 +33,9 @@ const skillPreviewCommands = {
   end: "dialog.skill.end",
   copy: "dialog.skill.copy",
 }
+
+type SkillProperty = "Source" | "Targets" | "Agents"
+const skillProperties: readonly SkillProperty[] = ["Source", "Targets", "Agents"]
 
 type SkillManagerTarget = { readonly id: string; readonly name: string }
 type SkillManagerAgent = Pick<AgentV2Info, "id" | "name" | "mode" | "hidden">
@@ -59,6 +62,7 @@ type ManagerRow = {
   readonly skill?: {
     readonly source: string
     readonly targets: string
+    readonly agents: string
     readonly state: "active" | "inactive"
   }
 }
@@ -87,15 +91,6 @@ export function toggleSkillTargetScope(
   return [...scope, target]
 }
 
-export function skillSourceLabel(sourceLabel: string) {
-  const source = sourceLabel.replace(/ · [0-9a-f]{8}$/i, "").toLowerCase()
-  if (source === "built-in" || source.startsWith("opencode ") || source.startsWith("project .opencode"))
-    return "opencode"
-  if (source === "codex") return "codex"
-  if (source === "claude") return "claude"
-  return "others"
-}
-
 export function skillTargetsLabel(scope: SkillTargetScope | undefined, targets: readonly SkillManagerTarget[]) {
   if (scope === undefined || scope === "*") return "all"
   if (scope.length === 0) return "none"
@@ -107,38 +102,28 @@ export function skillTargetsLabel(scope: SkillTargetScope | undefined, targets: 
     .join(", ")
 }
 
-export function buildSkillManagerRows(model: SkillManagerModel): ManagerRow[] {
-  const duplicateNames = new Set(
-    model.catalog.skills
-      .filter((skill, index, skills) =>
-        skills.some((item, itemIndex) => itemIndex !== index && item.name === skill.name),
-      )
-      .map((skill) => skill.name),
-  )
-  return [
-    ...model.catalog.skills
-      .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
-      .map((skill) => {
-        const scope = targetScope(model.settings, skill.id)
-        return {
-          key: `skill:${skill.id}`,
-          title: skill.name,
-          details: [
-            ...(duplicateNames.has(skill.name) ? ["Duplicate name · source identity is preserved"] : []),
-            `Agents: ${skillAgentsLabel(agentScope(model.settings, skill.id), model.agents ?? [])}`,
-          ],
-          category: "Skills",
-          skill: {
-            source: skillSourceLabel(skill.sourceLabel),
-            targets: skillTargetsLabel(scope, model.targets),
-            state:
-              (scope === "*" || scope.length > 0) && agentScope(model.settings, skill.id).length !== 0
-                ? ("active" as const)
-                : ("inactive" as const),
-          },
-        }
-      }),
-  ]
+export function buildSkillManagerRows(model: SkillManagerModel, home?: string): ManagerRow[] {
+  return model.catalog.skills
+    .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+    .map((skill) => {
+      const scope = targetScope(model.settings, skill.id)
+      const location = model.catalog.locations?.[skill.id]
+      const source = skill.sourceLabel.replace(/ · [0-9a-f]{8}$/i, "")
+      return {
+        key: `skill:${skill.id}`,
+        title: skill.name,
+        category: "Skills",
+        skill: {
+          source: `${source}, ${typeof location === "string" ? displayPath(location, home) : "Path unavailable"}`,
+          targets: skillTargetsLabel(scope, model.targets),
+          agents: skillAgentsLabel(agentScope(model.settings, skill.id), model.agents ?? []),
+          state:
+            (scope === "*" || scope.length > 0) && agentScope(model.settings, skill.id).length !== 0
+              ? ("active" as const)
+              : ("inactive" as const),
+        },
+      }
+    })
 }
 
 export function skillAgentsLabel(scope: SkillAgentScope | undefined, agents: readonly SkillManagerAgent[]) {
@@ -192,6 +177,8 @@ export function useSkillManager(input?: {
   const [model, setModel] = createSignal<SkillManagerModel>()
   const [loading, setLoading] = createSignal(false)
   const [anchor, setAnchor] = createSignal<string>()
+  const [property, setProperty] = createSignal<SkillProperty>("Source")
+  const [viewFocused, setViewFocused] = createSignal(false)
   const home = process.env.HOME
 
   const read = async (force: boolean) => {
@@ -411,7 +398,7 @@ export function useSkillManager(input?: {
           ),
         "Target access saved",
       ).then((saved) => {
-        if (saved) open(false)
+        if (saved) dialog.pop()
       })
     }
     const options = createMemo(() => [
@@ -444,7 +431,7 @@ export function useSkillManager(input?: {
         onConfirm={apply}
       />
     )
-    dialog.replace(Content)
+    dialog.push(Content, () => dialog.setSize("xlarge"))
     dialog.setSize("large")
   }
 
@@ -484,29 +471,32 @@ export function useSkillManager(input?: {
           ),
         "Agent access saved",
       ).then((saved) => {
-        if (saved) open(false)
+        if (saved) dialog.pop()
       })
     }
-    dialog.replace(() => (
-      <DialogSelect<string>
-        title={`Agent access · ${skill.name}`}
-        preserveSelection
-        locked={loading()}
-        options={[
-          {
-            title: `${scope() === "*" ? "[x]" : "[ ]"} All agents`,
-            description: "Includes future Agents",
-            value: "*",
-            category: "Scope",
-          },
-          ...choices(),
-        ]}
-        footer={<TargetAccessFooter onConfirm={apply} />}
-        onSelect={(option) => toggle(option.value)}
-        onToggle={(option) => toggle(option.value)}
-        onConfirm={apply}
-      />
-    ))
+    dialog.push(
+      () => (
+        <DialogSelect<string>
+          title={`Agent access · ${skill.name}`}
+          preserveSelection
+          locked={loading()}
+          options={[
+            {
+              title: `${scope() === "*" ? "[x]" : "[ ]"} All agents`,
+              description: "Includes future Agents",
+              value: "*",
+              category: "Scope",
+            },
+            ...choices(),
+          ]}
+          footer={<TargetAccessFooter onConfirm={apply} />}
+          onSelect={(option) => toggle(option.value)}
+          onToggle={(option) => toggle(option.value)}
+          onConfirm={apply}
+        />
+      ),
+      () => dialog.setSize("xlarge"),
+    )
     dialog.setSize("large")
   }
 
@@ -538,44 +528,44 @@ export function useSkillManager(input?: {
     }
   }
 
-  const rows = createMemo(() => (model() ? buildSkillManagerRows(model()!) : []))
-  const skillTitle = (name: string, skill: NonNullable<ManagerRow["skill"]>) => {
-    const widths = skillColumnWidths(dimensions().width)
-    return `${column(name, widths.name)} ${column(skill.source, widths.source)} ${column(skill.targets, widths.targets)}`
-  }
+  const rows = createMemo(() => (model() ? buildSkillManagerRows(model()!, home) : []))
+  const value = (skill: NonNullable<ManagerRow["skill"]>) =>
+    property() === "Source" ? skill.source : property() === "Targets" ? skill.targets : skill.agents
   const skillHeader = () => {
     const widths = skillColumnWidths(dimensions().width)
     return (
       <text fg={theme.accent} attributes={TextAttributes.BOLD}>
-        {column("Name", widths.name)} {column("Source", widths.source)} {column("Targets", widths.targets)} State
+        {column("Name", widths.name)} {column(property(), widths.property)} State
       </text>
     )
   }
   const options = createMemo(() =>
     rows().map((row): DialogSelectOption<string> => {
-      const skill = row.skill
+      const skill = row.skill!
+      const widths = skillColumnWidths(dimensions().width)
       return {
-        title: skill ? skillTitle(row.title, skill) : row.title,
-        titleWidth: skill ? skillTitleWidth(dimensions().width) : undefined,
-        description: row.description,
-        footer: skill
-          ? () => (
-              <span
-                style={{
-                  fg: skill.state === "active" ? theme.success : theme.textMuted,
-                }}
-              >
-                {skillStateLabel(skill.state)}
-              </span>
-            )
-          : row.footer,
-        footerWidth: skill ? 12 : undefined,
-        details: row.details,
+        title: row.title,
+        titleView: () => (
+          <span>
+            {column(row.title, widths.name)} {column(value(skill), widths.property)}
+          </span>
+        ),
+        titleWidth: widths.name + widths.property + 1,
+        footer: () => (
+          <span style={{ fg: skill.state === "active" ? theme.success : theme.textMuted }}>
+            {skillStateLabel(skill.state)}
+          </span>
+        ),
+        footerWidth: 12,
         category: row.category,
-        categoryView:
-          skill && rows().find((item) => item.category === "Skills")?.key === row.key ? () => skillHeader() : undefined,
-        inspectTitle: row.inspectTitle,
-        inspectionTitle: row.inspectionTitle,
+        categoryView: skillHeader,
+        inspectTitle: true,
+        inspectionTitle: `${column(row.title, widths.name)} ${value(skill)}`,
+        inspectionView: (offset) => (
+          <span>
+            {column(row.title, widths.name)} {inspectionFrame(value(skill), widths.property, offset)}
+          </span>
+        ),
         value: row.key,
       }
     }),
@@ -583,44 +573,66 @@ export function useSkillManager(input?: {
 
   const select = (key: string) => {
     const current = model()
-    if (!current) return
-    if (!key.startsWith("skill:")) return
-    const skillID = key.slice(6)
-    const skill = current.catalog.skills.find((item) => item.id === skillID)
+    const skill = current?.catalog.skills.find((item) => `skill:${item.id}` === key)
     if (!skill) return
-    dialog.replace(() => (
-      <DialogSelect<string>
-        title={`Skill · ${skill.name}`}
-        renderFilter={false}
-        options={[
-          {
-            title: "Target access",
-            description: skillTargetsLabel(targetScope(current.settings, skill.id), current.targets),
-            value: "targets",
-          },
-          {
-            title: "Agent access",
-            description: skillAgentsLabel(agentScope(current.settings, skill.id), current.agents ?? []),
-            value: "agents",
-          },
-          { title: "View content", value: "content" },
-        ]}
-        onSelect={(option) => {
-          if (option.value === "targets") return showTargetAccess(skill)
-          if (option.value === "agents") return showAgentAccess(skill)
-          void showSkillPreview(key)
-        }}
-      />
-    ))
+    setAnchor(key)
+    if (property() === "Targets") return showTargetAccess(skill)
+    if (property() === "Agents") return showAgentAccess(skill)
+    dialog.push(
+      () => (
+        <DialogContentPreview
+          title={`Source · ${skill.name}`}
+          content={[
+            rows().find((row) => row.key === key)?.skill?.source ?? "Source unavailable",
+            "",
+            skill.description ?? "",
+          ].join("\n")}
+          commands={skillPreviewCommands}
+          copySuccess="Source copied to clipboard"
+          copyFailure="Failed to copy source"
+        />
+      ),
+      () => dialog.setSize("xlarge"),
+    )
     dialog.setSize("large")
   }
 
   function open(load = true) {
+    setViewFocused(false)
     // DialogSelect owns navigation state. A controlled current/onMove pair recenters after
     // every key repeat and makes long Skill catalogs jump between queued scroll positions.
     dialog.replace(() => (
       <DialogSelect
         title="Manage skills"
+        titleView={
+          <box flexDirection="column" gap={1}>
+            <text fg={theme.text} attributes={TextAttributes.BOLD}>
+              Manage skills
+            </text>
+            <box flexDirection="row" gap={1}>
+              <text fg={theme.textMuted}>View</text>
+              <For each={skillProperties}>
+                {(item) => (
+                  <text
+                    fg={
+                      property() === item ? (viewFocused() ? selectedForeground(theme) : theme.text) : theme.textMuted
+                    }
+                    bg={property() === item && viewFocused() ? theme.primary : undefined}
+                    onMouseUp={() => {
+                      setProperty(item)
+                      setViewFocused(true)
+                    }}
+                  >
+                    {property() === item ? `[${item}]` : ` ${item} `}
+                  </text>
+                )}
+              </For>
+            </box>
+          </box>
+        }
+        listFocused={!viewFocused()}
+        onMove={() => setViewFocused(false)}
+        onFilter={() => setViewFocused(false)}
         locked={loading()}
         preserveSelection
         current={anchor()}
@@ -633,12 +645,11 @@ export function useSkillManager(input?: {
         footer={
           model() ? (
             <text>
-              {model()!.settings.roots.length} paths · {model()!.catalog.skills.length} Skills ·{" "}
-              {model()!.settings.diagnostics.length +
-                model()!.catalog.diagnostics.length +
-                Number(Boolean(model()!.catalogError)) +
-                Number(Boolean(model()!.targetError))}{" "}
-              diagnostics
+              {viewFocused()
+                ? "tab / ← → view · enter items"
+                : property() === "Source"
+                  ? "tab view · enter read only"
+                  : "tab view · enter edit"}
             </text>
           ) : undefined
         }
@@ -659,7 +670,45 @@ export function useSkillManager(input?: {
             onTrigger: (option) => void showSkillPreview(option.value),
           },
         ]}
-        onSelect={(option) => select(option.value)}
+        bindings={[
+          {
+            key: "tab",
+            desc: "Focus or cycle Skill property",
+            group: "Dialog",
+            cmd: () => {
+              if (loading()) return
+              if (!viewFocused()) return setViewFocused(true)
+              setProperty(skillProperties[(skillProperties.indexOf(property()) + 1) % skillProperties.length]!)
+            },
+          },
+          ...(viewFocused()
+            ? [
+                { key: "shift+tab", desc: "Return to Skills", group: "Dialog", cmd: () => setViewFocused(false) },
+                ...(["left", "right"] as const).map((key) => ({
+                  key,
+                  desc: "Change Skill property",
+                  group: "Dialog",
+                  cmd: () => {
+                    if (loading()) return
+                    setProperty(
+                      skillProperties[
+                        (skillProperties.indexOf(property()) + (key === "left" ? -1 : 1) + skillProperties.length) %
+                          skillProperties.length
+                      ]!,
+                    )
+                  },
+                })),
+              ]
+            : []),
+        ]}
+        onConfirm={(option) => {
+          if (viewFocused()) return setViewFocused(false)
+          if (option) select(option.value)
+        }}
+        onSelect={(option) => {
+          setViewFocused(false)
+          select(option.value)
+        }}
       />
     ))
     dialog.setSize("xlarge")
@@ -769,15 +818,13 @@ function skillStateLabel(state: "active" | "inactive") {
 
 function skillColumnWidths(terminalWidth: number) {
   const available = Math.max(46, Math.min(104, terminalWidth - 14))
-  const source = 10
-  const state = 12
-  const targets = Math.max(14, Math.min(36, Math.floor((available - source - state - 3) * 0.45)))
-  return { name: Math.max(10, available - source - targets - state - 3), source, targets }
+  const name = Math.max(14, Math.min(30, Math.floor(available * 0.3)))
+  return { name, property: available - name - 14 }
 }
 
-function skillTitleWidth(terminalWidth: number) {
-  const widths = skillColumnWidths(terminalWidth)
-  return widths.name + widths.source + widths.targets + 2
+function displayPath(location: string, home?: string) {
+  if (!home || (location !== home && !location.startsWith(home + path.sep))) return location
+  return `~${location.slice(home.length)}`
 }
 
 function column(value: string, width: number) {

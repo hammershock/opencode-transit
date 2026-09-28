@@ -5510,6 +5510,7 @@ export type SkillsCatalogOutput = {
   }
   readonly data: {
     readonly revision: string
+    readonly locations?: { readonly [x: string]: string }
     readonly skills: ReadonlyArray<{
       readonly id: string
       readonly name: string
@@ -5601,6 +5602,7 @@ export type SkillsReloadOutput = {
   }
   readonly data: {
     readonly revision: string
+    readonly locations?: { readonly [x: string]: string }
     readonly skills: ReadonlyArray<{
       readonly id: string
       readonly name: string

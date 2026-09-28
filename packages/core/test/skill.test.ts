@@ -178,6 +178,10 @@ describe("SkillV2", () => {
           yield* skill.transform((editor) => editor.source({ type: "directory", path: AbsolutePath.make(tmp.path) }))
           const initial = yield* skill.catalog()
           const id = initial.snapshot.skills[0]!.id
+          expect(initial.snapshot.locations).toBeUndefined()
+          const management = (yield* skill.catalog({ includeInactive: true })).snapshot
+          expect(management.locations?.[id]).toBe(AbsolutePath.make(path.join(tmp.path, "review", "SKILL.md")))
+          expect(SkillV2.preview(management, AgentV2.Info.empty(AgentV2.ID.make("build"))).locations).toBeUndefined()
 
           expect(initial.snapshot.skills.map((item) => item.name)).toEqual(["review"])
           const primary = AgentV2.Info.empty(AgentV2.ID.make("build"))

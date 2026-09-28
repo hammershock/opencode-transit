@@ -146,7 +146,15 @@ const layer = Layer.effect(
       )
       return {
         entries,
-        snapshot: Skill.RegistrySnapshot.make({ revision: digest, skills, diagnostics, digest }),
+        snapshot: Skill.RegistrySnapshot.make({
+          revision: digest,
+          skills,
+          diagnostics,
+          digest,
+          ...(options?.includeInactive
+            ? { locations: Object.fromEntries(entries.map((entry) => [entry.metadata.id, entry.location])) }
+            : {}),
+        }),
       }
     })
 

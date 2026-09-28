@@ -48,6 +48,7 @@ export interface DialogSelectProps<T> {
   skipFilter?: boolean
   renderFilter?: boolean
   locked?: boolean
+  listFocused?: boolean
   preserveSelection?: boolean
   actions?: ({
     command: string
@@ -651,7 +652,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                           onMouseMove={() => {
                             if (props.locked) return
                             const index = flat().findIndex((x) => isDeepEqual(x.value, option.value))
-                            if (index === -1 || index === store.selected) return
+                            if (index === -1 || (index === store.selected && props.listFocused !== false)) return
                             // Pointer focus never owns the viewport. Synthetic hover from layout
                             // changes is an `over` event, while a real move reaches this handler.
                             focus(index)
@@ -675,7 +676,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                             gap={1}
                             backgroundColor={
                               active()
-                                ? actionFocused()
+                                ? actionFocused() || props.listFocused === false
                                   ? theme.backgroundElement
                                   : (option.bg ?? theme.primary)
                                 : RGBA.fromInts(0, 0, 0, 0)
@@ -704,7 +705,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                               descriptionWidth={option.descriptionWidth}
                               active={active()}
                               current={current()}
-                              muted={actionFocused()}
+                              muted={actionFocused() || props.listFocused === false}
                               gutter={option.gutter}
                             />
                           </box>
@@ -786,7 +787,7 @@ function Option(props: {
       props.descriptionAlign === "right" &&
       (props.descriptionWidth ?? 0) > 0 &&
       Bun.stringWidth(props.description ?? "") > (props.descriptionWidth ?? 0)
-    if (!props.active || (!title && !footer && !description)) {
+    if (!props.active || props.muted || (!title && !footer && !description)) {
       setInspectionOffset(0)
       return
     }
@@ -838,7 +839,7 @@ function Option(props: {
         wrapMode="none"
         paddingLeft={3}
       >
-        {props.inspectTitle && props.active
+        {props.inspectTitle && props.active && !props.muted
           ? (props.inspectionView?.(inspectionOffset(), props.titleWidth ?? 61) ??
             inspectionFrame(props.inspectionTitle ?? props.title, props.titleWidth ?? 61, inspectionOffset()))
           : (props.titleView?.() ??

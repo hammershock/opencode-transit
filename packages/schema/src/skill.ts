@@ -91,6 +91,8 @@ export const Diagnostic = Schema.Struct({
 export interface RegistrySnapshot extends Schema.Schema.Type<typeof RegistrySnapshot> {}
 export const RegistrySnapshot = Schema.Struct({
   revision: Digest,
+  // Controller-local paths are returned only for management catalogs.
+  locations: Schema.Record(ID, AbsolutePath).pipe(optional),
   skills: Schema.Array(Metadata),
   diagnostics: Schema.Array(Diagnostic),
   digest: Digest,

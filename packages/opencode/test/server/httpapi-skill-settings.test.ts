@@ -40,7 +40,9 @@ describe("Skill settings HttpApi", () => {
     const preview = async (agent: string, reload = false) => {
       const result = await request(`/api/skill/catalog?${location}&agent=${agent}&forceReload=${reload}`)
       expect(result.status).toBe(200)
-      return (await result.json()).data.skills as Array<{ id: string; name: string }>
+      const catalog = (await result.json()).data
+      expect(catalog).not.toHaveProperty("locations")
+      return catalog.skills as Array<{ id: string; name: string }>
     }
     const initial = await (await request("/api/skill/settings")).json()
     const skill = (await preview("build", true)).find((skill) => skill.name === "review")!
@@ -106,6 +108,7 @@ describe("Skill settings HttpApi", () => {
     const catalogResponse = await request(`/api/skill/catalog?${location}`)
     expect(catalogResponse.status).toBe(200)
     const catalog = await catalogResponse.json()
+    expect(Object.values(catalog.data.locations)).toContain(path.join(healthy, "review", "SKILL.md"))
     const skill = catalog.data.skills.find((skill: { name: string }) => skill.name === "review")
     expect(skill).toBeDefined()
     const scopedResponse = await request(`/api/skill/settings/${skill.id}/target-scope`, {

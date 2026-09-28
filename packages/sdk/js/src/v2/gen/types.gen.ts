@@ -6810,6 +6810,9 @@ export type SkillDiagnostic = {
 
 export type SkillRegistrySnapshot = {
   revision: string
+  locations?: {
+    [key: string]: unknown | string
+  }
   skills: Array<SkillMetadata>
   diagnostics: Array<SkillDiagnostic>
   digest: string
