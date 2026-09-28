@@ -30,6 +30,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { MessageTable, SessionInputTable, SessionMessageTable, SessionPeerUserMessageTable, SessionTable, SessionTaskTable } from "@opencode-ai/core/session/sql"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionPeerRoute } from "@opencode-ai/core/session/peer-route"
+import { GlobalBus } from "../../src/bus/global"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionExecutionLocal } from "@opencode-ai/core/session/execution/local"
 import { SessionMessage } from "@opencode-ai/core/session/message"
@@ -990,6 +991,52 @@ describe("session HttpApi", () => {
       expect(assistant).toBeDefined()
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
   )
+
+  for (const outcome of ["completed", "interrupted"] as const) {
+    modelIt.live(`publishes V2 busy and idle status when execution is ${outcome}`, () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        if (outcome === "interrupted") yield* llm.hang
+        if (outcome === "completed") yield* llm.text("finished", { usage: { input: 1, output: 1 } })
+        const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: { providerID: "test", id: "test-model" }, location: { directory } }),
+        })
+        const seen: { type: string; directory?: string }[] = []
+        const listener = (event: Parameters<typeof GlobalBus.emit>[1]) => {
+          const payload = event.payload
+          if (payload.type !== "session.status" || !("properties" in payload)) return
+          const properties = payload.properties as { sessionID: string; status: { type: string } }
+          if (properties.sessionID === created.data.id)
+            seen.push({ type: properties.status.type, directory: event.directory })
+        }
+        GlobalBus.on("event", listener)
+        yield* Effect.addFinalizer(() => Effect.sync(() => GlobalBus.off("event", listener)))
+        yield* request(`/api/session/${created.data.id}/prompt`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ prompt: { text: "respond briefly" } }),
+        })
+        yield* llm.wait(1)
+        expect(seen[0]).toEqual({ type: "busy", directory })
+        if (outcome === "interrupted") {
+          const response = yield* request(`/api/session/${created.data.id}/interrupt`, { method: "POST" })
+          expect(response.status).toBe(204)
+        }
+        yield* pollWithTimeout(
+          Effect.sync(() => (seen.some((status) => status.type === "idle") ? true : undefined)),
+          "V2 execution did not publish idle",
+          "10 seconds",
+        )
+        expect(seen).toEqual([
+          { type: "busy", directory },
+          { type: "idle", directory },
+        ])
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(AppNodeBuilder.build(CrossSpawnSpawner.node))),
+    )
+  }
 
   it.live("routes a Skill slash command through the V1 transcript for a legacy session", () =>
     Effect.gen(function* () {

@@ -305,11 +305,7 @@ export function projectCanonicalSessionMessages(input: {
 
 export function mergeCanonicalSessionMessages(legacy: readonly Message[], canonical: readonly Message[]) {
   const projected = new Set(canonical.map((message) => message.id))
-  const live = new Map(legacy.map((message) => [message.id, message]))
-  const messages = [
-    ...canonical.map((message) => live.get(message.id) ?? message),
-    ...legacy.filter((message) => !projected.has(message.id)),
-  ]
+  const messages = [...canonical, ...legacy.filter((message) => !projected.has(message.id))]
   const users = new Map(messages.flatMap((message) => (message.role === "user" ? [[message.id, message]] : [])))
   return messages.toSorted((left, right) => {
     const leftUser = (left.role === "assistant" ? users.get(left.parentID) : left) ?? left

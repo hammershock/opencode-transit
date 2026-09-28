@@ -234,11 +234,11 @@ describe("mergeCanonicalSessionMessages", () => {
     ).toEqual(["input-1", "output-1", "input-2", "output-2"])
   })
 
-  test("prefers the live object when both projections contain the same message", () => {
+  test("prefers canonical state over an older compatibility snapshot", () => {
     const projected = { id: "input-1", role: "user", time: { created: 10 } } as Message
     const live = { ...projected, time: { created: 11 } } as Message
 
-    expect(mergeCanonicalSessionMessages([live], [projected])).toEqual([live])
+    expect(mergeCanonicalSessionMessages([live], [projected])).toEqual([projected])
   })
 })
 
