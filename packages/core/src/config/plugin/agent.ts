@@ -6,6 +6,7 @@ import { Effect, Option, Schema } from "effect"
 import { AgentV2 } from "../../agent"
 import { Agent } from "@opencode-ai/schema/agent"
 import { Config } from "../../config"
+import { ControllerFileSystem } from "../../controller-filesystem"
 import { ConfigAgent } from "../agent"
 import { ConfigMarkdown } from "../markdown"
 import { FSUtil } from "../../fs-util"
@@ -13,6 +14,7 @@ import { ModelV2 } from "../../model"
 import { ConfigAgentV1 } from "../../v1/config/agent"
 import { ConfigMigrateV1 } from "../../v1/config/migrate"
 import { Global } from "../../global"
+import { Location } from "../../location"
 import { PermissionV2 } from "../../permission"
 import type { LocationMutation } from "../../location-mutation"
 import type { ReadTool } from "../../tool/read"
@@ -48,12 +50,13 @@ const agentKeys = new Set([
 export const Plugin = define({
   id: "config-agent",
   effect: Effect.fn(function* (ctx) {
-    const config = yield* Config.Service
-    const fs = yield* FSUtil.Service
     const global = yield* Global.Service
+    const config = yield* Config.Service
+    const fs = yield* ControllerFileSystem.Service
+    const location = yield* Location.Service
     yield* ctx.agent.transform(
       Effect.fn(function* (draft) {
-        const documents = yield* readDocuments(config, fs)
+        const documents = yield* readDocuments(config, fs, global.config, location.target.type !== "local")
         const permissions = expandPermissions(
           documents.flatMap((document) => document.info.permissions ?? []),
           global.home,
@@ -106,16 +109,18 @@ export const Plugin = define({
 
 /** Fresh management labels; never reloads execution state or admits Session context. */
 export const catalog = Effect.fn("ConfigAgent.catalog")(function* () {
-  const config = yield* Config.Service
-  const fs = yield* FSUtil.Service
   const agents = yield* AgentV2.Service
+  const config = yield* Config.Service
+  const fs = yield* ControllerFileSystem.Service
+  const global = yield* Global.Service
+  const location = yield* Location.Service
   const entries = new Map<Agent.ID, Agent.CatalogEntry>(
     (yield* agents.all()).map((agent) => [
       agent.id,
       { id: agent.id, name: agent.name ?? agent.id, mode: agent.mode, hidden: agent.hidden },
     ]),
   )
-  for (const document of yield* readDocuments(config, fs, true)) {
+  for (const document of yield* readDocuments(config, fs, global.config, location.target.type !== "local", true)) {
     for (const [id, definition] of Object.entries(document.info.agents ?? {})) {
       const key = AgentV2.ID.make(id)
       if (definition.disabled) {
@@ -134,10 +139,30 @@ export const catalog = Effect.fn("ConfigAgent.catalog")(function* () {
   return [...entries.values()]
 })
 
-function readDocuments(config: Config.Interface, fs: FSUtil.Interface, fresh = false) {
+function readDocuments(
+  config: Config.Interface,
+  fs: FSUtil.Interface,
+  directory: string,
+  remote: boolean,
+  fresh = false,
+) {
   return Effect.gen(function* () {
     return yield* Effect.forEach(yield* config.entries({ fresh }), (entry) => {
-      if (entry.type === "document") return Effect.succeed([entry])
+      if (entry.type === "document") {
+        // Target config still contributes execution permissions, but cannot redefine
+        // controller-owned Agent identities, prompts, models or the default Agent.
+        if (remote && entry.filesystem === "target")
+          return Effect.succeed([
+            new Config.Document({
+              ...entry,
+              info: new Config.Info({ ...entry.info, agents: undefined, default_agent: undefined }),
+            }),
+          ])
+        return Effect.succeed([entry])
+      }
+      // Remote project paths belong to the target. Only controller-global Agent
+      // files travel across Locations; local project compatibility remains local.
+      if (remote && path.resolve(entry.path) !== path.resolve(directory)) return Effect.succeed([])
       return Effect.gen(function* () {
         const files = yield* discover(fs, entry.path)
         return yield* Effect.forEach(files, (file) =>

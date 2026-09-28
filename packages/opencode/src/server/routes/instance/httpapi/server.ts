@@ -1,3 +1,5 @@
+import { ControllerFileSystem } from "@opencode-ai/core/controller-filesystem"
+import { Global } from "@opencode-ai/core/global"
 import { Config as EffectConfig, Context, Effect, Layer } from "effect"
 import { HttpApiBuilder, OpenApi } from "effect/unstable/httpapi"
 import { HttpClient, HttpMiddleware, HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http"
@@ -301,6 +303,8 @@ export const app = LayerNode.group([
   TargetRegistry.node,
   TargetBindingRegistry.node,
   SkillSettings.node,
+  ControllerFileSystem.node,
+  Global.node,
   HarnessInstructions.node,
   SessionLocationAccess.node,
   SessionLocationMutation.node,

@@ -1,22 +1,30 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Config } from "@opencode-ai/core/config"
+import { ControllerFileSystem } from "@opencode-ai/core/controller-filesystem"
 import { ConfigAgentPlugin } from "@opencode-ai/core/config/plugin/agent"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Global } from "@opencode-ai/core/global"
+import { Location } from "@opencode-ai/core/location"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { ConfigMigrateV1 } from "@opencode-ai/core/v1/config/migrate"
 import { tmpdir } from "../fixture/tmpdir"
+import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
 import { agentHost, host } from "../plugin/host"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([AgentV2.node, FSUtil.node, Global.node])))
+const it = testEffect(
+  Layer.merge(
+    AppNodeBuilder.build(LayerNode.group([AgentV2.node, FSUtil.node, ControllerFileSystem.node, Global.node])),
+    Layer.succeed(Location.Service, location({ directory: AbsolutePath.make("/repo") })),
+  ),
+)
 const decode = Schema.decodeUnknownSync(Config.Info)
 
 describe("ConfigAgentPlugin.Plugin", () => {
@@ -375,6 +383,101 @@ Review by stable id.`,
             description: "Stable identity reviewer",
           })
           expect(yield* agents.get(AgentV2.ID.make(".subagent-stable-reviewer-a1b2c3d4e5f6"))).toBeUndefined()
+        }),
+      ),
+    ),
+  )
+
+  it.live("keeps controller definitions and fresh labels when the target filesystem differs", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const global = yield* Global.Service
+          const filesystem = yield* FSUtil.Service
+          const agents = yield* AgentV2.Service
+          const directory = path.join(tmp.path, "controller")
+          const remote = path.join(tmp.path, "target-project")
+          const file = path.join(directory, "agents", ".subagent-implementation-managed.md")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.dirname(file), { recursive: true })
+            await fs.mkdir(path.join(remote, "agents"), { recursive: true })
+            await fs.writeFile(
+              file,
+              "---\nid: implementation\nname: Implementation\nmode: subagent\nmodel: openai/controller-model\n---\nController instructions.",
+            )
+            // A same-named controller path must not turn a target directory into a config source.
+            await fs.writeFile(
+              path.join(remote, "agents", "implementation.md"),
+              "---\nmodel: other/shadow-model\n---\nShadow instructions.",
+            )
+          })
+          const config = Config.Service.of({
+            entries: () =>
+              Effect.succeed([
+                new Config.Document({
+                  type: "document",
+                  scope: "global",
+                  filesystem: "controller",
+                  info: decode({ default_agent: "inline", agents: { inline: { model: "openai/inline-model" } } }),
+                }),
+                new Config.Directory({ type: "directory", path: AbsolutePath.make(directory) }),
+                new Config.Document({
+                  type: "document",
+                  scope: "project",
+                  filesystem: "target",
+                  info: decode({
+                    default_agent: "target-only",
+                    agents: {
+                      implementation: { disabled: true, system: "Target instructions." },
+                      inline: { model: "other/target-model" },
+                      "target-only": { mode: "subagent" },
+                    },
+                    permissions: [{ action: "bash", resource: "*", effect: "deny" }],
+                  }),
+                }),
+                new Config.Directory({ type: "directory", path: AbsolutePath.make(remote) }),
+              ]),
+          })
+          yield* Effect.gen(function* () {
+            yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(agents) }))
+            expect(yield* agents.resolve("implementation")).toMatchObject({
+              id: "implementation",
+              name: "Implementation",
+              system: "Controller instructions.",
+              model: { providerID: "openai", id: "controller-model" },
+              permissions: [{ action: "bash", resource: "*", effect: "deny" }],
+            })
+            expect(yield* agents.default()).toMatchObject({ id: "inline", model: { id: "inline-model" } })
+            expect(yield* agents.resolve("target-only")).toBeUndefined()
+            yield* Effect.promise(() =>
+              fs.writeFile(
+                file,
+                "---\nid: implementation\nname: Renamed implementation\nmode: subagent\nmodel: openai/controller-model\n---\nController instructions.",
+              ),
+            )
+            const catalog = yield* ConfigAgentPlugin.catalog()
+            expect(catalog.find((entry) => entry.id === "implementation")?.name).toBe("Renamed implementation")
+            expect(catalog.some((entry) => entry.id === "target-only")).toBe(false)
+            expect((yield* agents.resolve("implementation"))?.name).toBe("Implementation")
+          }).pipe(
+            Effect.provideService(Config.Service, config),
+            Effect.provideService(Global.Service, { ...global, config: directory }),
+            Effect.provideService(
+              Location.Service,
+              location({
+                directory: AbsolutePath.make(remote),
+                target: { type: "rexd", targetID: Location.TargetID.make("00000000-0000-4000-8000-000000000001") },
+              }),
+            ),
+            Effect.provideService(FSUtil.Service, {
+              ...filesystem,
+              glob: () => Effect.die("Agent definitions must not scan the target filesystem"),
+              readFileStringSafe: () => Effect.die("Agent definitions must not read the target filesystem"),
+            }),
+          )
         }),
       ),
     ),

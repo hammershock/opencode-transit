@@ -1,3 +1,5 @@
+import { ControllerFileSystem } from "@opencode-ai/core/controller-filesystem"
+import { Global } from "@opencode-ai/core/global"
 import { Database } from "@opencode-ai/core/database/database"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
@@ -48,6 +50,8 @@ const applicationServices = LayerNode.group([
   TargetRegistry.node,
   TargetBindingRegistry.node,
   SkillSettings.node,
+  ControllerFileSystem.node,
+  Global.node,
   HarnessInstructions.node,
   SessionLocationAccess.node,
   SessionLocationMutation.node,
