@@ -492,6 +492,24 @@ describe("HttpApi SDK", () => {
           ),
         )
         expect(unchanged.data.data.revision).toBe(created.data.data.revision)
+        // Warm a separate Location before rename: management reads must not depend
+        // on either Location's activated Agent registry being reloaded.
+        const fs = yield* FSUtil.Service
+        const location = { directory: path.join(directory, "agent-labels") }
+        yield* fs.makeDirectory(location.directory, { recursive: true })
+        const runtime = yield* call(() => sdk.v2.agent.list({ location }, { throwOnError: true }))
+        expect(runtime.data.data.find((agent) => agent.id === reviewer!.id)?.name).toBe("SDK Reviewer")
+        const settings = yield* call(() => sdk.v2.skill.settings({ throwOnError: true }))
+        const skillID = `skl_${"a".repeat(64)}`
+        const scoped = yield* call(() =>
+          sdk.v2.skill.agentScope.update(
+            {
+              skillID,
+              skillAgentScopeUpdate: { scope: [reviewer!.id], expectedRevision: settings.data.revision },
+            },
+            { throwOnError: true },
+          ),
+        )
         const sameName = yield* call(() =>
           sdk.v2.subagent.definition.update(
             {
@@ -521,6 +539,19 @@ describe("HttpApi SDK", () => {
           ),
         )
         expect(renamed.data.data.entries.find((entry) => entry.id === reviewer!.id)?.name).toBe("SDK Focused Reviewer")
+        const names = yield* call(() => sdk.v2.agent.catalog({ location }, { throwOnError: true }))
+        expect(names.data.data.find((agent) => agent.id === reviewer!.id)).toEqual({
+          id: reviewer!.id,
+          name: "SDK Focused Reviewer",
+          mode: "subagent",
+          hidden: false,
+        })
+        expect(names.data.data.some((agent) => agent.id === "build" && agent.mode === "primary")).toBe(true)
+        const frozen = yield* call(() => sdk.v2.agent.list({ location }, { throwOnError: true }))
+        expect(frozen.data.data).toEqual(runtime.data.data)
+        const preserved = yield* call(() => sdk.v2.skill.settings({ throwOnError: true }))
+        expect(preserved.data).toEqual(scoped.data)
+
         const removed = yield* call(() =>
           sdk.v2.subagent.definition.remove(
             {
@@ -535,6 +566,12 @@ describe("HttpApi SDK", () => {
           ),
         )
         expect(removed.data.data.entries.some((entry) => entry.id === reviewer!.id)).toBe(false)
+        const afterDelete = yield* call(() => sdk.v2.agent.catalog({ location }, { throwOnError: true }))
+        expect(afterDelete.data.data.some((agent) => agent.id === reviewer!.id)).toBe(false)
+        expect((yield* call(() => sdk.v2.skill.settings({ throwOnError: true }))).data.agents?.[skillID]).toEqual([
+          reviewer!.id,
+        ])
+
         const attempts = yield* call(() =>
           Promise.all(
             [0, 1].map(() =>
@@ -554,6 +591,10 @@ describe("HttpApi SDK", () => {
         const recreated = attempts.find((attempt) => attempt.data)?.data!.data!
         const replacement = recreated.entries.find((entry) => entry.name === "SDK Reviewer")!
         expect(replacement.id).not.toBe(reviewer!.id)
+        const afterCreate = yield* call(() => sdk.v2.agent.catalog({ location }, { throwOnError: true }))
+        expect(afterCreate.data.data.find((agent) => agent.id === replacement.id)?.name).toBe("SDK Reviewer")
+        expect(afterCreate.data.data.some((agent) => agent.id === reviewer!.id)).toBe(false)
+
         yield* call(() =>
           sdk.v2.subagent.definition.remove(
             {

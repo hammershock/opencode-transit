@@ -223,6 +223,70 @@ describe("ConfigAgentPlugin.Plugin", () => {
     }),
   )
 
+  it.live("reads current management labels without changing activated Agent state", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const agents = yield* AgentV2.Service
+          const directory = new Config.Directory({ type: "directory", path: AbsolutePath.make(tmp.path) })
+          const config = Config.Service.of({ entries: () => Effect.succeed([directory]) })
+          yield* agents.transform((draft) => {
+            draft.update(AgentV2.ID.make("plugin-agent"), (agent) => {
+              agent.name = "Plugin agent"
+            })
+          })
+          yield* Effect.promise(() => fs.mkdir(path.join(tmp.path, "agents")))
+          const file = path.join(tmp.path, "agents", ".subagent-reviewer.md")
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              file,
+              "---\nid: stable-reviewer\nname: Old Reviewer\nmode: subagent\nhidden: true\n---\nOriginal prompt.",
+            ),
+          )
+          yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(agents) })).pipe(
+            Effect.provideService(Config.Service, config),
+          )
+          const runtime = yield* agents.all()
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              file,
+              "---\nid: stable-reviewer\nname: New Reviewer\nmode: subagent\nhidden: true\n---\nChanged prompt.",
+            ),
+          )
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(tmp.path, "agents", "primary.md"),
+              "---\nname: New Primary\nmode: primary\n---\nPrompt.",
+            ),
+          )
+          const catalog = yield* ConfigAgentPlugin.catalog().pipe(Effect.provideService(Config.Service, config))
+          expect(catalog).toContainEqual({
+            id: AgentV2.ID.make("stable-reviewer"),
+            name: "New Reviewer",
+            mode: "subagent",
+            hidden: true,
+          })
+          expect(catalog).toContainEqual({
+            id: AgentV2.ID.make("primary"),
+            name: "New Primary",
+            mode: "primary",
+            hidden: false,
+          })
+          expect(catalog).toContainEqual({
+            id: AgentV2.ID.make("plugin-agent"),
+            name: "Plugin agent",
+            mode: "all",
+            hidden: false,
+          })
+          expect(yield* agents.all()).toEqual(runtime)
+        }),
+      ),
+    ),
+  )
+
   it.live("loads legacy file-based agents from config directories", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),

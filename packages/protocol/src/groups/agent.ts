@@ -17,4 +17,17 @@ export const AgentGroup = HttpApiGroup.make("server.agent").add(
         description: "Retrieve currently registered agents.",
       }),
     ),
+  HttpApiEndpoint.get("agent.catalog", "/api/agent/catalog", {
+    query: LocationQuery,
+    success: Location.response(Schema.Array(Agent.CatalogEntry)),
+  })
+    .annotateMerge(locationQueryOpenApi)
+    .annotateMerge(
+      OpenApi.annotations({
+        identifier: "v2.agent.catalog",
+        summary: "List current Agent management metadata",
+        description:
+          "Read current configured names and identities without reloading execution state or Session context.",
+      }),
+    ),
 )

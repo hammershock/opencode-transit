@@ -211,6 +211,34 @@ export type AgentsListOutput = {
   }>
 }
 
+export type AgentsCatalogInput = {
+  readonly location?: {
+    readonly location?:
+      | {
+          readonly directory?: string | undefined
+          readonly workspace?: string | undefined
+          readonly target?: string | undefined
+        }
+      | undefined
+  }["location"]
+}
+
+export type AgentsCatalogOutput = {
+  readonly location: {
+    readonly target: { readonly type: "local" } | { readonly type: "rexd"; readonly targetID: string }
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly lastKnownTargetName?: string
+    readonly project: { readonly id: string; readonly directory: string }
+  }
+  readonly data: ReadonlyArray<{
+    readonly id: string
+    readonly name: string
+    readonly mode: "subagent" | "primary" | "all"
+    readonly hidden: boolean
+  }>
+}
+
 export type SessionsListInput = {
   readonly workspace?: {
     readonly workspace?: string | undefined
