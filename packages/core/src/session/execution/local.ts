@@ -1,4 +1,6 @@
 import { Cause, Effect, Layer } from "effect"
+import { SessionStatusEvent } from "@opencode-ai/schema/session-status-event"
+import { SessionID } from "@opencode-ai/schema/session-id"
 import { LocationServiceMap } from "../../location-service-map"
 import { makeGlobalNode } from "../../effect/app-node"
 import { SessionRunCoordinator } from "../run-coordinator"
@@ -63,6 +65,21 @@ const layer = Layer.effect(
           runner.run({ sessionID, force, ...(next ? { taskInputID: next.input_id } : {}) }),
         ).pipe(
           Effect.provide(locations.get(location)),
+          (run) =>
+            Effect.acquireUseRelease(
+              events.publish(
+                SessionStatusEvent.Status,
+                { sessionID: SessionID.make(sessionID), status: { type: "busy" } },
+                { location },
+              ),
+              () => run,
+              () =>
+                events.publish(
+                  SessionStatusEvent.Status,
+                  { sessionID: SessionID.make(sessionID), status: { type: "idle" } },
+                  { location },
+                ),
+            ),
           Effect.tapCause((cause) =>
             Cause.hasInterruptsOnly(cause)
               ? Effect.void

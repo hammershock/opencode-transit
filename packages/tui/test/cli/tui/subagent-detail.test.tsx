@@ -2,12 +2,14 @@ import { expect, mock, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { Effect } from "effect"
-import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { tmpdir } from "../../fixture/fixture"
 import { Global } from "@opencode-ai/core/global"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { createEventSource, createFetch, directory, json } from "../../fixture/tui-sdk"
 
 test("opening a running Task follows new child output past the initial message window", async () => {
+  await using tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, "{}")
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
@@ -102,7 +104,12 @@ test("opening a running Task follows new child output past the initial message w
     headers: {},
     release_date: "2026-01-01",
   }
+  let interrupts = 0
   const calls = createFetch((url) => {
+    if (url.pathname === "/session/child/abort") {
+      interrupts++
+      return json(true)
+    }
     if (url.pathname === "/agent")
       return json([
         {
@@ -176,7 +183,11 @@ test("opening a running Task follows new child output past the initial message w
             disposeSlots()
           },
         },
-      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+      }).pipe(
+        Effect.provide(
+          Global.layerWith({ state: tmp.path, config: tmp.path, home: tmp.path, data: tmp.path, cache: tmp.path }),
+        ),
+      ),
     )
     await ready
     const deadline = Date.now() + 5_000
@@ -224,7 +235,130 @@ test("opening a running Task follows new child output past the initial message w
     }
     expect(setup.captureCharFrame()).toContain("child step 25")
 
-    api?.keymap.dispatchCommand("session.parent")
+    // A compatibility snapshot may already exist when canonical streaming starts.
+    events.emit({
+      directory,
+      project: "project",
+      payload: {
+        id: "evt_child_snapshot",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "child",
+          time: 53,
+          part: {
+            id: "child-live-text",
+            messageID: "child-live",
+            sessionID: "child",
+            type: "text",
+            text: "old snapshot",
+          },
+        },
+      },
+    })
+    const emit = (payload: Parameters<typeof events.emit>[0]["payload"]) =>
+      events.emit({ directory, project: "project", payload })
+    emit({
+      id: "evt_child_live_step",
+      type: "session.next.step.started",
+      properties: {
+        sessionID: "child",
+        assistantMessageID: "child-live",
+        timestamp: 53,
+        agent: "build",
+        model: { providerID: "test", id: "model" },
+      },
+    })
+    emit({
+      id: "evt_child_reasoning_start",
+      type: "session.next.reasoning.started",
+      properties: {
+        sessionID: "child",
+        assistantMessageID: "child-live",
+        timestamp: 54,
+        reasoningID: "child-reasoning",
+      },
+    })
+    emit({
+      id: "evt_child_reasoning_delta",
+      type: "session.next.reasoning.delta",
+      properties: {
+        sessionID: "child",
+        assistantMessageID: "child-live",
+        timestamp: 55,
+        reasoningID: "child-reasoning",
+        delta: "Inspecting the fixture",
+      },
+    })
+    const thinkingDeadline = Date.now() + 5_000
+    while (!setup.captureCharFrame().includes("Thinking") && Date.now() < thinkingDeadline) {
+      await setup.renderOnce()
+      await Bun.sleep(10)
+    }
+    expect(setup.captureCharFrame()).toContain("Thinking")
+    emit({
+      id: "evt_child_reasoning_end",
+      type: "session.next.reasoning.ended",
+      properties: {
+        sessionID: "child",
+        assistantMessageID: "child-live",
+        timestamp: 56,
+        reasoningID: "child-reasoning",
+        text: "Inspecting the fixture",
+      },
+    })
+    emit({
+      id: "evt_child_live_text_start",
+      type: "session.next.text.started",
+      properties: { sessionID: "child", assistantMessageID: "child-live", timestamp: 57, textID: "child-live-text" },
+    })
+    emit({
+      id: "evt_child_live_text_delta",
+      type: "session.next.text.delta",
+      properties: {
+        sessionID: "child",
+        assistantMessageID: "child-live",
+        timestamp: 58,
+        textID: "child-live-text",
+        delta: "Live child output is visible",
+      },
+    })
+    const liveDeadline = Date.now() + 5_000
+    while (!setup.captureCharFrame().includes("Live child output is visible") && Date.now() < liveDeadline) {
+      await setup.renderOnce()
+      await Bun.sleep(10)
+    }
+    expect(setup.captureCharFrame()).toContain("Live child output is visible")
+    expect(setup.captureCharFrame()).toContain("Thought")
+    expect(setup.captureCharFrame()).not.toContain("Thinking")
+    expect(setup.captureCharFrame()).not.toContain("old snapshot")
+
+    emit({ id: "evt_child_idle", type: "session.status", properties: { sessionID: "child", status: { type: "idle" } } })
+    await Bun.sleep(30)
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).not.toContain("esc interrupt")
+    emit({ id: "evt_child_busy", type: "session.status", properties: { sessionID: "child", status: { type: "busy" } } })
+    await Bun.sleep(30)
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).toContain("esc interrupt")
+    setup.mockInput.pressEscape()
+    await Bun.sleep(30)
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).toContain("again to interrupt")
+    expect(interrupts).toBe(0)
+    setup.mockInput.pressEscape()
+    const interruptDeadline = Date.now() + 2_000
+    while (interrupts === 0 && Date.now() < interruptDeadline) await Bun.sleep(10)
+    expect(interrupts).toBe(1)
+
+    await setup.mockInput.typeText("A retained draft for history")
+    await Bun.sleep(30)
+    setup.mockInput.pressArrow("up")
+    await Bun.sleep(30)
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).toContain("Live child output is visible")
+    setup.mockInput.pressKey("c", { ctrl: true })
+    await Bun.sleep(30)
+    setup.mockInput.pressArrow("up")
     const parentDeadline = Date.now() + 5_000
     while (!setup.captureCharFrame().includes("General Task — Inspect child") && Date.now() < parentDeadline) {
       await setup.renderOnce()

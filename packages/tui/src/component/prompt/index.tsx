@@ -1142,6 +1142,21 @@ export function Prompt(props: PromptProps) {
     }
   })
 
+  useBindings(() => ({
+    target: inputTarget,
+    enabled:
+      inputTarget() !== undefined &&
+      !props.disabled &&
+      !auto()?.visible &&
+      dialog.stack.length === 0 &&
+      store.mode === "normal" &&
+      store.prompt.input === "" &&
+      store.prompt.parts.length === 0 &&
+      Boolean(props.sessionID && sync.session.get(props.sessionID)?.parentID),
+    priority: 1,
+    bindings: tuiConfig.keybinds.get("session.parent"),
+  }))
+
   useBindings(() => {
     return {
       target: inputTarget,

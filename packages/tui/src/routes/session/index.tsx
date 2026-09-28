@@ -318,7 +318,7 @@ export function Session() {
   const messages = createMemo(() => sessionMessageWindow(allMessages(), route.messageID, renderLimit()))
   // Canonical projection creates fresh adapters per delta; stable IDs keep Solid from remounting the transcript.
   const messagesByID = createMemo(() => new Map(messages().map((message) => [message.id, message] as const)))
-  const messageParts = (messageID: string) => sync.data.part[messageID] ?? canonicalParts().get(messageID) ?? []
+  const messageParts = (messageID: string) => canonicalParts().get(messageID) ?? sync.data.part[messageID] ?? []
   const durableUsers = createMemo(
     () =>
       new Map(
@@ -1707,6 +1707,7 @@ export function Session() {
       hidden: true,
       enabled: !!session()?.parentID,
       run: childSessionHandler(() => {
+        if (prompt?.current.input || prompt?.current.parts.length) return
         const parentID = session()?.parentID
         if (parentID) {
           navigate({

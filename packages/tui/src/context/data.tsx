@@ -462,6 +462,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               type: "reasoning",
               id: event.data.reasoningID,
               text: "",
+              time: { created: event.data.timestamp },
               providerMetadata: event.data.providerMetadata,
             })
           })
@@ -483,6 +484,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             )
             if (match) {
               match.text = event.data.text
+              match.time = { created: match.time?.created ?? event.data.timestamp, completed: event.data.timestamp }
               if (event.data.providerMetadata !== undefined) match.providerMetadata = event.data.providerMetadata
             }
           })
