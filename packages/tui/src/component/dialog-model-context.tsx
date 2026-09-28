@@ -1,6 +1,6 @@
 import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { createMemo, createSignal } from "solid-js"
+import { createMemo, createResource, createSignal, onCleanup, Show } from "solid-js"
 import type { ModelContextGeneration } from "../command-toolkit/model-context"
 import { useTuiConfig } from "../config"
 import { useClipboard } from "../context/clipboard"
@@ -248,26 +248,42 @@ export function showModelContext(
   dialog: DialogContext,
   generation: ModelContextGeneration | null,
   reload?: () => Promise<ModelContextGeneration | null>,
+  countCompactions?: (signal: AbortSignal) => Promise<number>,
 ) {
   if (!generation) return DialogAlert.show(dialog, "Model context", "Model context is unavailable.")
   return new Promise<void>((resolve) => {
-    dialog.replace(() => <DialogModelContext generation={generation} reload={reload} />, resolve)
+    dialog.replace(
+      () => <DialogModelContext generation={generation} reload={reload} countCompactions={countCompactions} />,
+      resolve,
+    )
   })
 }
 
 export function DialogModelContext(props: {
   generation: ModelContextGeneration
   reload?: () => Promise<ModelContextGeneration | null>
+  countCompactions?: (signal: AbortSignal) => Promise<number>
 }) {
   const dialog = useDialog()
   dialog.setSize("xlarge")
   const dimensions = useTerminalDimensions()
   const [generation, setGeneration] = createSignal(props.generation)
   const [reloading, setReloading] = createSignal(false)
+  let countAbort: AbortController | undefined
+  const [count, countControl] = createResource(
+    () => props.countCompactions,
+    async (load) => {
+      countAbort?.abort()
+      countAbort = new AbortController()
+      return load(countAbort.signal).catch(() => undefined)
+    },
+  )
+  onCleanup(() => countAbort?.abort())
 
   const reload = async () => {
     if (!props.reload || reloading()) return
     setReloading(true)
+    void countControl.refetch()
     try {
       const next = await props.reload()
       if (next) setGeneration(next)
@@ -281,6 +297,11 @@ export function DialogModelContext(props: {
       title="Model context"
       preserveSelection
       options={modelContextOptions(generation(), dimensions().width)}
+      footer={
+        <Show when={props.countCompactions}>
+          <text>Compactions: {count.loading ? "counting…" : (count() ?? "unavailable")}</text>
+        </Show>
+      }
       footerHints={[{ title: "enter", label: "preview" }]}
       actions={
         props.reload

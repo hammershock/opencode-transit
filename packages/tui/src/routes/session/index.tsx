@@ -129,6 +129,7 @@ import {
   type ModelContextGeneration,
 } from "../../command-toolkit/model-context"
 import { showModelContext } from "../../component/dialog-model-context"
+import { loadCompactionCount } from "../../util/compaction-count"
 import { useData } from "../../context/data"
 import { taskInvocationMatches, taskReceiptID } from "../../util/task-card"
 import { SkillInvocationRow } from "../../component/skill-invocation"
@@ -988,7 +989,13 @@ export function Session() {
           modelContext: {
             inspect: inspectModelContext,
           },
-          presentModelContext: (generation) => showModelContext(dialog, generation, () => inspectModelContext()),
+          presentModelContext: (generation) =>
+            showModelContext(
+              dialog,
+              generation,
+              () => inspectModelContext(),
+              (signal) => loadCompactionCount(sdk.client, route.sessionID, signal),
+            ),
           openSyncSettings: syncSettings.open,
         }
       },

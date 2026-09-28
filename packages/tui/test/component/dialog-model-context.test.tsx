@@ -76,9 +76,10 @@ test.serial(
 
     const app = await testRender(() => <Harness />, { width: 70, height: 24, kittyKeyboard: true })
     try {
-      await app.renderOnce()
-      await Bun.sleep(25)
-      await app.renderOnce()
+      for (let attempt = 0; attempt < 100 && !findScroll(app.renderer.root); attempt++) {
+        await Bun.sleep(10)
+        await app.renderOnce()
+      }
       const scroll = findScroll(app.renderer.root)
       if (!scroll) throw new Error(`Expected model context scrollbox\n${app.captureCharFrame()}`)
       expect(scroll.scrollHeight).toBeGreaterThan(scroll.viewport.height)
@@ -134,6 +135,8 @@ test.serial("reloads model context through its reload shortcut", async () => {
   await Bun.write(path.join(state, "kv.json"), "{}")
   let keymap!: OpenTuiKeymap
   let reloads = 0
+  let failCount = false
+  const signals: AbortSignal[] = []
 
   function Harness() {
     const renderer = useRenderer()
@@ -153,6 +156,11 @@ test.serial("reloads model context through its reload shortcut", async () => {
                     <DialogProvider>
                       <DialogModelContext
                         generation={{}}
+                        countCompactions={async (signal) => {
+                          signals.push(signal)
+                          if (failCount) throw new Error("history unavailable")
+                          return signals.length === 1 ? 0 : 2
+                        }}
                         reload={async () => {
                           reloads++
                           return {}
@@ -172,17 +180,28 @@ test.serial("reloads model context through its reload shortcut", async () => {
 
   const app = await testRender(() => <Harness />, { width: 86, height: 24, kittyKeyboard: true })
   try {
-    await app.renderOnce()
-    await Bun.sleep(25)
-    await app.renderOnce()
+    for (let attempt = 0; attempt < 100 && !app.captureCharFrame().includes("Compactions: 0"); attempt++) {
+      await Bun.sleep(10)
+      await app.renderOnce()
+    }
     expect(app.captureCharFrame()).toContain("reload ctrl+r")
     expect(reloads).toBe(0)
+    expect(app.captureCharFrame()).toContain("Compactions: 0")
 
     app.mockInput.pressKey("r", { ctrl: true })
     await Bun.sleep(10)
     await app.renderOnce()
     expect(reloads).toBe(1)
+    expect(app.captureCharFrame()).toContain("Compactions: 2")
+    expect(signals[0].aborted).toBe(true)
+    if (process.env.CONTEXT_COUNT_FRAME) await Bun.write(process.env.CONTEXT_COUNT_FRAME, app.captureCharFrame())
+    failCount = true
+    app.mockInput.pressKey("r", { ctrl: true })
+    await Bun.sleep(10)
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("Compactions: unavailable")
   } finally {
     app.renderer.destroy()
+    expect(signals.at(-1)?.aborted).toBe(true)
   }
 })
