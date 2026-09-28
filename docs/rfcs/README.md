@@ -30,12 +30,15 @@ RFC（Request for Comments）用于记录本 fork 中影响多个模块或核心
 | [0023](0023-background-subagent-lifecycle.md)  | Background Subagent Lifecycle          | Accepted |
 | [0024](0024-session-manual-compaction.md)       | Session V2 Manual Compaction           | Accepted |
 | [0025](0025-agent-session-interaction.md)       | Peer Session Interaction and Routes    | Accepted |
+| [0026](0026-skill-agent-visibility.md)           | Agent-scoped Skill Visibility          | Accepted |
 
 RFC-0018 的前置设计 RFC-0017（[PR #502](https://github.com/hammershock/opencode-transit/pull/502)）已交付；RFC-0018 另依赖 RFC-0019 与 RFC-0021。已接受的 RFC-0018 不代表跨 Target Task 能力已实现。
 
 RFC-0023 已接受；RFC-0025 对独立 Session、交互与展示契约作明确修订。未接受的 RFC-0015 控制面草案已由其吸收并退休；RFC 接受不表示运行时能力已交付，实施 issue 仍须分别达到 Ready。
 
 RFC-0025 已接受，引入独立 Session 的显式可见关系、可读 alias 和双向交互；其明确修订条款优先于 RFC-0023，不代表运行时能力已实现。
+
+RFC-0026 已接受，为 Skill 增加与 target scope 并列的 Agent 白名单，覆盖 primary Agent 和 subagent；TUI 按名称选择且添加／改名拒绝同名。接受不表示运行时已实现。
 
 ## 状态
 
