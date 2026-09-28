@@ -13579,6 +13579,7 @@ export type SessionStatusData = {
   query?: {
     directory?: string
     workspace?: string
+    target?: string
   }
   url: "/session/status"
 }

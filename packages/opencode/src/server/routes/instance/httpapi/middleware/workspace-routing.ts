@@ -101,7 +101,10 @@ export function instanceDirectory(
   url: URL,
   session?: Pick<Session.Info, "directory" | "target">,
 ): string {
-  const target = url.searchParams.get("location[target]") || request.headers["x-opencode-target"]
+  const target =
+    url.searchParams.get("location[target]") ||
+    (url.pathname === "/session/status" ? url.searchParams.get("target") : undefined) ||
+    request.headers["x-opencode-target"]
   if (target || session?.target?.type === "rexd") return process.cwd()
   return session?.directory || defaultDirectory(request, url)
 }

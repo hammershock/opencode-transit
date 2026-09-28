@@ -46,6 +46,10 @@ export const MessagesQuery = Schema.Struct({
   before: Schema.optional(Schema.String),
 })
 export const StatusMap = Schema.Record(Schema.String, SessionStatus.Info)
+export const StatusQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  target: Schema.optional(Schema.String),
+})
 export const UpdatePayload = Schema.Struct({
   title: Schema.optional(Schema.String),
   metadata: Schema.optional(Session.Metadata),
@@ -126,7 +130,7 @@ export const SessionApi = HttpApi.make("session")
           }),
         ),
         HttpApiEndpoint.get("status", SessionPaths.status, {
-          query: WorkspaceRoutingQuery,
+          query: StatusQuery,
           success: described(StatusMap, "Get session status"),
           error: HttpApiError.BadRequest,
         }).annotateMerge(
