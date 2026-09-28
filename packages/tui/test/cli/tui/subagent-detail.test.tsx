@@ -1,4 +1,5 @@
 import { expect, mock, test } from "bun:test"
+import { TextareaRenderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { Effect } from "effect"
@@ -7,11 +8,14 @@ import { Global } from "@opencode-ai/core/global"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { createEventSource, createFetch, directory, json } from "../../fixture/tui-sdk"
 
-test("opening a running Task follows new child output past the initial message window", async () => {
+test("a running child follows output, accepts direct input and double Escape interrupts only it", async () => {
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   const events = createEventSource()
+  const interruptions: string[] = []
+  const submissions: string[] = []
+  const posts: string[] = []
   const session = (id: string) => ({
     id,
     title: id === "parent" ? "Parent task" : "Child task",
@@ -102,7 +106,8 @@ test("opening a running Task follows new child output past the initial message w
     headers: {},
     release_date: "2026-01-01",
   }
-  const calls = createFetch((url) => {
+  const calls = createFetch((url, request) => {
+    if (request.method === "POST") posts.push(url.pathname)
     if (url.pathname === "/agent")
       return json([
         {
@@ -125,8 +130,17 @@ test("opening a running Task follows new child output past the initial message w
     if (url.pathname === "/session/status") return json({ parent: { type: "busy" }, child: { type: "busy" } })
     if (url.pathname === "/session/parent" || url.pathname === "/session/child")
       return json(session(url.pathname.split("/")[2]!))
+    if (request.method === "POST" && url.pathname === "/session/child/message") {
+      submissions.push(url.pathname)
+      return json({ info: childMessages.at(-1)?.info, parts: childMessages.at(-1)?.parts })
+    }
     if (url.pathname === "/session/parent/message") return json(parentMessages)
     if (url.pathname === "/session/child/message") return json(childMessages)
+    if (url.pathname === "/session/child/abort" || url.pathname === "/api/session/child/interrupt") {
+      interruptions.push(url.pathname)
+      return json(true)
+    }
+    if (url.pathname === "/api/session/child/revert/commit") return new Response(null, { status: 204 })
     if (/^\/session\/(parent|child)\/(todo|diff)$/.test(url.pathname)) return json([])
     if (url.pathname === "/api/session/parent" || url.pathname === "/api/session/child") {
       const id = url.pathname.split("/")[3]!
@@ -198,6 +212,34 @@ test("opening a running Task follows new child output past the initial message w
     expect(setup.captureCharFrame()).toContain("esc interrupt")
     expect(setup.captureCharFrame()).toContain("Latest call")
     expect(setup.captureCharFrame()).toContain("no running tool observed")
+    expect(setup.renderer.currentFocusedEditor).toBeInstanceOf(TextareaRenderable)
+
+    setup.mockInput.pressEscape()
+    expect(interruptions).toEqual([])
+    const confirmDeadline = Date.now() + 5_000
+    while (!setup.captureCharFrame().includes("again to interrupt") && Date.now() < confirmDeadline) {
+      await setup.renderOnce()
+      await Bun.sleep(10)
+    }
+    expect(setup.captureCharFrame()).toContain("again to interrupt")
+    setup.mockInput.pressEscape()
+    const interruptDeadline = Date.now() + 5_000
+    while (interruptions.length === 0 && Date.now() < interruptDeadline) {
+      await setup.renderOnce()
+      await Bun.sleep(10)
+    }
+    expect(interruptions).toEqual(["/session/child/abort"])
+    const editor = setup.renderer.currentFocusedEditor as TextareaRenderable
+    editor.setText("What remains?")
+    editor.focus()
+    setup.mockInput.pressEnter()
+    const submitDeadline = Date.now() + 5_000
+    while (submissions.length === 0 && Date.now() < submitDeadline) {
+      await setup.renderOnce()
+      await Bun.sleep(10)
+    }
+    expect(submissions).toEqual(["/session/child/message"])
+    expect(posts).not.toContain("/session/parent/message")
 
     events.emit({
       directory,
@@ -322,7 +364,11 @@ test("opening a running Task follows new child output past the initial message w
       },
     })
     const steerDeadline = Date.now() + 5_000
-    while (!setup.captureCharFrame().includes("New steer request") && Date.now() < steerDeadline) {
+    while (
+      (!setup.captureCharFrame().includes("New steer request") ||
+        !setup.captureCharFrame().includes("Older assistant output")) &&
+      Date.now() < steerDeadline
+    ) {
       await setup.renderOnce()
       await Bun.sleep(10)
     }
