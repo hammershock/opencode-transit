@@ -680,6 +680,7 @@ const layer = Layer.effect(
             // still retains the active space so offline changes stay in its outbox.
             const syncSpaceID = (yield* syncSetup.config().pipe(Effect.catch(() => Effect.succeed(undefined))))
               ?.namespaceID
+            const parent = input.parentID ? yield* store.get(input.parentID) : undefined
             const info = SessionV1.SessionInfo.make({
               id: sessionID,
               parentID: input.parentID,
@@ -694,7 +695,7 @@ const layer = Layer.effect(
               workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
               title: `New session - ${new Date(now).toISOString()}`,
               metadata: { "opencode.promptBackend": "v2" },
-              approvalMode: input.approvalMode ?? "normal",
+              approvalMode: input.approvalMode ?? parent?.approvalMode ?? "normal",
               permission: input.permission,
               permissionBoundary: input.permissionBoundary,
               agent: input.agent,

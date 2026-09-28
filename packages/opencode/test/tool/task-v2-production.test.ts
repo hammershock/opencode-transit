@@ -148,13 +148,14 @@ test.each([false, true])(
         expect(line).toBeDefined()
         const result = JSON.parse(line!.slice("TASK_V2_PARENT_RESULT:".length)) as {
           parent: string
-          rows: Array<{ backend: string; state: string; child: string }>
+          rows: Array<{ backend: string; state: string; child: string; approvalMode: string }>
           legacyMessages: number
           contextParts: Array<{ key: string; text: string }>
         }
         expect(result.rows).toHaveLength(1)
         expect(result.rows[0]?.backend).toBe("v2")
         expect(result.rows[0]?.state).toBe("settled")
+        expect(result.rows[0]?.approvalMode).toBe("auto")
         expect(result.legacyMessages).toBe(0)
         expect(hits.some((hit) => JSON.stringify(hit.body).includes("CHILD_TASK_MARKER"))).toBe(true)
         const definitions = JSON.stringify(hits[0]?.body)
@@ -519,6 +520,7 @@ realRexdTest(
           outcome: "completed",
           target: { type: "rexd", targetID },
           directory: "/tmp",
+          approvalMode: "auto",
         })
         expect(result.control.status.data[0]?.location.target_id).toBe(targetID)
         expect(result.control.interrupt.state).toBe("already_settled")
