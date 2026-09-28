@@ -40,6 +40,11 @@ export interface Interface {
     scope: Skill.TargetScope,
     expectedRevision: Skill.Digest,
   ) => Promise<Skill.SettingsSnapshot>
+  readonly updateAgentScope: (
+    skillID: Skill.ID,
+    scope: Skill.AgentScope,
+    expectedRevision: Skill.Digest,
+  ) => Promise<Skill.SettingsSnapshot>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SkillSettings") {}
@@ -55,6 +60,7 @@ type Decoded = {
   readonly paths: readonly string[]
   readonly urls: readonly string[]
   readonly targets: Readonly<Record<string, Skill.TargetScope>>
+  readonly agents: Readonly<Record<string, Skill.AgentScope>>
   readonly diagnostics: readonly Skill.SettingsDiagnostic[]
 }
 
@@ -99,6 +105,7 @@ export function make(options: {
       revision: revision(configs),
       roots,
       targets: decoded.targets,
+      agents: decoded.agents,
       diagnostics,
       valid: !diagnostics.some((diagnostic) => diagnostic.severity === "error"),
     })
@@ -126,17 +133,24 @@ export function make(options: {
       const paths = await normalizePaths(input.paths, options.directory, options.home)
       const urls = normalizeUrls(input.urls)
       return mutate(input.expectedRevision, (text, snapshot) =>
-        editDiscovery(text, { paths, urls, targets: snapshot.targets }),
+        editDiscovery(text, { paths, urls, targets: snapshot.targets, agents: snapshot.agents ?? {} }),
       )
     },
     async resetDiscovery(expectedRevision) {
       return mutate(expectedRevision, (text, snapshot) =>
-        editDiscovery(text, { paths: [], urls: [], targets: snapshot.targets }),
+        editDiscovery(text, { paths: [], urls: [], targets: snapshot.targets, agents: snapshot.agents ?? {} }),
       )
     },
     async updateTargetScope(skillID, scope, expectedRevision) {
       const normalized = normalizeScope(scope)
       return mutate(expectedRevision, (text, snapshot) => editTargetScope(text, snapshot, skillID, normalized), false)
+    },
+    async updateAgentScope(skillID, scope, expectedRevision) {
+      const decoded = Schema.decodeUnknownOption(Skill.AgentScope)(scope)
+      if (decoded._tag === "None")
+        throw new InvalidConfigError({ diagnostics: [invalidConfig("skills.agents", "Agent scope is invalid")] })
+      const normalized = decoded.value === "*" ? "*" : Array.from(new Set(decoded.value)).toSorted()
+      return mutate(expectedRevision, (text, snapshot) => editAgentScope(text, snapshot, skillID, normalized), false)
     },
   }
 }
@@ -192,7 +206,7 @@ function configDiagnostics(config: ConfigFile) {
 }
 
 function decode(input: unknown): Decoded {
-  if (input === undefined) return { paths: [], urls: [], targets: {}, diagnostics: [] }
+  if (input === undefined) return { paths: [], urls: [], targets: {}, agents: {}, diagnostics: [] }
   if (Array.isArray(input)) {
     const values = input.filter((value): value is string => typeof value === "string")
     const diagnostics =
@@ -203,6 +217,7 @@ function decode(input: unknown): Decoded {
       paths: values.filter((value) => !isHttpUrl(value)),
       urls: values.filter(isHttpUrl),
       targets: {},
+      agents: {},
       diagnostics,
     }
   }
@@ -211,17 +226,20 @@ function decode(input: unknown): Decoded {
       paths: [],
       urls: [],
       targets: {},
+      agents: {},
       diagnostics: [invalidConfig("skills", "Skill settings must be an object")],
     }
 
   const paths = decodeStrings(input.paths, "skills.paths")
   const urls = decodeStrings(input.urls, "skills.urls")
   const targets = decodeTargets(input.targets)
+  const agents = decodeAgents(input.agents)
   return {
     paths: paths.values,
     urls: urls.values,
     targets: targets.values,
-    diagnostics: [...paths.diagnostics, ...urls.diagnostics, ...targets.diagnostics],
+    agents: agents.values,
+    diagnostics: [...paths.diagnostics, ...urls.diagnostics, ...targets.diagnostics, ...agents.diagnostics],
   }
 }
 
@@ -251,6 +269,34 @@ function decodeTargets(input: unknown) {
     },
     { values: {} as Record<string, Skill.TargetScope>, diagnostics: [] as Skill.SettingsDiagnostic[] },
   )
+}
+
+function decodeAgents(input: unknown) {
+  const values: Record<string, Skill.AgentScope> = {}
+  const diagnostics: Skill.SettingsDiagnostic[] = []
+  if (input === undefined) return { values, diagnostics }
+  if (!isRecord(input))
+    return { values, diagnostics: [invalidConfig("skills.agents", "Agent scopes must be an object")] }
+  for (const [skillID, scope] of Object.entries(input)) {
+    const id = Schema.decodeUnknownOption(Skill.ID)(skillID)
+    const decoded = Schema.decodeUnknownOption(Skill.AgentScope)(scope)
+    if (id._tag === "None" || decoded._tag === "None") {
+      diagnostics.push(invalidConfig(`skills.agents.${skillID}`, "Agent scope is invalid"))
+      if (id._tag === "Some") values[skillID] = []
+      continue
+    }
+    values[skillID] = decoded.value === "*" ? "*" : Array.from(new Set(decoded.value)).toSorted()
+  }
+  return { values, diagnostics }
+}
+
+export function agentScope(snapshot: Skill.SettingsSnapshot, skillID: Skill.ID): Skill.AgentScope | undefined {
+  const invalid = snapshot.diagnostics.some(
+    (item) =>
+      item.kind === "invalid-config" &&
+      (item.field === "skills" || item.field === "skills.agents" || !item.field.startsWith("skills.")),
+  )
+  return invalid ? [] : snapshot.agents?.[skillID]
 }
 
 async function discoveryRoots(
@@ -439,7 +485,12 @@ function configuredUrls(snapshot: Skill.SettingsSnapshot) {
 
 function editDiscovery(
   text: string,
-  settings: { paths: readonly string[]; urls: readonly string[]; targets: Readonly<Record<string, Skill.TargetScope>> },
+  settings: {
+    paths: readonly string[]
+    urls: readonly string[]
+    targets: Readonly<Record<string, Skill.TargetScope>>
+    agents: Readonly<Record<string, Skill.AgentScope>>
+  },
 ) {
   const base = text.trim() ? text : "{}\n"
   const parsed: unknown = parse(base, [], { allowTrailingComma: true })
@@ -448,6 +499,7 @@ function editDiscovery(
       paths: settings.paths,
       urls: settings.urls,
       ...(Object.keys(settings.targets).length ? { targets: settings.targets } : {}),
+      ...(Object.keys(settings.agents).length ? { agents: settings.agents } : {}),
     })
   const paths = edit(base, ["skills", "paths"], settings.paths)
   return edit(paths, ["skills", "urls"], settings.urls)
@@ -461,6 +513,19 @@ function editTargetScope(text: string, snapshot: Skill.SettingsSnapshot, skillID
     paths: configuredPaths(snapshot),
     urls: configuredUrls(snapshot),
     targets: { ...snapshot.targets, [skillID]: scope },
+    ...(snapshot.agents ? { agents: snapshot.agents } : {}),
+  })
+}
+
+function editAgentScope(text: string, snapshot: Skill.SettingsSnapshot, skillID: Skill.ID, scope: Skill.AgentScope) {
+  const base = text.trim() ? text : "{}\n"
+  const parsed: unknown = parse(base, [], { allowTrailingComma: true })
+  if (isRecord(parsed) && isRecord(parsed.skills)) return edit(base, ["skills", "agents", skillID], scope)
+  return edit(base, ["skills"], {
+    paths: configuredPaths(snapshot),
+    urls: configuredUrls(snapshot),
+    targets: snapshot.targets,
+    agents: { ...snapshot.agents, [skillID]: scope },
   })
 }
 

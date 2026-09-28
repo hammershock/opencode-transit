@@ -805,7 +805,7 @@ export function Session() {
   const local = useLocal()
   const syncSettings = useSyncSettings()
   const targetManager = useTargetManager()
-  const skillManager = useSkillManager()
+  const skillManager = useSkillManager({ location: () => locationQuery(location()) })
   const harnessManager = useHarnessManager({ openSkills: skillManager.open })
   const subagentManager = useSubagentManager({
     sessionID: () => route.sessionID,

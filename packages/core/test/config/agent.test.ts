@@ -265,6 +265,7 @@ Use native v2 fields.`,
               path.join(tmp.path, "agents", ".subagent-stable-reviewer-a1b2c3d4e5f6.md"),
               `---
 id: stable-reviewer
+name: Renamed Paper Reviewer
 model: openrouter/openai/gpt-5
 description: Stable identity reviewer
 ---
@@ -304,6 +305,7 @@ Review by stable id.`,
           expect(yield* agents.get(AgentV2.ID.make("disabled"))).toBeUndefined()
           expect(yield* agents.get(AgentV2.ID.make("plan"))).toMatchObject({ system: "Make a plan.", mode: "primary" })
           expect(yield* agents.get(AgentV2.ID.make("stable-reviewer"))).toMatchObject({
+            name: "Renamed Paper Reviewer",
             model: { providerID: "openrouter", id: "openai/gpt-5" },
             system: "Review by stable id.",
             description: "Stable identity reviewer",

@@ -2712,6 +2712,9 @@ export type Config = {
     targets?: {
       [key: string]: unknown | SkillTargetScope
     }
+    agents?: {
+      [key: string]: unknown | SkillAgentScope
+    }
   }
   references?: {
     [key: string]: string | ConfigV2ReferenceGit | ConfigV2ReferenceLocal
@@ -3683,7 +3686,14 @@ export type ConflictError = {
 export type SkillMentionError = {
   _tag: "SkillMentionError"
   message: string
-  kind: "invalid-mention" | "unavailable" | "target-inapplicable" | "permission-denied" | "stale-catalog" | "malformed"
+  kind:
+    | "invalid-mention"
+    | "unavailable"
+    | "target-inapplicable"
+    | "agent-inapplicable"
+    | "permission-denied"
+    | "stale-catalog"
+    | "malformed"
   skillID: string
   name: string
 }
@@ -3961,7 +3971,7 @@ export type TargetNotFoundError = {
 
 export type SubagentMutationError = {
   _tag: "SubagentMutationError"
-  kind: "conflict" | "not-found" | "readonly"
+  kind: "conflict" | "not-found" | "readonly" | "duplicate-name"
   message: string
   revision?: string
 }
@@ -5432,6 +5442,8 @@ export type SkillTarget = "local" | string
 
 export type SkillTargetScope = "*" | Array<SkillTarget>
 
+export type SkillAgentScope = "*" | Array<string>
+
 export type ConfigV2ReferenceGit = {
   repository: string
   branch?: string
@@ -5492,6 +5504,7 @@ export type AgentColor = string | "primary" | "secondary" | "accent" | "success"
 
 export type AgentV2Info = {
   id: string
+  name?: string
   model?: ModelRef
   request: ProviderRequest
   system?: string
@@ -5549,6 +5562,7 @@ export type SkillActivationDiagnostic = {
     | "invalid-settings"
     | "missing-target"
     | "project-target-scope-ignored"
+    | "project-agent-scope-ignored"
     | "reload-failed"
   severity: "error" | "warning"
   sourceLabel: string
@@ -6768,6 +6782,7 @@ export type SkillMetadata = {
   description?: string
   sourceLabel: string
   digest: string
+  agentScope?: SkillAgentScope
 }
 
 export type SkillDiagnostic = {
@@ -6785,6 +6800,7 @@ export type SkillDiagnostic = {
     | "invalid-settings"
     | "missing-target"
     | "project-target-scope-ignored"
+    | "project-agent-scope-ignored"
   severity: "error" | "warning"
   sourceLabel: string
   message: string
@@ -6794,6 +6810,9 @@ export type SkillDiagnostic = {
 
 export type SkillRegistrySnapshot = {
   revision: string
+  locations?: {
+    [key: string]: unknown | string
+  }
   skills: Array<SkillMetadata>
   diagnostics: Array<SkillDiagnostic>
   digest: string
@@ -6829,6 +6848,9 @@ export type SkillSettingsSnapshot = {
   targets: {
     [key: string]: unknown | SkillTargetScope
   }
+  agents?: {
+    [key: string]: unknown | SkillAgentScope
+  }
   diagnostics: Array<SkillSettingsDiagnostic>
   valid: boolean
 }
@@ -6840,6 +6862,11 @@ export type SkillDiscoveryUpdate = {
 }
 
 export type SkillRevisionInput = {
+  expectedRevision: string
+}
+
+export type SkillAgentScopeUpdate = {
+  scope: SkillAgentScope
   expectedRevision: string
 }
 
@@ -18344,6 +18371,45 @@ export type V2SkillDiscoveryResetResponses = {
 }
 
 export type V2SkillDiscoveryResetResponse = V2SkillDiscoveryResetResponses[keyof V2SkillDiscoveryResetResponses]
+
+export type V2SkillAgentScopeUpdateData = {
+  body: SkillAgentScopeUpdate
+  path: {
+    skillID: string
+  }
+  query?: never
+  url: "/api/skill/settings/{skillID}/agent-scope"
+}
+
+export type V2SkillAgentScopeUpdateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
+}
+
+export type V2SkillAgentScopeUpdateError = V2SkillAgentScopeUpdateErrors[keyof V2SkillAgentScopeUpdateErrors]
+
+export type V2SkillAgentScopeUpdateResponses = {
+  /**
+   * Skill.SettingsSnapshot
+   */
+  200: SkillSettingsSnapshot
+}
+
+export type V2SkillAgentScopeUpdateResponse = V2SkillAgentScopeUpdateResponses[keyof V2SkillAgentScopeUpdateResponses]
 
 export type V2SkillTargetScopeUpdateData = {
   body: SkillTargetScopeUpdate

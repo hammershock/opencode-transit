@@ -456,7 +456,43 @@ describe("HttpApi SDK", () => {
           steps: 5,
           permission: { edit: "deny", bash: "deny" },
         })
-        const renamed = yield* call(() =>
+        for (const name of ["  sdk reviewer  ", "ＢＵＩＬＤ", "summary"]) {
+          const rejected = yield* call(() =>
+            sdk.v2.subagent.definition.create({
+              subagentDefinitionCreate: {
+                sessionID: session.data.id,
+                parentAgentID: "build",
+                expectedRevision: created.data.data.revision,
+                definition: { name, prompt: "Do not write this duplicate." },
+              },
+            }),
+          )
+          expect(rejected.error).toMatchObject({ kind: "duplicate-name" })
+        }
+        const renameRejected = yield* call(() =>
+          sdk.v2.subagent.definition.update({
+            subagentID: reviewer!.id,
+            subagentDefinitionUpdatePayload: {
+              sessionID: session.data.id,
+              parentAgentID: "build",
+              expectedRevision: created.data.data.revision,
+              definition: { name: "build", prompt: reviewer!.prompt },
+            },
+          }),
+        )
+        expect(renameRejected.error).toMatchObject({ kind: "duplicate-name" })
+        const unchanged = yield* call(() =>
+          sdk.v2.subagent.catalog(
+            {
+              sessionID: session.data.id,
+              parentAgentID: "build",
+              includeInactive: "true",
+            },
+            { throwOnError: true },
+          ),
+        )
+        expect(unchanged.data.data.revision).toBe(created.data.data.revision)
+        const sameName = yield* call(() =>
           sdk.v2.subagent.definition.update(
             {
               subagentID: reviewer!.id,
@@ -464,6 +500,20 @@ describe("HttpApi SDK", () => {
                 sessionID: session.data.id,
                 parentAgentID: "build",
                 expectedRevision: created.data.data.revision,
+                definition: { name: "SDK Reviewer", prompt: reviewer!.prompt },
+              },
+            },
+            { throwOnError: true },
+          ),
+        )
+        const renamed = yield* call(() =>
+          sdk.v2.subagent.definition.update(
+            {
+              subagentID: reviewer!.id,
+              subagentDefinitionUpdatePayload: {
+                sessionID: session.data.id,
+                parentAgentID: "build",
+                expectedRevision: sameName.data.data.revision,
                 definition: { name: "SDK Focused Reviewer", prompt: reviewer!.prompt },
               },
             },
@@ -485,6 +535,38 @@ describe("HttpApi SDK", () => {
           ),
         )
         expect(removed.data.data.entries.some((entry) => entry.id === reviewer!.id)).toBe(false)
+        const attempts = yield* call(() =>
+          Promise.all(
+            [0, 1].map(() =>
+              sdk.v2.subagent.definition.create({
+                subagentDefinitionCreate: {
+                  sessionID: session.data.id,
+                  parentAgentID: "build",
+                  expectedRevision: removed.data.data.revision,
+                  definition: { name: "SDK Reviewer", prompt: "New identity" },
+                },
+              }),
+            ),
+          ),
+        )
+        expect(attempts.filter((attempt) => attempt.response.status === 200)).toHaveLength(1)
+        expect(attempts.filter((attempt) => attempt.response.status === 409)).toHaveLength(1)
+        const recreated = attempts.find((attempt) => attempt.data)?.data!.data!
+        const replacement = recreated.entries.find((entry) => entry.name === "SDK Reviewer")!
+        expect(replacement.id).not.toBe(reviewer!.id)
+        yield* call(() =>
+          sdk.v2.subagent.definition.remove(
+            {
+              subagentID: replacement.id,
+              subagentMutationContext: {
+                sessionID: session.data.id,
+                parentAgentID: "build",
+                expectedRevision: recreated.revision,
+              },
+            },
+            { throwOnError: true },
+          ),
+        )
       }),
   )
 

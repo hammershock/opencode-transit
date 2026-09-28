@@ -42,15 +42,21 @@ const layer = Layer.effect(
           (skill) => skill.name === input.name,
         )
         if (!admitted?.length) return yield* new Error({ kind: "not_admitted" })
-        if (admitted.length > 1) return yield* new Error({ kind: "ambiguous_skill" })
-        const match = yield* skills.lookup(admitted[0].id)
-        if (match.status === "missing" || match.entry.metadata.name !== input.name)
-          return yield* new Error({ kind: "resource_unavailable_on_device" })
-        if (match.status === "target-inapplicable") return yield* new Error({ kind: "skill_inapplicable" })
         const agent = (yield* agents.select(input.agent)).info
-        if (!agent || SkillV2.available([match.entry.metadata], agent).length === 0)
+        if (!agent) return yield* new Error({ kind: "skill_inapplicable" })
+        const matches = yield* Effect.forEach(admitted, (skill) => skills.lookup(skill.id))
+        const visible = matches.flatMap((match) =>
+          match.status === "available" &&
+          match.entry.metadata.name === input.name &&
+          SkillV2.available([match.entry.metadata], agent).length > 0
+            ? [match.entry]
+            : [],
+        )
+        if (visible.length > 1) return yield* new Error({ kind: "ambiguous_skill" })
+        if (visible.length === 1) return { entry: visible[0] }
+        if (matches.some((match) => match.status !== "missing" && match.entry.metadata.name === input.name))
           return yield* new Error({ kind: "skill_inapplicable" })
-        return { entry: match.entry }
+        return yield* new Error({ kind: "resource_unavailable_on_device" })
       }),
       read: Effect.fn("SkillResolver.read")(function* (resolved) {
         const entry = yield* registry

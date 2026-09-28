@@ -13,5 +13,8 @@ export const Info = Schema.Struct({
   targets: Schema.Record(Skill.ID, Skill.TargetScope).pipe(Schema.optional).annotate({
     description: "Device-local target availability keyed by Skill ID",
   }),
+  agents: Schema.Record(Skill.ID, Skill.AgentScope).pipe(Schema.optional).annotate({
+    description: "Device-local Agent availability keyed by Skill ID",
+  }),
 }).annotate({ identifier: "Config.Skill" })
 export type Info = typeof Info.Type

@@ -29,6 +29,12 @@ export const TargetScope = Schema.Union([Schema.Literal("*"), Schema.Array(Targe
 })
 export type TargetScope = typeof TargetScope.Type
 
+export const AgentScope = Schema.Union([
+  Schema.Literal("*"),
+  Schema.Array(Schema.String.check(Schema.isPattern(/^(?!\*$)\S(?:[^\u0000]*\S)?$/))),
+]).annotate({ identifier: "Skill.AgentScope" })
+export type AgentScope = typeof AgentScope.Type
+
 export interface Metadata extends Schema.Schema.Type<typeof Metadata> {}
 export const Metadata = Schema.Struct({
   id: ID,
@@ -36,6 +42,7 @@ export const Metadata = Schema.Struct({
   description: Schema.String.pipe(optional),
   sourceLabel: Schema.String,
   digest: Digest,
+  agentScope: AgentScope.pipe(optional),
 }).annotate({ identifier: "Skill.Metadata" })
 
 export interface Detail extends Schema.Schema.Type<typeof Detail> {}
@@ -67,6 +74,7 @@ export const DiagnosticKind = Schema.Literals([
   "invalid-settings",
   "missing-target",
   "project-target-scope-ignored",
+  "project-agent-scope-ignored",
 ])
 export type DiagnosticKind = typeof DiagnosticKind.Type
 
@@ -83,6 +91,8 @@ export const Diagnostic = Schema.Struct({
 export interface RegistrySnapshot extends Schema.Schema.Type<typeof RegistrySnapshot> {}
 export const RegistrySnapshot = Schema.Struct({
   revision: Digest,
+  // Controller-local paths are returned only for management catalogs.
+  locations: Schema.Record(ID, AbsolutePath).pipe(optional),
   skills: Schema.Array(Metadata),
   diagnostics: Schema.Array(Diagnostic),
   digest: Digest,
@@ -143,6 +153,7 @@ export const SettingsSnapshot = Schema.Struct({
   revision: Digest,
   roots: Schema.Array(DiscoveryRoot),
   targets: Schema.Record(ID, TargetScope),
+  agents: Schema.Record(ID, AgentScope).pipe(optional),
   diagnostics: Schema.Array(SettingsDiagnostic),
   valid: Schema.Boolean,
 }).annotate({ identifier: "Skill.SettingsSnapshot" })
@@ -170,6 +181,7 @@ export const InvocationFailureKind = Schema.Literals([
   "invalid-mention",
   "unavailable",
   "target-inapplicable",
+  "agent-inapplicable",
   "permission-denied",
   "stale-catalog",
   "malformed",
@@ -188,6 +200,12 @@ export const TargetScopeUpdate = Schema.Struct({
   scope: TargetScope,
   expectedRevision: Digest,
 }).annotate({ identifier: "Skill.TargetScopeUpdate" })
+
+export interface AgentScopeUpdate extends Schema.Schema.Type<typeof AgentScopeUpdate> {}
+export const AgentScopeUpdate = Schema.Struct({
+  scope: AgentScope,
+  expectedRevision: Digest,
+}).annotate({ identifier: "Skill.AgentScopeUpdate" })
 
 export interface RevisionInput extends Schema.Schema.Type<typeof RevisionInput> {}
 export const RevisionInput = Schema.Struct({

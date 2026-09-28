@@ -28,8 +28,18 @@ export type Info = Skill.Info
 export const Detail = Skill.Detail
 export type Detail = Skill.Detail
 
-export const available = <A extends { readonly name: string }>(skills: ReadonlyArray<A>, agent: AgentV2.Info) =>
-  skills.filter((skill) => evaluate("skill", skill.name, agent.permissions).effect !== "deny")
+export function agentApplicable(scope: Skill.AgentScope | undefined, agent: string) {
+  return scope === undefined || scope === "*" || scope.includes(agent)
+}
+
+export const available = <A extends { readonly name: string; readonly agentScope?: Skill.AgentScope }>(
+  skills: ReadonlyArray<A>,
+  agent: AgentV2.Info,
+) =>
+  skills.filter(
+    (skill) =>
+      agentApplicable(skill.agentScope, agent.id) && evaluate("skill", skill.name, agent.permissions).effect !== "deny",
+  )
 
 export function preview(snapshot: Skill.RegistrySnapshot, agent: AgentV2.Info | undefined) {
   const skills = agent ? available(snapshot.skills, agent) : []
@@ -102,12 +112,16 @@ const layer = Layer.effect(
       const loaded = yield* registry.load(state.get().registrations, options)
       const configured = yield* Effect.promise(() => settings.load())
       const target = state.get().target
-      const entries = options?.includeInactive
+      const selected = options?.includeInactive
         ? loaded.entries
         : loaded.entries.filter((entry) => {
             const scope = configured.targets[entry.metadata.id] ?? "*"
             return scope === "*" || scope.includes(target)
           })
+      const entries = selected.map((entry) => {
+        const scope = SkillSettings.agentScope(configured, entry.metadata.id)
+        return scope === undefined ? entry : { ...entry, metadata: { ...entry.metadata, agentScope: scope } }
+      })
       const diagnostics = [
         ...loaded.snapshot.diagnostics,
         ...state.get().diagnostics,
@@ -132,7 +146,15 @@ const layer = Layer.effect(
       )
       return {
         entries,
-        snapshot: Skill.RegistrySnapshot.make({ revision: digest, skills, diagnostics, digest }),
+        snapshot: Skill.RegistrySnapshot.make({
+          revision: digest,
+          skills,
+          diagnostics,
+          digest,
+          ...(options?.includeInactive
+            ? { locations: Object.fromEntries(entries.map((entry) => [entry.metadata.id, entry.location])) }
+            : {}),
+        }),
       }
     })
 
@@ -158,9 +180,11 @@ const layer = Layer.effect(
 
     const lookup = Effect.fn("SkillV2.lookup")(function* (id: Skill.ID) {
       const loaded = yield* registry.load(state.get().registrations)
-      const entry = loaded.entries.find((item) => item.metadata.id === id)
-      if (!entry) return { status: "missing" as const }
+      const found = loaded.entries.find((item) => item.metadata.id === id)
+      if (!found) return { status: "missing" as const }
       const configured = yield* Effect.promise(() => settings.load())
+      const agentScope = SkillSettings.agentScope(configured, id)
+      const entry = agentScope === undefined ? found : { ...found, metadata: { ...found.metadata, agentScope } }
       const scope = configured.targets[id] ?? "*"
       if (scope === "*" || scope.includes(state.get().target)) return { status: "available" as const, entry }
       return { status: "target-inapplicable" as const, entry }

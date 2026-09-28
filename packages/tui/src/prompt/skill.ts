@@ -159,6 +159,7 @@ export function skillMentionFailureTitle(failure: SkillMentionFailure) {
   if (failure.kind === "stale-catalog") return "Skill changed; select it again"
   if (failure.kind === "permission-denied") return "Agent cannot use this Skill"
   if (failure.kind === "target-inapplicable") return "Skill is unavailable on this target"
+  if (failure.kind === "agent-inapplicable") return "Skill is unavailable to this Agent"
   if (failure.kind === "malformed") return "Skill package is malformed"
   if (failure.kind === "unavailable") return "Skill is no longer available"
   return "Skill mention is invalid"
@@ -234,6 +235,7 @@ function isSkillMentionFailureKind(input: unknown): input is SkillMentionFailure
     input === "invalid-mention" ||
     input === "unavailable" ||
     input === "target-inapplicable" ||
+    input === "agent-inapplicable" ||
     input === "permission-denied" ||
     input === "stale-catalog" ||
     input === "malformed"

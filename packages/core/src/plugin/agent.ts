@@ -196,7 +196,12 @@ export const Plugin = define({
       })
       return Effect.forEach(
         draft.list(),
-        (agent) => agents.capturePermissionDefaults(AgentV2.ID.make(agent.id), agent.permissions),
+        (agent) => {
+          draft.update(agent.id, (item) => {
+            item.name ??= item.id
+          })
+          return agents.capturePermissionDefaults(AgentV2.ID.make(agent.id), agent.permissions)
+        },
         { discard: true },
       )
     })

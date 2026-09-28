@@ -65,6 +65,7 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
         paths: info.skills.paths,
         urls: info.skills.urls,
         targets: info.skills.targets,
+        agents: info.skills.agents,
       } as const),
     commands: info.command,
     instructions: info.instructions,
@@ -125,6 +126,7 @@ export function migrateAgent(info: ConfigAgentV1.Info) {
     ...(info.top_p === undefined ? {} : { top_p: info.top_p }),
   }
   return {
+    name: info.name,
     model: info.model,
     variant: info.variant,
     request: Object.keys(body).length ? { body } : undefined,

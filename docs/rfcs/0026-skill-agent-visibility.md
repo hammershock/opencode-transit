@@ -17,7 +17,7 @@ superseded-by: []
 
 ## 状态与动机
 
-本文是 issue [#706](https://github.com/hammershock/opencode-transit/issues/706) 的已接受设计，尚未实现。维护者接受时明确要求 `/skills` 仅展示 Agent 名称，TUI 添加 Agent 必须拒绝重名。本文扩展 RFC-0012 的配置、过滤与管理契约；其他 Skill discovery、invocation、历史与同步规则保持其原有权威。
+本文是 issue [#706](https://github.com/hammershock/opencode-transit/issues/706) 的已接受设计，实现由 issue [#708](https://github.com/hammershock/opencode-transit/issues/708) 跟踪。维护者接受时明确要求 `/skills` 仅展示 Agent 名称，TUI 添加 Agent 必须拒绝重名。本文扩展 RFC-0012 的配置、过滤与管理契约；其他 Skill discovery、invocation、历史与同步规则保持其原有权威。
 
 目前 Skill manager 可以按 target 配置适用范围，运行时也会排除 Agent 的 `skill` permission 明确拒绝的条目，但用户不能在一项 Skill 上直接选择哪些 Agent 应看到它。为特定评审 subagent 准备的审稿流程因此容易进入主 Agent 或实验 Agent 的目录，增加无关上下文，也容易被误用。
 
@@ -117,16 +117,15 @@ visible(skill, target, agent)
 
 ## 4. TUI 管理
 
-复用 `/skills` 和 `Manage skills`，不增加一个平行的 Skill manager。当前列表保留 Skill、source、target 和状态的稳定布局；Agent 范围以短摘要或 focused detail 展示，窄终端不挤压到不可读。
+复用 `/skills` 和 `Manage skills`，不增加一个平行的 Skill manager。维护者在实现验收前进一步确定以下展示和焦点契约：
 
-选中 Skill 后可进入同一详情／action workflow：
-
-```text
-Skill · paper-review
-  Target access     local
-  Agent access      paper-reviewer
-  View content
-```
+- 每项 Skill 仅占一行：`Name | 当前属性 | State`，不为 Agent 摘要或重名诊断增加第二行。
+- 顶部属性视图为 `Source / Targets / Agents`，默认 Source。Source 显示 `source_name, path`；路径来自管理目录的准确条目位置，允许将 home 缩写为 `~`，不可通过名称猜测路径。Source 只读。
+- 列表焦点下第一次 Tab 仅把焦点移到当前视图名称，不改变视图；视图焦点下后续 Tab 向前轮换，左右键分别向前／向后轮换，首尾循环。
+- 视图焦点下 Enter 或 Shift+Tab 返回原列表项；上下键返回列表并继续导航。输入搜索文字也回到列表。鼠标选择视图与键盘一致。
+- 切换视图保留搜索、选中 Skill identity 与滚动位置，不重扫或修改配置。仅当前视图占属性列宽，长值在选中行内横向查看，其他行与状态列保持静止。
+- 列表中 Enter：Source 打开只读来源详情，Targets / Agents 直接打开对应编辑器。`View content` 快捷键仍可查看 Skill 正文。保存后回到同一视图与 Skill；取消不写入。
+- 具体路径仅随 `includeInactive` 管理快照返回，不加入普通 Agent catalog、guidance 或 portable admitted identity；读取来源信息无需为每行再次读取正文。
 
 Agent access 子视图提供 `All agents` 与可搜索 checklist，标明 primary、subagent 或 both。用户按 **Agent 名称**选择；ID 只作内部值，不出现在 `/skills` 的列表、选项、详情、提示或错误信息中。所有可由用户选择或委派的定义均可管理，不能只取“当前父 Agent 可调用”的 subagent 子集。未知／已失效 ID 保留为不可用选项，有已知名称则显示名称，否则显示 `Unavailable Agent`，用户可明确移除；不得用 ID 或其缩写补位。
 

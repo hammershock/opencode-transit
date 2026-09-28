@@ -131,9 +131,15 @@ const layer = Layer.effect(
         ).toSorted()
       }),
       available: Effect.fn("Skill.available")(function* (agent) {
-        const list = yield* all()
-        if (!agent) return list
-        return list.filter((skill) => Permission.evaluate("skill", skill.name, agent.permission).action !== "deny")
+        const entries = (yield* catalog()).entries
+        if (!agent) return entries.map(toInfo)
+        return entries
+          .filter(
+            (entry) =>
+              SkillV2.agentApplicable(entry.metadata.agentScope, agent.id ?? agent.name) &&
+              Permission.evaluate("skill", entry.metadata.name, agent.permission).action !== "deny",
+          )
+          .map(toInfo)
       }),
     })
   }),

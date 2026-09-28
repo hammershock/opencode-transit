@@ -297,6 +297,7 @@ import type {
   SessionUnshareResponses,
   SessionUpdateErrors,
   SessionUpdateResponses,
+  SkillAgentScopeUpdate,
   SkillDiscoveryUpdate,
   SkillRevisionInput,
   SkillTargetScopeUpdate,
@@ -522,6 +523,8 @@ import type {
   V2SessionWaitResponses,
   V2ShellCompleteErrors,
   V2ShellCompleteResponses,
+  V2SkillAgentScopeUpdateErrors,
+  V2SkillAgentScopeUpdateResponses,
   V2SkillCatalogErrors,
   V2SkillCatalogResponses,
   V2SkillDiscoveryResetErrors,
@@ -7459,6 +7462,45 @@ export class Discovery extends HeyApiClient {
   }
 }
 
+export class AgentScope extends HeyApiClient {
+  /**
+   * Set Skill Agent availability
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      skillID: string
+      skillAgentScopeUpdate: SkillAgentScopeUpdate
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "skillID" },
+            { key: "skillAgentScopeUpdate", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<
+      V2SkillAgentScopeUpdateResponses,
+      V2SkillAgentScopeUpdateErrors,
+      ThrowOnError
+    >({
+      url: "/api/skill/settings/{skillID}/agent-scope",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class TargetScope extends HeyApiClient {
   /**
    * Set Skill target availability
@@ -7628,6 +7670,11 @@ export class Skill extends HeyApiClient {
   private _discovery?: Discovery
   get discovery(): Discovery {
     return (this._discovery ??= new Discovery({ client: this.client }))
+  }
+
+  private _agentScope?: AgentScope
+  get agentScope(): AgentScope {
+    return (this._agentScope ??= new AgentScope({ client: this.client }))
   }
 
   private _targetScope?: TargetScope

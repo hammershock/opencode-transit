@@ -27,6 +27,7 @@ const discovery = Layer.succeed(
     },
   }),
 )
+const agentScopes: Record<string, Skill.AgentScope> = {}
 const scopes: Record<string, Skill.TargetScope> = {}
 const settings = Layer.succeed(
   SkillSettings.Service,
@@ -37,6 +38,7 @@ const settings = Layer.succeed(
         revision: Skill.Digest.make("0".repeat(64)),
         roots: [],
         targets: scopes,
+        agents: agentScopes,
         diagnostics: [],
         valid: true,
       }),
@@ -44,6 +46,9 @@ const settings = Layer.succeed(
       throw new Error("unused")
     },
     resetDiscovery: async () => {
+      throw new Error("unused")
+    },
+    updateAgentScope: async () => {
       throw new Error("unused")
     },
     updateTargetScope: async () => {
@@ -173,8 +178,32 @@ describe("SkillV2", () => {
           yield* skill.transform((editor) => editor.source({ type: "directory", path: AbsolutePath.make(tmp.path) }))
           const initial = yield* skill.catalog()
           const id = initial.snapshot.skills[0]!.id
+          expect(initial.snapshot.locations).toBeUndefined()
+          const management = (yield* skill.catalog({ includeInactive: true })).snapshot
+          expect(management.locations?.[id]).toBe(AbsolutePath.make(path.join(tmp.path, "review", "SKILL.md")))
+          expect(SkillV2.preview(management, AgentV2.Info.empty(AgentV2.ID.make("build"))).locations).toBeUndefined()
 
           expect(initial.snapshot.skills.map((item) => item.name)).toEqual(["review"])
+          const primary = AgentV2.Info.empty(AgentV2.ID.make("build"))
+          const child = AgentV2.Info.make({ ...AgentV2.Info.empty(AgentV2.ID.make("reviewer")), mode: "subagent" })
+          agentScopes[id] = ["reviewer"]
+          const scoped = (yield* skill.catalog()).snapshot
+          expect(SkillV2.preview(scoped, primary).skills).toEqual([])
+          expect(SkillV2.preview(scoped, child).skills).toHaveLength(1)
+          expect(SkillV2.preview(initial.snapshot, primary).skills).toHaveLength(1)
+          const lookup = yield* skill.lookup(id)
+          expect(lookup.status).toBe("available")
+          if (lookup.status === "available") expect(SkillV2.available([lookup.entry.metadata], primary)).toEqual([])
+          expect(
+            SkillV2.preview(scoped, {
+              ...child,
+              permissions: [{ action: "skill", resource: "review", effect: "deny" }],
+            }).skills,
+          ).toEqual([])
+          expect(
+            SkillV2.preview(scoped, { ...child, permissions: [{ action: "skill", resource: "review", effect: "ask" }] })
+              .skills,
+          ).toHaveLength(1)
           scopes[id] = [Location.TargetID.make("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")]
           expect((yield* skill.catalog()).snapshot.skills).toEqual([])
           expect((yield* skill.catalog({ includeInactive: true })).snapshot.skills.map((item) => item.name)).toEqual([
@@ -192,6 +221,7 @@ describe("SkillV2", () => {
             "review",
           ])
           delete scopes[id]
+          delete agentScopes[id]
         }),
       ),
     ),

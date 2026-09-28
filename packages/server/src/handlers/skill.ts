@@ -99,5 +99,8 @@ export const SkillHandler = HttpApiBuilder.group(Api, "server.skill", (handlers)
       .handle("skill.targetScopeUpdate", (ctx) =>
         invoke(() => settings.updateTargetScope(ctx.params.skillID, ctx.payload.scope, ctx.payload.expectedRevision)),
       )
+      .handle("skill.agentScopeUpdate", (ctx) =>
+        invoke(() => settings.updateAgentScope(ctx.params.skillID, ctx.payload.scope, ctx.payload.expectedRevision)),
+      )
   }),
 )

@@ -6,7 +6,7 @@ import type { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { Context, Data, Effect, Layer } from "effect"
 
 export class MutationFailure extends Data.TaggedError("SubagentManagerMutationFailure")<{
-  kind: "conflict" | "not-found" | "readonly"
+  kind: "conflict" | "not-found" | "readonly" | "duplicate-name"
   message: string
   revision?: string
 }> {}

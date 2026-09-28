@@ -3,9 +3,10 @@ import {
   buildSkillManagerRows,
   buildSkillPathRows,
   skillRootStatus,
+  skillAgentChoices,
+  skillAgentsLabel,
   skillPreviewContent,
   skillScopeLabel,
-  skillSourceLabel,
   skillTargetsLabel,
   toggleSkillTargetScope,
   type SkillManagerModel,
@@ -53,9 +54,13 @@ function model(): SkillManagerModel {
       revision: "catalog-revision",
       digest: "catalog-digest",
       skills: [
-        { id: firstID, name: "review", sourceLabel: "OpenCode config · first", digest: "first" },
-        { id: secondID, name: "review", sourceLabel: "Imported · second", digest: "second" },
+        { id: firstID, name: "review", sourceLabel: "OpenCode config · abcdef12", digest: "first" },
+        { id: secondID, name: "review", sourceLabel: "Imported · 12345678", digest: "second" },
       ],
+      locations: {
+        [firstID]: "/Users/test/.config/opencode/skills/review/SKILL.md",
+        [secondID]: "/opt/skills/review/SKILL.md",
+      },
       diagnostics: [
         {
           kind: "duplicate-name",
@@ -78,10 +83,29 @@ describe("Skill Manager presentation", () => {
     expect(skillScopeLabel([])).toBe("none")
     expect(skillScopeLabel(["local"])).toBe("local")
     expect(skillTargetsLabel(["local", "configured-target"], model().targets)).toBe("local, a100-2gpu")
-    expect(skillSourceLabel("Built-in")).toBe("opencode")
-    expect(skillSourceLabel("Codex · abcdef12")).toBe("codex")
-    expect(skillSourceLabel("Claude · abcdef12")).toBe("claude")
-    expect(skillSourceLabel("Imported · abcdef12")).toBe("others")
+  })
+
+  test("selects by names without exposing IDs and blocks ambiguous existing names", () => {
+    const agents = [
+      { id: "agent-private-1", name: "Paper Reviewer", mode: "subagent" as const, hidden: false },
+      { id: "agent-private-2", name: "Coordinator", mode: "primary" as const, hidden: false },
+      { id: "agent-private-3", name: "  ＰＡＰＥＲ Reviewer  ", mode: "subagent" as const, hidden: true },
+    ]
+    const scope = ["agent-private-1", "agent-deleted"]
+    expect(skillAgentsLabel(scope, agents)).toBe("Paper Reviewer, Unavailable Agent")
+    const choices = skillAgentChoices(scope, agents)
+    expect(choices.find((choice) => choice.value === "agent-private-1")).toMatchObject({ blocked: true })
+    expect(choices.find((choice) => choice.value === "agent-private-2")).toMatchObject({
+      blocked: false,
+      category: "Primary agents",
+    })
+    expect(choices.find((choice) => choice.value === "agent-deleted")).toMatchObject({ title: "[x] Unavailable Agent" })
+    for (const choice of choices) expect(`${choice.title} ${choice.description}`).not.toContain(choice.value)
+    const current = model()
+    expect(
+      buildSkillManagerRows({ ...current, settings: { ...current.settings, agents: { [firstID]: [] } } })[0]?.skill
+        ?.state,
+    ).toBe("inactive")
   })
 
   test("switches from future-inclusive access to an explicit checklist", () => {
@@ -92,8 +116,8 @@ describe("Skill Manager presentation", () => {
   })
 
   test("keeps duplicate source identity and hides dormant target overrides", () => {
-    const rows = buildSkillManagerRows(model())
-    expect(rows.every((row) => row.category === "Skills")).toBe(true)
+    const rows = buildSkillManagerRows(model(), "/Users/test")
+    expect(rows.every((row) => row.category === "Skills" && !row.details?.length)).toBe(true)
     expect(buildSkillPathRows(model().settings, "/Users/test")[1]).toMatchObject({
       title: "~/.codex/skills",
       footer: "! undetected",
@@ -101,10 +125,16 @@ describe("Skill Manager presentation", () => {
     })
     expect(rows.filter((row) => row.title === "review")).toEqual([
       expect.objectContaining({
-        skill: { source: "opencode", targets: "all", state: "active" },
-        details: [expect.stringContaining("Duplicate")],
+        skill: {
+          source: "OpenCode config, ~/.config/opencode/skills/review/SKILL.md",
+          targets: "all",
+          agents: "all",
+          state: "active",
+        },
       }),
-      expect.objectContaining({ skill: { source: "others", targets: "local", state: "active" } }),
+      expect.objectContaining({
+        skill: { source: "Imported, /opt/skills/review/SKILL.md", targets: "local", agents: "all", state: "active" },
+      }),
     ])
     expect(rows.find((row) => row.key === `skill:${dormantID}`)).toBeUndefined()
     expect(rows.filter((row) => row.category === "Skills")).toHaveLength(2)

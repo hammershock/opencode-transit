@@ -20,6 +20,73 @@ afterEach(async () => {
 })
 
 describe("Skill settings HttpApi", () => {
+  test("Agent scope API keeps frozen previews until reload and intersects target access", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const imported = path.join(tmp.path, "skills")
+    await fs.mkdir(path.join(imported, "review"), { recursive: true })
+    await fs.writeFile(
+      path.join(imported, "review", "SKILL.md"),
+      "---\nname: review\ndescription: Review\n---\nReview.",
+    )
+    await fs.mkdir(Global.Path.config, { recursive: true })
+    await fs.writeFile(
+      configFile,
+      JSON.stringify({
+        skills: { paths: [imported] },
+        agent: { "stable-reviewer": { name: "Paper Reviewer", mode: "subagent" } },
+      }),
+    )
+    const location = new URLSearchParams({ "location[directory]": tmp.path })
+    const preview = async (agent: string, reload = false) => {
+      const result = await request(`/api/skill/catalog?${location}&agent=${agent}&forceReload=${reload}`)
+      expect(result.status).toBe(200)
+      const catalog = (await result.json()).data
+      expect(catalog).not.toHaveProperty("locations")
+      return catalog.skills as Array<{ id: string; name: string }>
+    }
+    const initial = await (await request("/api/skill/settings")).json()
+    const skill = (await preview("build", true)).find((skill) => skill.name === "review")!
+    expect(skill).toBeDefined()
+    const names = await (await request(`/api/agent?${location}`)).json()
+    expect(names.data).toContainEqual(expect.objectContaining({ id: "stable-reviewer", name: "Paper Reviewer" }))
+    const scopedResponse = await request(`/api/skill/settings/${skill.id}/agent-scope`, {
+      method: "PUT",
+      body: JSON.stringify({ scope: ["stable-reviewer"], expectedRevision: initial.revision }),
+    })
+    expect(scopedResponse.status).toBe(200)
+    const scoped = await scopedResponse.json()
+    expect(scoped.agents[skill.id]).toEqual(["stable-reviewer"])
+    expect((await preview("build")).some((item) => item.id === skill.id)).toBe(true)
+    expect((await preview("build", true)).some((item) => item.id === skill.id)).toBe(false)
+    expect((await preview("stable-reviewer")).some((item) => item.id === skill.id)).toBe(true)
+    expect(await preview("missing-agent")).toEqual([])
+    expect(
+      (
+        await request(`/api/skill/settings/${skill.id}/agent-scope`, {
+          method: "PUT",
+          body: JSON.stringify({ scope: "*", expectedRevision: initial.revision }),
+        })
+      ).status,
+    ).toBe(409)
+    expect(
+      (
+        await request(`/api/skill/settings/${skill.id}/agent-scope`, {
+          method: "PUT",
+          body: JSON.stringify({ scope: ["*"], expectedRevision: scoped.revision }),
+        })
+      ).status,
+    ).toBe(400)
+    expect(
+      (
+        await request(`/api/skill/settings/${skill.id}/target-scope`, {
+          method: "PUT",
+          body: JSON.stringify({ scope: [], expectedRevision: scoped.revision }),
+        })
+      ).status,
+    ).toBe(200)
+    expect((await preview("stable-reviewer", true)).some((item) => item.id === skill.id)).toBe(false)
+  })
+
   test("unavailable roots remain manageable without blocking a healthy catalog or target access", async () => {
     if (process.platform === "win32") return
     await using tmp = await tmpdir({ git: true })
@@ -41,6 +108,7 @@ describe("Skill settings HttpApi", () => {
     const catalogResponse = await request(`/api/skill/catalog?${location}`)
     expect(catalogResponse.status).toBe(200)
     const catalog = await catalogResponse.json()
+    expect(Object.values(catalog.data.locations)).toContain(path.join(healthy, "review", "SKILL.md"))
     const skill = catalog.data.skills.find((skill: { name: string }) => skill.name === "review")
     expect(skill).toBeDefined()
     const scopedResponse = await request(`/api/skill/settings/${skill.id}/target-scope`, {
