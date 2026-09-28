@@ -212,6 +212,116 @@ describe("PermissionV2", () => {
     }),
   )
 
+  for (const [name, run] of [
+    ["local", it],
+    ["remote", remoteIt],
+  ] as const)
+    run.effect(`existing ${name} children follow live ancestor Auto without rewriting their mode`, () =>
+      Effect.gen(function* () {
+        yield* setup()
+        const database = yield* Database.Service
+        const service = yield* PermissionV2.Service
+        const parentID = SessionV2.ID.make("ses_auto_parent")
+        const rootID = SessionV2.ID.make("ses_auto_root")
+        yield* database.db
+          .insert(SessionTable)
+          .values([
+            {
+              id: rootID,
+              project_id: Project.ID.global,
+              slug: "root",
+              directory: "/project",
+              title: "root",
+              version: "test",
+              approval_mode: "auto",
+              agent: "test",
+            },
+            {
+              id: parentID,
+              project_id: Project.ID.global,
+              slug: "parent",
+              directory: "/project",
+              title: "parent",
+              version: "test",
+              parent_id: rootID,
+              agent: "test",
+            },
+          ])
+          .run()
+          .pipe(Effect.orDie)
+        yield* database.db
+          .update(SessionTable)
+          .set({ parent_id: parentID })
+          .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
+          .run()
+          .pipe(Effect.orDie)
+
+        expect(yield* service.ask(assertion())).toMatchObject({ effect: "allow" })
+        yield* service.assert(assertion())
+        expect(yield* service.list()).toEqual([])
+        const sessions = yield* SessionStore.Service
+        expect((yield* sessions.get(SessionV2.ID.make("ses_test")))?.approvalMode).toBe("normal")
+
+        yield* database.db
+          .update(SessionTable)
+          .set({ permission_boundary: [[{ action: "read", resource: "src/index.ts", effect: "deny" }]] })
+          .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
+          .run()
+          .pipe(Effect.orDie)
+        expect(yield* service.ask(assertion())).toMatchObject({ effect: "deny" })
+        yield* database.db
+          .update(SessionTable)
+          .set({ permission_boundary: [] })
+          .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
+          .run()
+          .pipe(Effect.orDie)
+        yield* setRules([{ action: "read", resource: "*", effect: "deny" }])
+        expect(yield* service.assert(assertion()).pipe(Effect.flip)).toBeInstanceOf(PermissionV2.BlockedError)
+        yield* setRules([])
+
+        yield* database.db
+          .update(SessionTable)
+          .set({ approval_mode: "normal" })
+          .where(eq(SessionTable.id, rootID))
+          .run()
+          .pipe(Effect.orDie)
+        expect(yield* service.ask(assertion())).toMatchObject({ effect: "ask" })
+        yield* service.reply({ requestID: PermissionV2.ID.create("per_test"), reply: "reject" })
+        yield* database.db
+          .update(SessionTable)
+          .set({ approval_mode: "auto" })
+          .where(eq(SessionTable.id, rootID))
+          .run()
+          .pipe(Effect.orDie)
+        expect(yield* service.ask(assertion())).toMatchObject({ effect: "allow" })
+
+        // An Auto Session elsewhere is not authority over an unrelated root.
+        yield* database.db
+          .update(SessionTable)
+          .set({ parent_id: null })
+          .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
+          .run()
+          .pipe(Effect.orDie)
+        expect(yield* service.ask(assertion())).toMatchObject({ effect: "ask" })
+      }),
+    )
+
+  for (const parent of ["ses_missing", "ses_test"])
+    it.effect(`unavailable or cyclic ancestry does not enable Auto: ${parent}`, () =>
+      Effect.gen(function* () {
+        yield* setup()
+        const database = yield* Database.Service
+        yield* database.db
+          .update(SessionTable)
+          .set({ parent_id: SessionV2.ID.make(parent) })
+          .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
+          .run()
+          .pipe(Effect.orDie)
+        const service = yield* PermissionV2.Service
+        expect(yield* service.ask(assertion())).toMatchObject({ effect: "ask" })
+      }),
+    )
+
   it.effect("allows managed output reads without granting external directory access", () =>
     Effect.gen(function* () {
       yield* setup([

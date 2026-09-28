@@ -137,8 +137,18 @@ const layer = Layer.effect(
     ) {
       const session = yield* sessions.get(sessionID)
       if (!session) return yield* new SessionV2.NotFoundError({ sessionID })
+      // Approval follows actual Session ownership, including children created
+      // before Auto was enabled. Peer contacts are not an ownership relation.
+      const seen = new Set([session.id])
+      let owner = session
+      while (owner.approvalMode !== "auto" && owner.parentID && !seen.has(owner.parentID)) {
+        seen.add(owner.parentID)
+        const parent = yield* sessions.get(owner.parentID)
+        if (!parent) break
+        owner = parent
+      }
       return {
-        approvalMode: session.approvalMode ?? "normal",
+        approvalMode: owner.approvalMode ?? "normal",
         policy: yield* policy.resolve(sessionID, agentID ?? session.agent),
       }
     })

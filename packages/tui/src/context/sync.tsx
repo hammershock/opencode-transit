@@ -312,6 +312,18 @@ export const {
       return task
     }
 
+    async function resolveApprovalMode(session: Session) {
+      const seen = new Set([session.id])
+      let owner = session
+      while (owner.approvalMode !== "auto" && owner.parentID && !seen.has(owner.parentID)) {
+        seen.add(owner.parentID)
+        const parent = await resolveSession(owner.parentID)
+        if (!parent) break
+        owner = parent
+      }
+      return owner.approvalMode ?? "normal"
+    }
+
     function autoReplyPermission(key: string, reply: (signal: AbortSignal) => Promise<unknown>) {
       const existing = autoPermissionReplies.get(key)
       if (existing) return existing
@@ -362,7 +374,7 @@ export const {
         await Promise.all(
           (result.data ?? []).map(async (request) => {
             const owner = await resolveSession(request.sessionID)
-            if (!owner || permission.effective(owner.approvalMode ?? "normal") !== "auto") {
+            if (!owner || permission.effective(await resolveApprovalMode(owner)) !== "auto") {
               insertPermission(request)
               return
             }
@@ -418,7 +430,7 @@ export const {
           sdk.client.v2.session.question.list({ sessionID }, { throwOnError: true }),
         ])
         const pendingPermissions =
-          permission.effective(session.data!.approvalMode ?? "normal") === "auto"
+          permission.effective(await resolveApprovalMode(session.data!)) === "auto"
             ? (
                 await Promise.all(
                   permissions.data.data.map(async (request) => {
@@ -607,8 +619,8 @@ export const {
         case "permission.asked": {
           const request = event.properties
           touchPermission(request.sessionID, request.id)
-          void resolveSession(request.sessionID).then((session) => {
-            if (!session || permission.effective(session.approvalMode ?? "normal") !== "auto") {
+          void resolveSession(request.sessionID).then(async (session) => {
+            if (!session || permission.effective(await resolveApprovalMode(session)) !== "auto") {
               insertPermission(request)
               return
             }
@@ -641,8 +653,8 @@ export const {
         case "permission.v2.asked": {
           const request = legacyPermission(event.properties)
           touchPermission(request.sessionID, request.id)
-          void resolveSession(request.sessionID).then((session) => {
-            if (!session || permission.effective(session.approvalMode ?? "normal") !== "auto") {
+          void resolveSession(request.sessionID).then(async (session) => {
+            if (!session || permission.effective(await resolveApprovalMode(session)) !== "auto") {
               insertPermission(request)
               return
             }
@@ -1126,6 +1138,16 @@ export const {
         return project.instance.path()
       },
       session: {
+        approvalMode(sessionID: string) {
+          const seen = new Set<string>()
+          let owner = store.session.find((item) => item.id === sessionID)
+          while (owner && !seen.has(owner.id)) {
+            if (owner.approvalMode === "auto") return "auto" as const
+            seen.add(owner.id)
+            owner = store.session.find((item) => item.id === owner?.parentID)
+          }
+          return "normal" as const
+        },
         get(sessionID: string) {
           const match = search(store.session, sessionID, (s) => s.id)
           if (match.found) return store.session[match.index]

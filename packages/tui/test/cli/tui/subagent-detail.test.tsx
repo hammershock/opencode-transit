@@ -18,6 +18,7 @@ test("opening a running Task follows new child output past the initial message w
     id,
     title: id === "parent" ? "Parent task" : "Child task",
     slug: id,
+    approvalMode: id === "parent" ? "auto" : "normal",
     projectID: "project",
     directory: id === "child" ? `${directory}/child-project` : directory,
     version: "0.0.0-test",
@@ -209,6 +210,7 @@ test("opening a running Task follows new child output past the initial message w
       await Bun.sleep(10)
     }
     expect(setup.captureCharFrame()).toContain("child step 24")
+    expect(setup.captureCharFrame()).toContain("auto (inherited)")
     expect(setup.captureCharFrame()).toContain("esc interrupt")
     const activityFrames = new Set<string>()
     const activityDeadline = Date.now() + 2_500
