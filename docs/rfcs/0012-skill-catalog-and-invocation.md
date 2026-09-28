@@ -5,7 +5,7 @@ status: accepted
 authors:
   - hammershock
 created: 2026-09-11
-updated: 2026-09-12
+updated: 2026-09-28
 implemented-by:
   - https://github.com/hammershock/opencode-transit/pull/280
   - https://github.com/hammershock/opencode-transit/pull/281
@@ -48,7 +48,7 @@ Codex 的可观察行为提供了合适的交互基线：composer 发送结构�
 1. normal prompt 支持可搜索、可验证的 `$skill` mention，并保持用户请求为一等输入。
 2. 显式 mention、implicit tool 与 legacy slash compatibility 最终使用同一个 canonical Skill catalog 和 invocation snapshot。
 3. 普通时间线默认隐藏 Skill 正文，同时允许用户查看模型实际接纳的准确快照。
-4. 默认只发现 OpenCode-owned roots；Codex、Claude 与自定义目录必须显式导入，并可一键 reset。
+4. 默认只发现 OpenCode-owned roots；Codex、Claude 与自定义目录必须显式导入，并可在 Paths 面板逐项编辑或移除。
 5. Skill 元信息只在 Agent context 初始化或 Session activation reload 时接纳，不在每个 turn 扫描磁盘。
 6. 新 Skill 在退出并重新进入 Session 后可被 TUI 和 Agent 发现，不要求重启 OpenCode。
 7. Skill 设置与非 OpenCode roots 保持 device-local；用户可显式同步 OpenCode global Skill package，已调用正文仍作为 Session context durable 同步。

@@ -287,7 +287,7 @@ export function useSkillManager() {
         locked={loading()}
         preserveSelection
         options={model() ? buildSkillPathRows(model()!.settings, home, dimensions().width) : []}
-        emptyView={<text>No discovery paths configured</text>}
+        emptyView={<text>No matching discovery paths</text>}
         footer={<text>enter edit · paths only</text>}
         actions={[
           {
@@ -476,7 +476,7 @@ export function useSkillManager() {
         options={options()}
         emptyView={
           <text>
-            {loading() ? "Loading local Skill settings…" : "No Skills discovered · open paths to manage discovery"}
+            {loading() ? "Loading local Skill settings…" : "No matching Skills · open paths to manage discovery"}
           </text>
         }
         footer={
