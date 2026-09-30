@@ -417,7 +417,21 @@ const layer = Layer.effect(
         tools: toolMaterialization?.definitions ?? [],
         toolChoice: isLastStep ? "none" : undefined,
       })
-      if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
+      if (
+        yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }).pipe(
+          Effect.tapError((error) =>
+            createLLMEventPublisher(events, {
+              sessionID: session.id,
+              agent: agent.id,
+              model: {
+                id: ModelV2.ID.make(model.id),
+                providerID: ProviderV2.ID.make(model.provider),
+                ...(selected.model?.variant === undefined ? {} : { variant: selected.model.variant }),
+              },
+            }).failAssistant(`Automatic context compaction failed: ${error.reason.message}`),
+          ),
+        )
+      )
         return yield* Effect.die(continueAfterCompaction(currentStep))
       const startSnapshot = yield* snapshots.capture()
       const publisher = createLLMEventPublisher(events, {
