@@ -198,10 +198,11 @@ const OpenAIResponsesStreamItem = Schema.Struct({
 })
 type OpenAIResponsesStreamItem = Schema.Schema.Type<typeof OpenAIResponsesStreamItem>
 
-// OpenAI Responses surfaces provider failures in two related shapes. The
+// OpenAI Responses surfaces provider failures in several related shapes. The
 // streaming `error` event carries the details at the top level
 // (`{ type: "error", code, message, param, sequence_number }`), while
-// `response.failed` carries them under `response.error`. We capture both so
+// `response.failed` carries them under `response.error`; ChatGPT's `error`
+// event uses `error`. Capture all three so
 // the parser can surface a useful provider-error message in either path.
 const OpenAIResponsesErrorPayload = Schema.Struct({
   code: optionalNull(Schema.String),
@@ -230,6 +231,7 @@ const OpenAIResponsesEvent = Schema.Struct({
   code: Schema.optional(Schema.String),
   message: Schema.optional(Schema.String),
   param: Schema.optional(Schema.String),
+  error: optionalNull(OpenAIResponsesErrorPayload),
 })
 type OpenAIResponsesEvent = Schema.Schema.Type<typeof OpenAIResponsesEvent>
 
@@ -894,7 +896,7 @@ const onResponseFinish = (state: ParserState, event: OpenAIResponsesEvent): Step
 // the bare message — production rate limits and context-length failures used
 // to be indistinguishable from generic stream drops.
 const providerErrorMessage = (event: OpenAIResponsesEvent, fallback: string): string => {
-  const nested = event.response?.error ?? undefined
+  const nested = event.error ?? event.response?.error ?? undefined
   const message = event.message || nested?.message || undefined
   const code = event.code || nested?.code || undefined
   if (message && code) return `${code}: ${message}`
@@ -902,7 +904,7 @@ const providerErrorMessage = (event: OpenAIResponsesEvent, fallback: string): st
 }
 
 const providerError = (event: OpenAIResponsesEvent, fallback: string) => {
-  const code = event.code || event.response?.error?.code || undefined
+  const code = event.code || event.error?.code || event.response?.error?.code || undefined
   const message = providerErrorMessage(event, fallback)
   return LLMEvent.providerError({
     message,

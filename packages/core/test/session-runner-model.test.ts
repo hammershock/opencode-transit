@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import { LLM } from "@opencode-ai/llm"
 import { LLMClient } from "@opencode-ai/llm/route"
 import { DateTime, Effect } from "effect"
-import { Headers } from "effect/unstable/http"
+import { Headers, HttpClientRequest } from "effect/unstable/http"
 import { Credential } from "@opencode-ai/core/credential"
 import { Integration } from "@opencode-ai/core/integration"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -366,6 +366,43 @@ describe("SessionRunnerModel", () => {
         api: "aisdk:@ai-sdk/google",
       })
       expect(failure.message).toBe("Unsupported API for test-provider/test-model: aisdk:@ai-sdk/google")
+    }),
+  )
+
+  it.effect("omits unsupported ChatGPT output caps without changing API-key requests", () =>
+    Effect.gen(function* () {
+      const catalog = ModelV2.Info.make({
+        ...model({ type: "aisdk", package: "@ai-sdk/openai", url: "https://api.openai.com/v1" }),
+        providerID: ProviderV2.ID.openai,
+        request: { headers: {}, body: {} },
+      })
+      for (const credential of [
+        Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("legacy"),
+          access: "oauth-secret",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        }),
+        Credential.Key.make({ type: "key", key: "api-secret" }),
+      ]) {
+        const resolved = yield* SessionRunnerModel.fromCatalogModel(catalog, credential)
+        const request = LLM.request({
+          model: resolved,
+          prompt: "Summarize the conversation",
+          generation: { maxTokens: 4096 },
+        })
+        const compiled = yield* LLMClient.prepare(request)
+        const prepared = yield* resolved.route.prepareTransport(compiled.body, request)
+        const web = yield* HttpClientRequest.toWeb(prepared.request)
+        const body = yield* Effect.promise(() => web.json())
+        if (credential.type === "oauth") expect(body).not.toHaveProperty("max_output_tokens")
+        if (credential.type === "key") expect(body).toHaveProperty("max_output_tokens", 4096)
+        expect(body).toMatchObject({
+          input: [{ role: "user", content: [{ type: "input_text", text: "Summarize the conversation" }] }],
+          stream: true,
+        })
+      }
     }),
   )
 

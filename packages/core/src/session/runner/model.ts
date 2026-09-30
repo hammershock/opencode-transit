@@ -155,6 +155,15 @@ const chatGPTRoute = (model: ModelV2.Info, credential: Credential.OAuth) => {
   const accountID = credential.metadata?.accountID ?? credential.metadata?.accountId
   return withDefaults(model, OpenAIResponses.route).with({
     endpoint: { baseURL: "https://chatgpt.com/backend-api/codex" },
+    transport: {
+      ...OpenAIResponses.httpTransport,
+      // ChatGPT rejects this API-only field, including on compaction requests.
+      prepare: (input) =>
+        OpenAIResponses.httpTransport.prepare({
+          ...input,
+          body: { ...input.body, max_output_tokens: undefined },
+        }),
+    },
     headers: {
       originator: "opencode",
       ...(typeof accountID === "string" ? { "ChatGPT-Account-Id": accountID } : {}),

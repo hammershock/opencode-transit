@@ -1353,6 +1353,34 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("preserves nested ChatGPT stream errors and overflow classification", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents({
+              type: "error",
+              error: {
+                type: "invalid_request_error",
+                code: "context_length_exceeded",
+                message: "Your input exceeds the context window of this model.",
+                param: "input",
+              },
+              sequence_number: 2,
+            }),
+          ),
+        ),
+      )
+      expect(response.events).toEqual([
+        {
+          type: "provider-error",
+          message: "context_length_exceeded: Your input exceeds the context window of this model.",
+          classification: "context-overflow",
+        },
+      ])
+    }),
+  )
+
   it.effect("falls back to error code when message is empty", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(request).pipe(

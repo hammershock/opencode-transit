@@ -1456,6 +1456,64 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  ;["provider", "transport", "empty"].forEach((failure) =>
+    it.effect(`stops and preserves the ${failure} error when automatic compaction fails`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        response = fragmentFixture("text", "initial-answer", ["Original answer"]).completeEvents
+        yield* session.prompt({
+          sessionID,
+          prompt: Prompt.make({ text: "Earlier question ".repeat(180) }),
+          resume: false,
+        })
+        yield* session.resume(sessionID)
+        currentModel = compactModel
+        requests.length = 0
+        executions.length = 0
+        const message =
+          failure === "empty"
+            ? "Provider returned an empty summary"
+            : failure === "transport"
+              ? "HTTP transport failed"
+              : "Unsupported parameter: max_output_tokens"
+        if (failure === "transport")
+          responseStream = Stream.fail(
+            new LLMError({ module: "test", method: "stream", reason: new TransportReason({ message }) }),
+          )
+        responses = [
+          failure === "provider" ? [LLMEvent.providerError({ message })] : [],
+          fragmentFixture("text", "unexpected", ["Must not send uncompressed history"]).completeEvents,
+        ]
+        yield* session.prompt({
+          sessionID,
+          prompt: Prompt.make({ text: "Recent request ".repeat(180) }),
+          resume: false,
+        })
+        const result = yield* session.resume(sessionID).pipe(Effect.exit)
+        expect(Exit.isFailure(result)).toBe(true)
+        expect(requests).toHaveLength(1)
+        expect(executions).toEqual([])
+        const context = yield* session.context(sessionID)
+        expect(context.some((message) => message.type === "compaction")).toBe(false)
+        expect(context.at(-1)).toMatchObject({
+          type: "assistant",
+          finish: "error",
+          error: { message: `Automatic context compaction failed: ${message}` },
+        })
+        requests.length = 0
+        responses = [
+          fragmentFixture("text", "recovered-summary", ["## Objective\n- Preserve original work"]).completeEvents,
+          fragmentFixture("text", "recovered-answer", ["Recovered"]).completeEvents,
+        ]
+        yield* session.resume(sessionID)
+        expect(requests).toHaveLength(2)
+        expect((yield* session.context(sessionID)).at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+        expect(executions).toEqual([])
+      }),
+    ),
+  )
+
   it.effect("keeps V2 history active when manual compaction fails", () =>
     Effect.gen(function* () {
       yield* setup

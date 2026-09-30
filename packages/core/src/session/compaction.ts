@@ -1,6 +1,6 @@
 export * as SessionCompaction from "./compaction"
 
-import { LLM, LLMError, LLMEvent, Message, type LLMRequest, type Model } from "@opencode-ai/llm"
+import { LLM, LLMError, LLMEvent, Message, UnknownProviderReason, type LLMRequest, type Model } from "@opencode-ai/llm"
 import { DateTime, Effect, Schema, Stream } from "effect"
 import type { Config } from "../config"
 import type { EventV2 } from "../event"
@@ -255,7 +255,7 @@ export const make = (dependencies: Dependencies) => {
       skills: skillSnapshots(input.entries),
     })
   })
-  const compactAfterOverflow = Effect.fn("SessionCompaction.compactAfterOverflow")(function* (input: Input) {
+  const compact = Effect.fn("SessionCompaction.compact")(function* (input: Input) {
     const context = input.model.route.defaults.limits?.context
     if (context === undefined || context <= 0) return false
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
@@ -267,7 +267,8 @@ export const make = (dependencies: Dependencies) => {
       context: [previousSummary?.type === "compaction" ? previousSummary.recent : "", selected.head].filter(Boolean),
     })
     const summaryOutput = Math.min(output || SUMMARY_OUTPUT_TOKENS, SUMMARY_OUTPUT_TOKENS)
-    if (Token.estimate(summaryPrompt) > context - summaryOutput) return false
+    if (Token.estimate(summaryPrompt) > context - summaryOutput)
+      return yield* compactionFailure("Summary input exceeds the model context window")
     const messageID = SessionMessage.ID.create()
     yield* dependencies.events.publish(SessionEvent.Compaction.Started, {
       sessionID: input.sessionID,
@@ -277,8 +278,7 @@ export const make = (dependencies: Dependencies) => {
     })
 
     const chunks: string[] = []
-    let failed = false
-    const summarized = yield* dependencies.llm
+    yield* dependencies.llm
       .stream(
         LLM.request({
           model: input.model,
@@ -290,15 +290,13 @@ export const make = (dependencies: Dependencies) => {
       )
       .pipe(
         Stream.runForEach((event) => {
-          if (LLMEvent.is.providerError(event)) failed = true
+          if (LLMEvent.is.providerError(event)) return compactionFailure(event.message)
           if (LLMEvent.is.textDelta(event)) chunks.push(event.text)
           return Effect.void
         }),
-        Effect.as(true),
-        Effect.catchTag("LLM.Error", () => Effect.succeed(false)),
       )
     const summary = chunks.join("")
-    if (!summarized || failed || !summary.trim()) return false
+    if (!summary.trim()) return yield* compactionFailure("Provider returned an empty summary")
     yield* dependencies.events.publish(SessionEvent.Compaction.Ended, {
       sessionID: input.sessionID,
       messageID,
@@ -310,6 +308,13 @@ export const make = (dependencies: Dependencies) => {
     })
     return true
   })
+  const compactAfterOverflow = Effect.fn("SessionCompaction.compactAfterOverflow")((input: Input) =>
+    compact(input).pipe(
+      Effect.catchTag("LLM.Error", (error) =>
+        Effect.logWarning("Context overflow recovery failed", { message: error.reason.message }).pipe(Effect.as(false)),
+      ),
+    ),
+  )
   const compactIfNeeded = Effect.fn("SessionCompaction.compactIfNeeded")(function* (input: Input) {
     if (!config.auto) return false
     const context = input.model.route.defaults.limits?.context
@@ -320,11 +325,19 @@ export const make = (dependencies: Dependencies) => {
       context - Math.max(output, config.buffer)
     )
       return false
-    return yield* compactAfterOverflow(input)
+    return yield* compact(input)
   })
   return {
     compactManual,
     compactIfNeeded,
     compactAfterOverflow,
   }
+}
+
+function compactionFailure(message: string) {
+  return new LLMError({
+    module: "SessionCompaction",
+    method: "compact",
+    reason: new UnknownProviderReason({ message }),
+  })
 }
