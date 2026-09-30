@@ -3,13 +3,189 @@ import { SessionCompaction } from "@opencode-ai/core/session/compaction"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionV2 } from "@opencode-ai/core/session"
-import { LLM, LLMEvent, Model, type LLMRequest } from "@opencode-ai/llm"
+import {
+  InvalidProviderOutputReason,
+  InvalidRequestReason,
+  LLM,
+  LLMError,
+  LLMEvent,
+  Model,
+  type LLMRequest,
+} from "@opencode-ai/llm"
 import { route } from "@opencode-ai/llm/protocols/openai-chat"
 import { Skill } from "@opencode-ai/schema/skill"
 import { SkillInvocation } from "@opencode-ai/schema/skill-invocation"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
-import { DateTime, Effect, Stream } from "effect"
+import { DateTime, Deferred, Effect, Fiber, Stream } from "effect"
+import { adjust } from "effect/testing/TestClock"
+import { it } from "./lib/effect"
+
+it.effect("bounds summary stream retries and leaves no completed compaction", () =>
+  Effect.gen(function* () {
+    let attempts = 0
+    const run = yield* manualSummary(() => {
+      attempts++
+      return Stream.fail(
+        new LLMError({
+          module: "ProviderShared",
+          method: "stream",
+          reason: new InvalidProviderOutputReason({ message: "Failed to read openai/openai-responses stream" }),
+        }),
+      )
+    }).pipe(Effect.exit, Effect.forkChild)
+    yield* adjust(1500)
+    expect((yield* Fiber.join(run))._tag).toBe("Failure")
+    expect(attempts).toBe(3)
+  }),
+)
+
+it.effect("cancels a summary retry without starting another request", () =>
+  Effect.gen(function* () {
+    let attempts = 0
+    const started = yield* Deferred.make<void>()
+    const run = yield* manualSummary(() => {
+      attempts++
+      return Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(
+        Stream.flatMap(() =>
+          Stream.fail(
+            new LLMError({
+              module: "ProviderShared",
+              method: "stream",
+              reason: new InvalidProviderOutputReason({ message: "Failed to read openai/openai-responses stream" }),
+            }),
+          ),
+        ),
+      )
+    }).pipe(Effect.forkChild)
+    yield* Deferred.await(started)
+    yield* Fiber.interrupt(run)
+    yield* adjust(5000)
+    expect(attempts).toBe(1)
+    expect((yield* Fiber.await(run))._tag).toBe("Failure")
+  }),
+)
+
+function manualSummary(stream: (request: LLMRequest) => Stream.Stream<LLMEvent, LLMError>) {
+  return SessionCompaction.make({
+    events: {
+      publish: (type: { type: string }) =>
+        Effect.sync(() => {
+          expect(type.type).not.toBe("session.next.compaction.ended")
+        }),
+    } as unknown as EventV2.Interface,
+    llm: { stream },
+    config: [],
+  }).compactManual({
+    sessionID: SessionV2.ID.make("ses_bounded_compaction"),
+    model: Model.make({ id: "compact", provider: "test", route }),
+    entries: [
+      {
+        seq: 1,
+        message: SessionMessage.User.make({
+          id: SessionMessage.ID.make("msg_bounded_compaction"),
+          type: "user",
+          text: "Preserve this task",
+          time: { created: DateTime.makeUnsafe(1) },
+        }),
+      },
+    ],
+  })
+}
+
+test("retries a tool-free summary read failure without retaining partial output", async () => {
+  const published: Array<{ type: string; data: Record<string, unknown> }> = []
+  let attempts = 0
+  const compaction = SessionCompaction.make({
+    events: {
+      publish: (type: { type: string }, data: Record<string, unknown>) =>
+        Effect.sync(() => published.push({ type: type.type, data })),
+    } as unknown as EventV2.Interface,
+    llm: {
+      stream: (request) => {
+        expect(request.tools).toEqual([])
+        attempts++
+        if (attempts === 1)
+          return Stream.concat(
+            Stream.make(LLMEvent.textDelta({ id: "partial", text: "Discard incomplete summary" })),
+            Stream.fail(
+              new LLMError({
+                module: "ProviderShared",
+                method: "stream",
+                reason: new InvalidProviderOutputReason({
+                  message: "Failed to read openai/openai-responses stream",
+                  raw: "ECONNRESET",
+                }),
+              }),
+            ),
+          )
+        return Stream.make(LLMEvent.textDelta({ id: "complete", text: "Complete summary" }))
+      },
+    },
+    config: [],
+  })
+  await Effect.runPromise(
+    compaction.compactManual({
+      sessionID: SessionV2.ID.make("ses_retry_compaction"),
+      model: Model.make({ id: "compact", provider: "test", route }),
+      entries: [
+        {
+          seq: 1,
+          message: SessionMessage.User.make({
+            id: SessionMessage.ID.make("msg_retry_compaction"),
+            type: "user",
+            text: "Preserve this task",
+            time: { created: DateTime.makeUnsafe(1) },
+          }),
+        },
+      ],
+    }),
+  )
+  expect(attempts).toBe(2)
+  expect(published).toHaveLength(2)
+  expect(published[1].data.text).toBe("Complete summary")
+})
+
+test("does not retry a deterministic summary request rejection", async () => {
+  let attempts = 0
+  const compaction = SessionCompaction.make({
+    events: { publish: () => Effect.void } as unknown as EventV2.Interface,
+    llm: {
+      stream: () => {
+        attempts++
+        return Stream.fail(
+          new LLMError({
+            module: "RequestExecutor",
+            method: "execute",
+            reason: new InvalidRequestReason({ message: "Unsupported parameter: max_output_tokens" }),
+          }),
+        )
+      },
+    },
+    config: [],
+  })
+  const result = await Effect.runPromise(
+    compaction
+      .compactManual({
+        sessionID: SessionV2.ID.make("ses_fatal_compaction"),
+        model: Model.make({ id: "compact", provider: "test", route }),
+        entries: [
+          {
+            seq: 1,
+            message: SessionMessage.User.make({
+              id: SessionMessage.ID.make("msg_fatal_compaction"),
+              type: "user",
+              text: "Preserve this task",
+              time: { created: DateTime.makeUnsafe(1) },
+            }),
+          },
+        ],
+      })
+      .pipe(Effect.exit),
+  )
+  expect(result._tag).toBe("Failure")
+  expect(attempts).toBe(1)
+})
 
 test("compaction prompt preserves detailed work state and relevant files", () => {
   const prompt = SessionCompaction.buildPrompt({ context: ["conversation history"] })

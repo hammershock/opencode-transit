@@ -1456,7 +1456,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  ;["provider", "transport", "empty"].forEach((failure) =>
+  ;["provider", "encoding", "empty"].forEach((failure) =>
     it.effect(`stops and preserves the ${failure} error when automatic compaction fails`, () =>
       Effect.gen(function* () {
         yield* setup
@@ -1474,12 +1474,12 @@ describe("SessionRunnerLLM", () => {
         const message =
           failure === "empty"
             ? "Provider returned an empty summary"
-            : failure === "transport"
-              ? "HTTP transport failed"
+            : failure === "encoding"
+              ? "HTTP request encoding failed"
               : "Unsupported parameter: max_output_tokens"
-        if (failure === "transport")
+        if (failure === "encoding")
           responseStream = Stream.fail(
-            new LLMError({ module: "test", method: "stream", reason: new TransportReason({ message }) }),
+            new LLMError({ module: "test", method: "stream", reason: new TransportReason({ message, kind: "EncodeError" }) }),
           )
         responses = [
           failure === "provider" ? [LLMEvent.providerError({ message })] : [],
