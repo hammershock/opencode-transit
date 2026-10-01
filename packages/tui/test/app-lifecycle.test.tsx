@@ -2456,3 +2456,161 @@ test("event subscriber failure preserves production command palette rendering an
     mock.restore()
   }
 })
+
+test("missing Target child opens read-only history and preserves keyboard navigation", async () => {
+  const setup = await createTestRenderer({ width: 110, height: 32, useThread: false })
+  const core = await import("@opentui/core")
+  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  const events = createEventSource()
+  const parent = {
+    id: "ses_parent",
+    title: "Working parent",
+    slug: "parent",
+    projectID: "project",
+    directory,
+    version: "0.0.0-test",
+    time: { created: 0, updated: 0 },
+  }
+  const child = {
+    ...parent,
+    id: "ses_child",
+    title: "Unavailable child",
+    parentID: parent.id,
+    target: { type: "rexd", targetID: "missing-target" },
+  }
+  const sibling = { ...parent, id: "ses_sibling", title: "Working sibling", parentID: parent.id }
+  const requests: Request[] = []
+  let listed = true
+  const calls = createFetch((url, request) => {
+    requests.push(request)
+    if (url.pathname === "/api/target")
+      return json({ path: "/tmp/opencode/targets.jsonc", revision: "test", targets: [], diagnostics: [], valid: true })
+    if (url.pathname === "/session") return json(listed ? [parent, child, sibling] : [parent, sibling])
+    for (const session of [parent, child, sibling]) {
+      if (url.pathname === `/session/${session.id}`) return json(session)
+      if (url.pathname === `/session/${session.id}/message`)
+        return json([
+          {
+            info: {
+              id: `msg_${session.id}`,
+              role: "user",
+              sessionID: session.id,
+              agent: "build",
+              model: { providerID: "test", modelID: "model" },
+              time: { created: 1 },
+            },
+            parts: [
+              {
+                id: `prt_${session.id}`,
+                sessionID: session.id,
+                messageID: `msg_${session.id}`,
+                type: "text",
+                text: `Saved history for ${session.title}`,
+              },
+            ],
+          },
+        ])
+      if ([`/session/${session.id}/todo`, `/session/${session.id}/diff`].includes(url.pathname)) return json([])
+      if (url.pathname === `/api/session/${session.id}/target-resolution`)
+        return session === child
+          ? json({
+              status: "missing_local_target",
+              missingTargetID: "missing-target",
+              referencedSessionIDs: [child.id],
+              location: { directory, target: child.target },
+            })
+          : json({ status: "resolved", location: { directory } })
+      if (url.pathname === `/api/session/${session.id}/activate`)
+        return json({ data: { status: "unchanged", diagnostics: [] } })
+    }
+    if ([`/api/session/${child.id}/permission`, `/api/session/${child.id}/question`].includes(url.pathname))
+      return json(
+        { message: "Target no longer exists", kind: "session_location_missing_local_target" },
+        { status: 400 },
+      )
+  })
+  let api!: TuiPluginApi
+  let started!: () => void
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  let task: Promise<unknown> | undefined
+  try {
+    const { run } = await import("../src/app")
+    task = Effect.runPromise(
+      run({
+        url: "http://test",
+        directory,
+        config: createTuiResolvedConfig({ plugin_enabled: {} }),
+        fetch: calls.fetch,
+        events: events.source,
+        args: {},
+        pluginHost: {
+          async start(input) {
+            api = input.api
+            started()
+          },
+          async dispose() {},
+        },
+      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node))),
+    )
+    await ready
+    await setup.waitForVisualIdle()
+    api.route.navigate("session", { sessionID: sibling.id })
+    await waitForFrame(setup, "Saved history for Working sibling")
+    await setup.waitForVisualIdle()
+    if (setup.captureCharFrame().includes("Connect a provider")) setup.mockInput.pressEscape()
+    await Bun.sleep(50)
+    setup.mockInput.pressArrow("right")
+    await waitForFrame(setup, "Open read-only")
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "Saved history for Unavailable child")
+    await waitForFrame(setup, "Draft editing is")
+    listed = false
+    events.emit({
+      directory,
+      project: "proj_test",
+      payload: {
+        id: "evt_readonly_projection",
+        type: "sync.projection.updated",
+        properties: { revision: 1 },
+      },
+    })
+    await waitForSessionRequests(calls.session, 2)
+    await Bun.sleep(100)
+    await waitForFrame(setup, "Saved history for Unavailable child")
+    setup.mockInput.pressArrow("left")
+    await waitForFrame(setup, "Saved history for Working sibling")
+    setup.mockInput.pressArrow("right")
+    await waitForFrame(setup, "Open read-only")
+    setup.mockInput.pressEnter()
+    await waitForFrame(setup, "Saved history for Unavailable child")
+    setup.mockInput.pressArrow("up")
+    await waitForFrame(setup, "Saved history for Working parent")
+    expect(
+      requests
+        .filter((request) => request.method !== "GET")
+        .map((request) => new URL(request.url).pathname)
+        .filter((path) => !path.endsWith("/activate")),
+    ).toEqual([])
+    expect(requests.some((request) => new URL(request.url).pathname === `/api/session/${child.id}/activate`)).toBe(
+      false,
+    )
+    expect(
+      requests.some((request) =>
+        [`/api/session/${child.id}/permission`, `/api/session/${child.id}/question`].includes(
+          new URL(request.url).pathname,
+        ),
+      ),
+    ).toBe(false)
+    process.emit("SIGHUP")
+    await task
+  } finally {
+    if (!setup.renderer.isDestroyed) {
+      process.emit("SIGHUP")
+      await task
+      setup.renderer.destroy()
+    }
+    mock.restore()
+  }
+}, 15_000)

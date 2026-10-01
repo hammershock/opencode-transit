@@ -1000,3 +1000,58 @@ test("a message removed during hydration does not regain stale parts", async () 
     app.renderer.destroy()
   }
 })
+
+test("read-only hydration skips runtime queries across refresh and reloads them after recovery", async () => {
+  const paths: string[] = []
+  let available = false
+  const { app, sync } = await mount((url) => {
+    paths.push(url.pathname)
+    if (url.pathname === `/session/${sessionID}`) return json(session)
+    if (url.pathname === `/session/${sessionID}/message`) return json([{ info: assistant, parts: [] }])
+    if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`) return json([])
+    if ([`/api/session/${sessionID}/permission`, `/api/session/${sessionID}/question`].includes(url.pathname))
+      return available ? json({ data: [] }) : json({ message: "missing_local_target" }, { status: 400 })
+  })
+  try {
+    await sync.session.sync(sessionID, { readOnly: true })
+    expect(sync.session.get(sessionID)?.id).toBe(sessionID)
+    expect(sync.data.message[sessionID]?.[0]?.id).toBe(messageID)
+    await sync.session.refresh()
+    expect(paths.filter((path) => path.startsWith(`/api/session/${sessionID}/`))).toEqual([])
+    expect(sync.session.get(sessionID)?.id).toBe(sessionID)
+    available = true
+    await sync.session.sync(sessionID, { readOnly: false })
+    expect(paths.filter((path) => path.startsWith(`/api/session/${sessionID}/`))).toEqual([
+      `/api/session/${sessionID}/permission`,
+      `/api/session/${sessionID}/question`,
+    ])
+    paths.length = 0
+    await sync.session.sync(sessionID, { readOnly: true })
+    await sync.session.refresh()
+    expect(paths.filter((path) => path.startsWith(`/api/session/${sessionID}/`))).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test.each(["message", "permission"])(
+  "failed %s hydration retains uncached child navigation metadata",
+  async (failure) => {
+    const child = { ...session, parentID: "ses_parent" }
+    const { app, sync } = await mount((url) => {
+      if (url.pathname === `/session/${sessionID}`) return json(child)
+      if (url.pathname === `/session/${sessionID}/message`)
+        return failure === "message" ? json({ message: "history unavailable" }, { status: 503 }) : json([])
+      if (url.pathname === `/session/${sessionID}/todo` || url.pathname === `/session/${sessionID}/diff`)
+        return json([])
+      if (url.pathname === `/api/session/${sessionID}/permission`)
+        return json({ message: "missing_local_target" }, { status: 400 })
+    })
+    try {
+      await expect(sync.session.sync(sessionID, { readOnly: failure === "message" })).rejects.toBeDefined()
+      expect(sync.session.get(sessionID)?.parentID).toBe(child.parentID)
+    } finally {
+      app.renderer.destroy()
+    }
+  },
+)
