@@ -182,6 +182,7 @@ export const {
     const sdk = useSDK()
 
     const fullSyncedSessions = new Set<string>()
+    const readOnlySessions = new Set<string>()
     const statusRevisions = new Map<string, number>()
     const syncingSessions = new Map<string, Promise<void>>()
     const resolvingSessions = new Map<string, Promise<Session | undefined>>()
@@ -408,11 +409,20 @@ export const {
       return task
     }
 
-    async function syncSession(sessionID: string, reconcile = false) {
-      if (fullSyncedSessions.has(sessionID))
+    async function syncSession(sessionID: string, reconcile = false, readOnly = readOnlySessions.has(sessionID)) {
+      if (fullSyncedSessions.has(sessionID) && (readOnly || !readOnlySessions.has(sessionID))) {
+        if (readOnly) readOnlySessions.add(sessionID)
         return reconcile ? reconcileSessionMessages(sessionID, SESSION_MESSAGE_LIMIT) : undefined
+      }
       const syncing = syncingSessions.get(sessionID)
-      if (syncing) return syncing
+      if (syncing) {
+        await syncing.catch((error) => {
+          if (!readOnly) throw error
+        })
+        return syncSession(sessionID, reconcile, readOnly)
+      }
+      if (readOnly) readOnlySessions.add(sessionID)
+      if (!readOnly) readOnlySessions.delete(sessionID)
       const tracker = {
         messages: new Set<string>(),
         parts: new Set<string>(),
@@ -421,16 +431,25 @@ export const {
       }
       hydratingSessions.set(sessionID, tracker)
       const task = (async () => {
-        const [session, messages, todo, diff, permissions, questions] = await Promise.all([
-          sdk.client.session.get({ sessionID }, { throwOnError: true }),
+        const session = await sdk.client.session.get({ sessionID }, { throwOnError: true })
+        // Navigation must remain available even if history or runtime queries fail.
+        setStore(
+          "session",
+          produce((draft) => {
+            const match = search(draft, sessionID, (item) => item.id)
+            if (match.found) draft[match.index] = session.data!
+            if (!match.found) draft.splice(match.index, 0, session.data!)
+          }),
+        )
+        const [messages, todo, diff, permissions, questions] = await Promise.all([
           sdk.client.session.messages({ sessionID, limit: SESSION_MESSAGE_LIMIT }, { throwOnError: true }),
           sdk.client.session.todo({ sessionID }),
           sdk.client.session.diff({ sessionID }),
-          sdk.client.v2.session.permission.list({ sessionID }, { throwOnError: true }),
-          sdk.client.v2.session.question.list({ sessionID }, { throwOnError: true }),
+          readOnly ? undefined : sdk.client.v2.session.permission.list({ sessionID }, { throwOnError: true }),
+          readOnly ? undefined : sdk.client.v2.session.question.list({ sessionID }, { throwOnError: true }),
         ])
         const pendingPermissions =
-          permission.effective(await resolveApprovalMode(session.data!)) === "auto"
+          permissions && permission.effective(await resolveApprovalMode(session.data!)) === "auto"
             ? (
                 await Promise.all(
                   permissions.data.data.map(async (request) => {
@@ -444,7 +463,7 @@ export const {
                   }),
                 )
               ).filter((request) => request !== undefined)
-            : permissions.data.data
+            : permissions?.data.data
         setStore(
           produce((draft) => {
             const match = search(draft.session, sessionID, (s) => s.id)
@@ -452,29 +471,33 @@ export const {
             if (!match.found) draft.session.splice(match.index, 0, session.data!)
             draft.todo[sessionID] = todo.data ?? []
             draft.session_diff[sessionID] = diff.data ?? []
-            draft.permission[sessionID] = pendingPermissions
-              .map(legacyPermission)
-              .filter((request) => !tracker.permissions.has(request.id))
-              .concat(
-                (draft.permission[sessionID] ?? []).filter(
-                  (request) => request.api !== "v2" || tracker.permissions.has(request.id),
-                ),
-              )
-              .toSorted((a, b) => a.id.localeCompare(b.id))
-            draft.question[sessionID] = questions.data.data
-              .map(legacyQuestion)
-              .filter((request) => !tracker.questions.has(request.id))
-              .concat(
-                (draft.question[sessionID] ?? []).filter(
-                  (request) => request.api !== "v2" || tracker.questions.has(request.id),
-                ),
-              )
-              .toSorted((a, b) => a.id.localeCompare(b.id))
+            if (pendingPermissions)
+              draft.permission[sessionID] = pendingPermissions
+                .map(legacyPermission)
+                .filter((request) => !tracker.permissions.has(request.id))
+                .concat(
+                  (draft.permission[sessionID] ?? []).filter(
+                    (request) => request.api !== "v2" || tracker.permissions.has(request.id),
+                  ),
+                )
+                .toSorted((a, b) => a.id.localeCompare(b.id))
+            if (questions)
+              draft.question[sessionID] = questions.data.data
+                .map(legacyQuestion)
+                .filter((request) => !tracker.questions.has(request.id))
+                .concat(
+                  (draft.question[sessionID] ?? []).filter(
+                    (request) => request.api !== "v2" || tracker.questions.has(request.id),
+                  ),
+                )
+                .toSorted((a, b) => a.id.localeCompare(b.id))
           }),
         )
         mergeSessionMessages(sessionID, messages.data ?? [], tracker)
-        await refreshSessionStatus(sessionID).catch(() => undefined)
-        await reconcileLegacyPermissions(sessionID)
+        if (!readOnly) {
+          await refreshSessionStatus(sessionID).catch(() => undefined)
+          await reconcileLegacyPermissions(sessionID)
+        }
         fullSyncedSessions.add(sessionID)
       })().finally(() => {
         syncingSessions.delete(sessionID)
@@ -541,6 +564,7 @@ export const {
     function reconcileWorkingSessions() {
       if (reconcilingWorkingSessions) return reconcilingWorkingSessions
       const sessions = [...fullSyncedSessions].filter((sessionID) => {
+        if (readOnlySessions.has(sessionID)) return false
         const status = store.session_status[sessionID]
         return (
           (status !== undefined && status.type !== "idle") ||
@@ -578,7 +602,7 @@ export const {
           // re-sync gap. Deletion remains event-driven via `session.deleted`.
           const listed = new Set(sessions.map((session) => session.id))
           const retained = store.session.filter((session) => hydrated.includes(session.id) && !listed.has(session.id))
-          setStore("session", reconcile([...sessions, ...retained]))
+          setStore("session", reconcile([...sessions, ...retained].toSorted((a, b) => a.id.localeCompare(b.id))))
           fullSyncedSessions.clear()
           await Promise.allSettled(hydrated.map((sessionID) => syncSession(sessionID)))
         }
@@ -1116,6 +1140,7 @@ export const {
 
     const permissionReconcileTimer = setInterval(() => {
       for (const sessionID of fullSyncedSessions) {
+        if (readOnlySessions.has(sessionID)) continue
         if (result.session.status(sessionID) !== "working") continue
         void reconcileLegacyPermissions(sessionID)
       }
@@ -1169,8 +1194,8 @@ export const {
           if (last.role === "user") return "working"
           return last.time.completed ? "idle" : "working"
         },
-        async sync(sessionID: string, options?: { reconcile?: boolean }) {
-          return syncSession(sessionID, options?.reconcile)
+        async sync(sessionID: string, options?: { reconcile?: boolean; readOnly?: boolean }) {
+          return syncSession(sessionID, options?.reconcile, options?.readOnly)
         },
         async reconcilePermissions(sessionID: string) {
           return reconcileLegacyPermissions(sessionID)

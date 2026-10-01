@@ -574,7 +574,7 @@ export function Session() {
         navigate({ ...route, accessMode: "read-write", resolution: undefined })
       }
       try {
-        await sync.session.sync(sessionID, { reconcile: true })
+        await sync.session.sync(sessionID, { reconcile: true, readOnly: !writable })
       } catch (error) {
         if (route.sessionID !== sessionID) return
         setHistoryState("error")
