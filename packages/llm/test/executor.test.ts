@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
-import { Effect, Fiber, Layer, Random, Ref } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Random, Ref } from "effect"
 import * as TestClock from "effect/testing/TestClock"
-import { Headers, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { Headers, HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { LLM, LLMError } from "../src"
 import { LLMClient, RequestExecutor } from "../src/route"
 import * as OpenAIChat from "../src/protocols/openai-chat"
@@ -38,7 +38,10 @@ const responsesLayer = (responses: ReadonlyArray<Response>) =>
     ),
   )
 
-const countedResponsesLayer = (attempts: Ref.Ref<number>, responses: ReadonlyArray<Response>) =>
+const countedResponsesLayer = (
+  attempts: Ref.Ref<number>,
+  responses: ReadonlyArray<Response | HttpClientError.HttpClientError>,
+) =>
   RequestExecutor.layer.pipe(
     Layer.provide(
       Layer.unwrap(
@@ -50,7 +53,9 @@ const countedResponsesLayer = (attempts: Ref.Ref<number>, responses: ReadonlyArr
               Effect.gen(function* () {
                 yield* Ref.update(attempts, (value) => value + 1)
                 const index = yield* Ref.getAndUpdate(cursor, (value) => value + 1)
-                return HttpClientResponse.fromWeb(request, responses[index] ?? responses[responses.length - 1])
+                const response = responses[index] ?? responses[responses.length - 1]
+                if (HttpClientError.isHttpClientError(response)) return yield* response
+                return HttpClientResponse.fromWeb(request, response)
               }),
             ),
           )
@@ -73,6 +78,94 @@ const expectLLMError = (error: unknown) => {
 const errorHttp = (error: LLMError) => ("http" in error.reason ? error.reason.http : undefined)
 
 describe("RequestExecutor", () => {
+  ;["ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ETIMEDOUT"].forEach((code) => {
+    it.effect(`retries request transport failure ${code}`, () =>
+      Effect.gen(function* () {
+        const attempts = yield* Ref.make(0)
+        return yield* Effect.gen(function* () {
+          const executor = yield* RequestExecutor.Service
+          const fiber = yield* executor.execute(request).pipe(Effect.forkChild)
+
+          yield* TestClock.adjust(500)
+          expect((yield* Fiber.join(fiber)).status).toBe(200)
+          expect(yield* Ref.get(attempts)).toBe(2)
+        }).pipe(
+          Effect.provide(
+            countedResponsesLayer(attempts, [
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.TransportError({
+                  request,
+                  cause: Object.assign(new Error(code), { code }),
+                }),
+              }),
+              new Response("ok"),
+            ]),
+          ),
+        )
+      }).pipe(Effect.provideService(Random.Random, randomMidpoint)),
+    )
+  })
+
+  it.effect("does not retry request encoding failures", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      const error = yield* RequestExecutor.Service.use((executor) => executor.execute(request)).pipe(
+        Effect.provide(
+          countedResponsesLayer(attempts, [
+            new HttpClientError.HttpClientError({ reason: new HttpClientError.EncodeError({ request }) }),
+            new Response("should not retry"),
+          ]),
+        ),
+        Effect.flip,
+      )
+      expect(error.reason).toMatchObject({ _tag: "Transport", kind: "EncodeError" })
+      expect(yield* Ref.get(attempts)).toBe(1)
+    }),
+  )
+
+  it.effect("cancels transport backoff without another request", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      return yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        const fiber = yield* executor.execute(request).pipe(Effect.forkChild)
+        yield* TestClock.adjust(499)
+        expect(yield* Ref.get(attempts)).toBe(1)
+        yield* Fiber.interrupt(fiber)
+        const exit = yield* Fiber.await(fiber)
+        expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+        yield* TestClock.adjust(10_000)
+        expect(yield* Ref.get(attempts)).toBe(1)
+      }).pipe(
+        Effect.provide(
+          countedResponsesLayer(attempts, [
+            new HttpClientError.HttpClientError({ reason: new HttpClientError.TransportError({ request }) }),
+          ]),
+        ),
+      )
+    }).pipe(Effect.provideService(Random.Random, randomMidpoint)),
+  )
+
+  it.effect("exhausts the existing retry budget for transport failures", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      return yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        const fiber = yield* executor.execute(request).pipe(Effect.flip, Effect.forkChild)
+        yield* TestClock.adjust(1_500)
+        const error = yield* Fiber.join(fiber)
+        expect(error.reason).toMatchObject({ _tag: "Transport", message: "HTTP transport failed" })
+        expect(yield* Ref.get(attempts)).toBe(3)
+      }).pipe(
+        Effect.provide(
+          countedResponsesLayer(attempts, [
+            new HttpClientError.HttpClientError({ reason: new HttpClientError.TransportError({ request }) }),
+          ]),
+        ),
+      )
+    }).pipe(Effect.provideService(Random.Random, randomMidpoint)),
+  )
+
   it.effect("classifies context overflow responses", () =>
     Effect.gen(function* () {
       const executor = yield* RequestExecutor.Service
@@ -265,7 +358,7 @@ describe("RequestExecutor", () => {
     ),
   )
 
-  it.effect("marks 504 and 529 status responses retryable", () =>
+  it.effect("marks 408, 504 and 529 status responses retryable", () =>
     Effect.gen(function* () {
       const failWith = (status: number) =>
         Effect.gen(function* () {
@@ -290,6 +383,7 @@ describe("RequestExecutor", () => {
           ),
         )
 
+      yield* failWith(408)
       yield* failWith(504)
       yield* failWith(529)
     }),

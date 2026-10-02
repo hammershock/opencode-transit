@@ -88,7 +88,8 @@ const requestId = (headers: Record<string, string>) => {
   )
 }
 
-const retryableStatus = (status: number) => status === 429 || status === 503 || status === 504 || status === 529
+const retryableStatus = (status: number) =>
+  status === 408 || status === 429 || status === 503 || status === 504 || status === 529
 
 const retryAfterMs = (headers: Record<string, string>) => {
   const millis = Number(headers["retry-after-ms"])
@@ -350,16 +351,20 @@ const retryDelay = (error: LLMError, attempt: number) => {
   ).pipe(Effect.map((delay) => Math.round(delay)))
 }
 
-const retryStatusFailures = <A, R>(
+const retryRequestFailures = <A, R>(
   effect: Effect.Effect<A, LLMError, R>,
   retries = MAX_RETRIES,
   attempt = 0,
 ): Effect.Effect<A, LLMError, R> =>
   Effect.catchTag(effect, "LLM.Error", (error): Effect.Effect<A, LLMError, R> => {
-    if (!error.retryable || retries <= 0) return Effect.fail(error)
+    // Only retry transport failures before returning a response; never replay its stream.
+    const transport =
+      error.reason._tag === "Transport" &&
+      (error.reason.kind === undefined || error.reason.kind === "TransportError" || error.reason.kind === "Timeout")
+    if ((!error.retryable && !transport) || retries <= 0) return Effect.fail(error)
     return retryDelay(error, attempt).pipe(
       Effect.flatMap((delay) => Effect.sleep(delay)),
-      Effect.flatMap(() => retryStatusFailures(effect, retries - 1, attempt + 1)),
+      Effect.flatMap(() => retryRequestFailures(effect, retries - 1, attempt + 1)),
     )
   })
 
@@ -375,7 +380,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.e
           .pipe(Effect.mapError(toHttpError(redactedNames)), Effect.flatMap(statusError(request, redactedNames)))
       })
     return Service.of({
-      execute: (request) => retryStatusFailures(executeOnce(request)),
+      execute: (request) => retryRequestFailures(executeOnce(request)),
     })
   }),
 )
